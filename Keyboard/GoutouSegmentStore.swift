@@ -14,10 +14,12 @@ enum GoutouSegmentStore {
     }
 
     static func save(_ segments: [GoutouSegment], to defaults: UserDefaults = .standard) {
-        GoutouProfileStore.updateActive({ $0.segments = segments }, in: defaults)
+        let personID = GoutouProfileStore.activeProfile(from: defaults).id
+        GoutouProfileStore.updateProfile(id: personID, in: defaults) { $0.segments = segments }
     }
 
     static func clear(from defaults: UserDefaults = .standard) {
-        GoutouProfileStore.updateActive({ $0.segments = [] }, in: defaults)
+        let personID = GoutouProfileStore.activeProfile(from: defaults).id
+        GoutouProfileStore.updateProfile(id: personID, in: defaults) { $0.segments = [] }
     }
 }

@@ -6,9 +6,10 @@ import Foundation
 //   swiftc -swift-version 5 Keyboard/NineKeyMapper.swift Keyboard/GoutouPinyinTable.swift \
 //          Keyboard/NineKeyInputEngine.swift Keyboard/GoutouConfig.swift \
 //          Keyboard/GoutouPrompt.swift Keyboard/GoutouProfileStore.swift \
-//          Keyboard/GoutouMemoryItem.swift Keyboard/GoutouMemoryExtractor.swift \
+//          Keyboard/PersonMemory.swift Keyboard/GoutouMemoryRepository.swift \
+//          Keyboard/GoutouMemoryExtractor.swift \
 //          Keyboard/GoutouSegmentStore.swift \
-//          Keyboard/GoutouMemoryStore.swift Keyboard/GoutouAIClient.swift \
+//          Keyboard/GoutouAIClient.swift \
 //          tools/NineKeyCheck/main.swift -o /tmp/ninekeycheck
 //   /tmp/ninekeycheck
 //
@@ -221,16 +222,18 @@ expect(GoutouSegmentStore.load(from: scratchDefaults).isEmpty, "手动清空之�
 
 print("== 长期档案（记忆）==")
 let scratchMemory = UserDefaults(suiteName: "goutou.check.memory") ?? .standard
-GoutouMemoryStore.clear(from: scratchMemory)
-expect(GoutouMemoryStore.load(from: scratchMemory).isEmpty, "一开始没有记忆")
-GoutouMemoryStore.append("她生日 3 月 5 日", to: scratchMemory)
-GoutouMemoryStore.append("   ", to: scratchMemory)
-GoutouMemoryStore.append("我们认识三个月", to: scratchMemory)
-let loadedMemory = GoutouMemoryStore.load(from: scratchMemory)
+let memoryPerson = GoutouProfileStore.activeProfile(from: scratchMemory).id
+try? GoutouMemoryRepository.deleteAllMemories(personID: memoryPerson, from: scratchMemory)
+expect(GoutouMemoryRepository.getMemories(personID: memoryPerson, from: scratchMemory).isEmpty, "一开始没有记忆")
+try? GoutouMemoryRepository.addMemory(content: "她生日 3 月 5 日", personID: memoryPerson, from: scratchMemory)
+try? GoutouMemoryRepository.addMemory(content: "   ", personID: memoryPerson, from: scratchMemory)
+try? GoutouMemoryRepository.addMemory(content: "我们认识三个月", personID: memoryPerson, from: scratchMemory)
+let loadedMemory = GoutouMemoryRepository.getMemories(personID: memoryPerson, from: scratchMemory)
 expectEqual(loadedMemory.count, 2, "空白条目会被丢掉")
 expectEqual(loadedMemory.first?.content ?? "", "她生日 3 月 5 日", "第一条内容")
 expect((loadedMemory.first?.category ?? .recentStatus) == .stableFact, "手工加的都算稳定事实")
-expect(!(loadedMemory.first?.id.isEmpty ?? true), "每条记忆都有 id")
+expect(loadedMemory.first?.sourceType == .manual, "手工加的来源是 manual")
+expect(loadedMemory.allSatisfy { $0.personID == memoryPerson }, "每条都绑定了 personID")
 
 let withMemory = GoutouPrompt.userMessage(
     segments: [GoutouSegment(speaker: .opponent, text: "睡了吗")],
@@ -241,8 +244,8 @@ expect(withMemory.contains("- 她生日 3 月 5 日"), "记忆按条目列出")
 expect(withMemory.contains("聊天内容：\n对方：睡了吗"), "对话部分照旧")
 let withoutMemory = GoutouPrompt.userMessage(segments: [GoutouSegment(speaker: .opponent, text: "嗯")])
 expect(!withoutMemory.contains("长期档案"), "没有记忆就不带这一段")
-GoutouMemoryStore.clear(from: scratchMemory)
-expect(GoutouMemoryStore.load(from: scratchMemory).isEmpty, "清空后为空")
+try? GoutouMemoryRepository.deleteAllMemories(personID: memoryPerson, from: scratchMemory)
+expect(GoutouMemoryRepository.getMemories(personID: memoryPerson, from: scratchMemory).isEmpty, "清空后为空")
 
 print("== 第六阶段：多人独立档案（数据完全隔离）==")
 let scratchProfiles = UserDefaults(suiteName: "goutou.check.profiles") ?? .standard
@@ -265,20 +268,22 @@ expect(scratchProfiles.data(forKey: GoutouProfileStore.legacySegmentsKey) == nil
 let second = GoutouProfileStore.create(name: "老王", in: scratchProfiles)
 expectEqual(GoutouProfileStore.loadBook(from: scratchProfiles).profiles.count, 2, "现在有两个档案")
 expect(GoutouSegmentStore.load(from: scratchProfiles).isEmpty, "新档案的上下文是空的（不串）")
-expect(GoutouMemoryStore.load(from: scratchProfiles).isEmpty, "新档案的记忆是空的（不串）")
+expect(GoutouMemoryRepository.getMemories(personID: second.id, from: scratchProfiles).isEmpty, "新档案的记忆是空的（不串）")
 
 // 给老王加料
 GoutouSegmentStore.save([GoutouSegment(speaker: .me, text: "老王的消息")], to: scratchProfiles)
-GoutouMemoryStore.append("老王爱喝酒", to: scratchProfiles)
-GoutouProfileStore.updateActive({ $0.summary = GoutouSavedSummary(headline: "老王在试探你", replies: ["在"], savedAt: Date()) }, in: scratchProfiles)
+try? GoutouMemoryRepository.addMemory(content: "老王爱喝酒", personID: second.id, from: scratchProfiles)
+GoutouProfileStore.updateProfile(id: second.id, in: scratchProfiles) { profile in
+    profile.summary = GoutouSavedSummary(headline: "老王在试探你", replies: ["在"], savedAt: Date())
+}
 expectEqual(GoutouSegmentStore.load(from: scratchProfiles).first?.text ?? "", "老王的消息", "当前档案读到自己那份")
 expectEqual(GoutouProfileStore.activeProfile(from: scratchProfiles).summary?.headline ?? "", "老王在试探你", "AI 总结也按人存")
 
 // 切回默认：拿到的必须是默认那份
-let firstID = GoutouProfileStore.loadBook(from: scratchProfiles).profiles.first { $0.id != second.id }?.id ?? ""
+let firstID = GoutouProfileStore.loadBook(from: scratchProfiles).profiles.first { $0.id != second.id }?.id ?? UUID()
 GoutouProfileStore.select(id: firstID, in: scratchProfiles)
 expectEqual(GoutouSegmentStore.load(from: scratchProfiles).first?.text ?? "", "睡了吗", "切回默认拿到自己那份上下文")
-expectEqual(GoutouMemoryStore.load(from: scratchProfiles).first?.content ?? "", "她生日 3 月 5 日", "记忆同样隔离")
+expectEqual(GoutouMemoryRepository.getMemories(personID: firstID, from: scratchProfiles).first?.content ?? "", "她生日 3 月 5 日", "记忆同样隔离")
 expect(GoutouProfileStore.activeProfile(from: scratchProfiles).summary == nil, "默认档案没有老王的总结")
 
 // 改名 / 删除（最后一个不许删）
@@ -499,14 +504,14 @@ scratchAuto.removeObject(forKey: GoutouProfileStore.legacyMemoryKey)
 let autoA = GoutouProfileStore.loadBook(from: scratchAuto).profiles[0]
 let autoB = GoutouProfileStore.create(name: "B", in: scratchAuto)
 GoutouProfileStore.select(id: autoB.id, in: scratchAuto)
-GoutouMemoryStore.append("B 的旧记忆", to: scratchAuto)
+try? GoutouMemoryRepository.addMemory(content: "B 的旧记忆", personID: autoB.id, from: scratchAuto)
 GoutouProfileStore.select(id: autoA.id, in: scratchAuto)
-GoutouMemoryStore.append("她生日是 3 月 5 日", to: scratchAuto)
+try? GoutouMemoryRepository.addMemory(content: "她生日是 3 月 5 日", personID: autoA.id, from: scratchAuto)
 
-let aItems = GoutouMemoryStore.load(from: scratchAuto)
-let birthdayID = aItems.first?.id ?? ""
+let aItems = GoutouMemoryRepository.getMemories(personID: autoA.id, includeArchived: true, from: scratchAuto)
+let birthdayID = aItems.first?.id ?? UUID()
 let bItemID = GoutouProfileStore.loadBook(from: scratchAuto)
-    .profiles.first { $0.id == autoB.id }?.memory.first?.id ?? ""
+    .profiles.first { $0.id == autoB.id }?.memory.first?.id ?? UUID()
 
 let ops: [GoutouMemoryCandidate] = [
     GoutouMemoryCandidate(operation: .add, targetID: nil, content: "她在互联网公司做运营",
@@ -520,9 +525,9 @@ let ops: [GoutouMemoryCandidate] = [
 ]
 let appliedMemory = GoutouMemoryApplier.apply(ops, to: aItems, personID: autoA.id)
 expectEqual(appliedMemory.changed, 2, "只算「新增 + 真更新」两条（越权 + 重复都不算）")
-GoutouMemoryStore.replaceAll(appliedMemory.items, from: scratchAuto)
+try? GoutouMemoryRepository.replaceMemories(appliedMemory.items, personID: autoA.id, from: scratchAuto)
 
-let aAfter = GoutouMemoryStore.load(from: scratchAuto)
+let aAfter = GoutouMemoryRepository.getMemories(personID: autoA.id, includeArchived: true, from: scratchAuto)
 expectEqual(aAfter.count, 2, "A 从 1 条变 2 条：重复的没有新增")
 expect(aAfter.contains { $0.content.contains("互联网公司") }, "新事实进来了")
 expect(aAfter.contains { $0.content.contains("已确认") }, "老记忆被更新，而不是新加一条")
@@ -530,21 +535,165 @@ expect(!aAfter.contains { $0.content.contains("她生日是3月5日") }, "近似
 expect(aAfter.allSatisfy { $0.personID == autoA.id }, "A 的记忆归属都还是 A")
 
 GoutouProfileStore.select(id: autoB.id, in: scratchAuto)
-let bAfter = GoutouMemoryStore.load(from: scratchAuto)
+let bAfter = GoutouMemoryRepository.getMemories(personID: autoB.id, includeArchived: true, from: scratchAuto)
 expectEqual(bAfter.count, 1, "B 还是 1 条")
 expectEqual(bAfter.first?.content ?? "", "B 的旧记忆", "B 的内容没被动过")
 expect(!bAfter.contains { $0.content.contains("互联网公司") }, "A 的信息没有串到 B")
-expectEqual(bAfter.first?.personID ?? "", autoB.id, "B 的记忆归属还是 B")
+expect(bAfter.first?.personID == autoB.id, "B 的记忆归属还是 B")
 
-// 重启：重新从盘里读（新的 loadBook 调用），记忆还在
-let afterRestart = GoutouProfileStore.loadBook(from: scratchAuto)
-    .profiles.first { $0.id == autoB.id }?.memory ?? []
-expectEqual(afterRestart.count, 1, "重启后 B 的记忆还在")
-let aAfterRestart = GoutouProfileStore.loadBook(from: scratchAuto)
-    .profiles.first { $0.id == autoA.id }?.memory ?? []
+// 重启：重新从盘里读（新的 loadBook 调用），记忆还在，UUID / 时间字段一个字都不变
+let reloadedBook = GoutouProfileStore.loadBook(from: scratchAuto)
+let aAfterRestart = reloadedBook.profiles.first { $0.id == autoA.id }?.memory ?? []
+let bAfterRestart = reloadedBook.profiles.first { $0.id == autoB.id }?.memory ?? []
+expectEqual(bAfterRestart.count, 1, "重启后 B 的记忆还在")
 expectEqual(aAfterRestart.count, 2, "重启后 A 的记忆还在")
-expect(aAfterRestart.allSatisfy { !$0.id.isEmpty }, "每条都带稳定 id")
+expectEqual(
+    aAfterRestart.map(\.id.uuidString).sorted().joined(separator: ","),
+    aAfter.map(\.id.uuidString).sorted().joined(separator: ","),
+    "重启后 UUID 一字不变"
+)
+expectEqual(
+    aAfterRestart.map { Int($0.createdAt.timeIntervalSince1970) }.map(String.init).joined(separator: ","),
+    aAfter.map { Int($0.createdAt.timeIntervalSince1970) }.map(String.init).joined(separator: ","),
+    "重启后 createdAt 不变"
+)
 expect(aAfterRestart.contains { $0.updatedAt > $0.createdAt }, "被更新的那条留了 updatedAt")
+
+print("== 记忆 Schema v2：永久身份 / 归属 / 时间字段 / 归档 ==")
+let scratchSchema = UserDefaults(suiteName: "goutou.check.schema") ?? .standard
+for key in [
+    GoutouProfileStore.storageKey,
+    GoutouProfileStore.legacySegmentsKey,
+    GoutouProfileStore.legacyMemoryKey,
+    GoutouProfileStore.backupKey,
+] {
+    scratchSchema.removeObject(forKey: key)
+}
+let schemaA = GoutouProfileStore.loadBook(from: scratchSchema).profiles[0]
+let schemaB = GoutouProfileStore.create(name: "表弟", in: scratchSchema)
+
+// 1) 新建就有永久 UUID
+let firstMemory = try? GoutouMemoryRepository.addMemory(content: "刘娜生日 3 月 5 日", personID: schemaA.id, from: scratchSchema)
+let secondMemory = try? GoutouMemoryRepository.addMemory(content: "刘娜不吃香菜", personID: schemaA.id, from: scratchSchema)
+expect(firstMemory?.id != secondMemory?.id, "两条记忆的 UUID 不同")
+expect(firstMemory?.personID == schemaA.id, "归属绑定到当前人物")
+expect(firstMemory?.sourceType == .manual, "手工创建 → sourceType = manual")
+expect(firstMemory?.archived == false, "新建默认未归档")
+expectEqual(
+    firstMemory.map { Int($0.createdAt.timeIntervalSince1970) } ?? 0,
+    firstMemory.map { Int($0.updatedAt.timeIntervalSince1970) } ?? 0,
+    "新建时 createdAt = updatedAt"
+)
+
+// 2) 删掉第 1 条，第 2 条的 UUID 不变（不靠下标当身份）
+let secondID = secondMemory?.id ?? UUID()
+try? GoutouMemoryRepository.deleteMemory(id: firstMemory?.id ?? UUID(), personID: schemaA.id, from: scratchSchema)
+let afterDelete = GoutouMemoryRepository.getMemories(personID: schemaA.id, includeArchived: true, from: scratchSchema)
+expectEqual(afterDelete.count, 1, "删掉第一条后只剩一条")
+expect(afterDelete.first?.id == secondID, "剩下的那条 UUID 没变")
+expectEqual(afterDelete.first?.content ?? "", "刘娜不吃香菜", "剩下的内容也对")
+
+// 3) 编辑：只动 updatedAt，createdAt 不变
+let createdBefore = afterDelete.first?.createdAt
+let updatedBefore = afterDelete.first?.updatedAt ?? Date()
+Thread.sleep(forTimeInterval: 1.1)
+let edited = try? GoutouMemoryRepository.updateMemory(id: secondID, personID: schemaA.id, from: scratchSchema) { memory in
+    memory.content = "刘娜不吃香菜（已确认）"
+    memory.importance = 5
+}
+expectEqual(edited?.content ?? "", "刘娜不吃香菜（已确认）", "内容改了")
+expect(edited?.createdAt == createdBefore, "createdAt 没被覆盖")
+expect((edited?.updatedAt ?? Date()) > updatedBefore, "updatedAt 变新了")
+
+// 4) 再次确认：更新 lastConfirmedAt
+let confirmed = try? GoutouMemoryRepository.confirmMemory(id: secondID, personID: schemaA.id, from: scratchSchema)
+expect(confirmed?.lastConfirmedAt != nil, "确认后 lastConfirmedAt 有值")
+expect(confirmed?.content == edited?.content, "确认不改内容")
+
+// 5) 跨人物：拿 A 的 id 去 B 名下操作，必须被拒（这正是「表弟和刘娜互不影响」）
+do {
+    _ = try GoutouMemoryRepository.updateMemory(id: secondID, personID: schemaB.id, from: scratchSchema) { $0.content = "偷改" }
+    expect(false, "跨人物 update 应该抛错")
+} catch let error as MemoryRepositoryError {
+    expect(error == .personMismatch, "跨人物 update 报 personMismatch")
+} catch {
+    expect(false, "抛出的应该是 MemoryRepositoryError")
+}
+do {
+    try GoutouMemoryRepository.deleteMemory(id: secondID, personID: schemaB.id, from: scratchSchema)
+    expect(false, "跨人物 delete 应该抛错")
+} catch let error as MemoryRepositoryError {
+    expect(error == .personMismatch, "跨人物 delete 报 personMismatch")
+} catch {
+    expect(false, "抛出的应该是 MemoryRepositoryError")
+}
+expectEqual(GoutouMemoryRepository.getMemories(personID: schemaA.id, includeArchived: true, from: scratchSchema).count, 1, "A 的记忆没被动过")
+expect(GoutouMemoryRepository.getMemories(personID: schemaB.id, from: scratchSchema).isEmpty, "表弟名下一条都没有")
+
+// 6) 对象式更新要显式校验 personID
+let foreign = PersonMemory(personID: schemaA.id, content: "刘娜的")
+do {
+    _ = try GoutouMemoryRepository.updateMemory(foreign, forPerson: schemaB.id, from: scratchSchema)
+    expect(false, "personID 不匹配的对象更新应该抛错")
+} catch let error as MemoryRepositoryError {
+    expect(error == .personMismatch, "personID 不匹配 → personMismatch")
+} catch {
+    expect(false, "抛出的应该是 MemoryRepositoryError")
+}
+
+// 7) 归档：默认查不到，但没被删
+try? GoutouMemoryRepository.archiveMemory(id: secondID, personID: schemaA.id, from: scratchSchema)
+expect(GoutouMemoryRepository.getMemories(personID: schemaA.id, from: scratchSchema).isEmpty, "归档后默认查询看不到")
+expectEqual(GoutouMemoryRepository.getMemories(personID: schemaA.id, includeArchived: true, from: scratchSchema).count, 1, "归档不是删除（带 includeArchived 还在）")
+try? GoutouMemoryRepository.archiveMemory(id: secondID, personID: schemaA.id, archived: false, from: scratchSchema)
+expectEqual(GoutouMemoryRepository.getMemories(personID: schemaA.id, from: scratchSchema).count, 1, "取消归档后又回来了")
+
+print("== 记忆迁移：v0 纯字符串 / v1 条目，都不丢、不重复迁移 ==")
+let scratchMigrate = UserDefaults(suiteName: "goutou.check.migrate") ?? .standard
+for key in [
+    GoutouProfileStore.storageKey,
+    GoutouProfileStore.legacySegmentsKey,
+    GoutouProfileStore.legacyMemoryKey,
+    GoutouProfileStore.backupKey,
+] {
+    scratchMigrate.removeObject(forKey: key)
+}
+// v0：老键里是纯字符串数组
+scratchMigrate.set(try! JSONEncoder().encode(["她生日 3 月 5 日", "她不吃香菜"]), forKey: GoutouProfileStore.legacyMemoryKey)
+let migratedBook = GoutouProfileStore.loadBook(from: scratchMigrate)
+let migratedProfile = migratedBook.profiles[0]
+expectEqual(migratedProfile.memory.count, 2, "老记忆条数没减少")
+expect(migratedProfile.memory.allSatisfy { $0.sourceType == .migratedLegacy }, "来源标成 migratedLegacy")
+expect(migratedProfile.memory.allSatisfy { $0.category == .other }, "判别不了分类就用 other")
+expect(migratedProfile.memory.allSatisfy { !$0.archived }, "迁移后未归档")
+expect(migratedProfile.memory.allSatisfy { $0.lastConfirmedAt == nil }, "迁移的没有 lastConfirmedAt")
+expect(migratedProfile.memory.allSatisfy { $0.personID == migratedProfile.id }, "归属绑到原所属人物")
+expectEqual(migratedBook.memorySchemaVersion, GoutouProfileStore.currentMemorySchemaVersion, "迁移后写入版本号")
+expect(scratchMigrate.data(forKey: GoutouProfileStore.legacyMemoryKey) == nil, "旧键被清掉")
+
+// 重复迁移一次：条数不能变多
+let migratedAgain = GoutouProfileStore.loadBook(from: scratchMigrate)
+expectEqual(migratedAgain.profiles[0].memory.count, 2, "重复迁移不会产生重复记忆")
+expectEqual(migratedAgain.memorySchemaVersion, GoutouProfileStore.currentMemorySchemaVersion, "版本号已是当前值")
+
+// v1：条目形态（老字段 source 字符串、没有 v2 新字段）
+let v1ProfileID = UUID()
+let v1MemoryID = UUID()
+let legacyV1JSON = """
+{"profiles":[{"id":"\(v1ProfileID.uuidString)","name":"刘娜","segments":[],"memory":[
+{"id":"\(v1MemoryID.uuidString)","personID":"\(UUID().uuidString)","content":"老版条目","category":"stable_fact","importance":3,"confidence":0.9,"createdAt":700000000,"updatedAt":700000000,"source":"extract"}
+]}],"activeProfileID":"\(v1ProfileID.uuidString)","memorySchemaVersion":1}
+"""
+let scratchV1 = UserDefaults(suiteName: "goutou.check.v1") ?? .standard
+scratchV1.set(Data(legacyV1JSON.utf8), forKey: GoutouProfileStore.storageKey)
+scratchV1.removeObject(forKey: GoutouProfileStore.legacyMemoryKey)
+let v1Book = GoutouProfileStore.loadBook(from: scratchV1)
+expectEqual(v1Book.profiles.first?.memory.count ?? 0, 1, "v1 条目能读出来")
+expect(v1Book.profiles.first?.memory.first?.sourceType == .aiExtracted, "v1 的 source=extract 升级成 aiExtracted")
+expect(v1Book.profiles.first?.memory.first?.content == "老版条目", "内容保留")
+expect(v1Book.profiles.first?.memory.first?.id == v1MemoryID, "v1 的 UUID 保留")
+expect(v1Book.profiles.first?.memory.first?.personID == v1ProfileID, "归属被纠正为本档案")
+expectEqual(v1Book.memorySchemaVersion, GoutouProfileStore.currentMemorySchemaVersion, "v1 → v2 写完版本号")
 
 print("")
 if failures == 0 {

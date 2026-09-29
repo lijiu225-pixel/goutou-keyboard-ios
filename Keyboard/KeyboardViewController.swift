@@ -53,12 +53,12 @@ final class KeyboardViewController: UIInputViewController {
 
     private weak var mentorPanel: GoutouPanelView?
     private var segments: [GoutouSegment] = []
-    private var memory: [GoutouMemoryItem] = []
+    private var memory: [PersonMemory] = []
     /// 自动归纳完之后给一句提示
     private var memoryNote: String?
     /// 全部人物档案 + 当前是谁（第六阶段：一人一份上下文/记忆/总结）
     private var profiles: [GoutouPersonProfile] = []
-    private var activeProfileID: String = ""
+    private var activeProfileID: UUID = GoutouProfileStore.activeProfile().id
     private var panelState: GoutouPanelState = .empty(banner: nil)
     /// 上一次成功的结果（失败时也留着，结果区不会空掉）
     private var lastResult: GoutouResult?
@@ -79,7 +79,7 @@ final class KeyboardViewController: UIInputViewController {
         // 上次没清掉的上下文接着用（退出面板、键盘被回收都不会丢）
         refreshProfiles()
         segments = GoutouSegmentStore.load()
-        memory = GoutouMemoryStore.load()
+        memory = GoutouMemoryRepository.getMemories(personID: activeProfileID)
         rebuildKeyboard()
     }
 
@@ -498,11 +498,11 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     /// 切到另一个人物：上下文/记忆/上次总结整组换掉。
-    private func selectProfile(id: String) {
+    private func selectProfile(id: UUID) {
         GoutouProfileStore.select(id: id)
         refreshProfiles()
         segments = GoutouSegmentStore.load()
-        memory = GoutouMemoryStore.load()
+        memory = GoutouMemoryRepository.getMemories(personID: activeProfileID)
         panelTask?.cancel()
         panelTask = nil
         if let summary = GoutouProfileStore.activeProfile().summary {
@@ -526,11 +526,11 @@ final class KeyboardViewController: UIInputViewController {
         refreshPanel()
     }
 
-    private func deleteProfile(id: String) {
+    private func deleteProfile(id: UUID) {
         GoutouProfileStore.delete(id: id)
         refreshProfiles()
         segments = GoutouSegmentStore.load()
-        memory = GoutouMemoryStore.load()
+        memory = GoutouMemoryRepository.getMemories(personID: activeProfileID)
         if let summary = GoutouProfileStore.activeProfile().summary {
             let restored = GoutouResult(headline: summary.headline, replies: summary.replies)
             lastResult = restored
@@ -543,7 +543,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     /// 没有 App Group，没法在键盘里打字输入名字：拿剪贴板第一行当名字。
-    private func renameProfile(id: String) {
+    private func renameProfile(id: UUID) {
         guard let text = clipboardText() else {
             panelState = .needsFullAccess("剪贴板里没读到内容。先把名字复制好再来改名（没开「允许完全访问」时读剪贴板会失败）。")
             refreshPanel()
@@ -564,7 +564,7 @@ final class KeyboardViewController: UIInputViewController {
 
     /// 分析成功之后，把这次总结记在当前人物名下（切回来还能看到）。
     private func saveSummary(_ result: GoutouResult) {
-        GoutouProfileStore.updateActive { profile in
+        GoutouProfileStore.updateProfile(id: activeProfileID) { profile in
             profile.summary = GoutouSavedSummary(headline: result.headline, replies: result.replies, savedAt: Date())
         }
         refreshProfiles()
@@ -603,9 +603,13 @@ final class KeyboardViewController: UIInputViewController {
             refreshPanel()
             return
         }
-        GoutouMemoryStore.append(text)
-        memory = GoutouMemoryStore.load()
-        panelState = .empty(banner: "已记下第 \(memory.count) 条，下次分析会带上")
+        do {
+            _ = try GoutouMemoryRepository.addMemory(content: text, personID: activeProfileID, sourceType: .manual)
+            memory = GoutouMemoryRepository.getMemories(personID: activeProfileID)
+            panelState = .empty(banner: "已记下第 \(memory.count) 条，下次分析会带上")
+        } catch {
+            panelState = .empty(banner: "这条没记住（内容为空或人物不存在）")
+        }
         refreshPanel()
     }
 
@@ -660,6 +664,7 @@ final class KeyboardViewController: UIInputViewController {
         )
         let analysisPersonID = activeProfileID
         let analysisSegments = segments
+        let analysisSessionID = UUID()
         panelTask = GoutouAIClient.analyze(
             config: config,
             systemPrompt: systemPrompt,
@@ -675,7 +680,11 @@ final class KeyboardViewController: UIInputViewController {
                     self.saveSummary(value)
                     self.refreshPanel()
                     // 主分析成功之后才去归纳记忆（失败路径根本不走这里）
-                    self.runMemoryExtraction(personID: analysisPersonID, segments: analysisSegments)
+                    self.runMemoryExtraction(
+                        personID: analysisPersonID,
+                        segments: analysisSegments,
+                        sessionID: analysisSessionID
+                    )
                 case .failure(let error):
                     self.panelState = .failed(
                         summary: KeyboardViewController.friendlyFailureSummary(error),
@@ -690,7 +699,7 @@ final class KeyboardViewController: UIInputViewController {
     // MARK: - 自动归纳记忆（第六阶段补：最近聊天 → 人物记忆）
 
     /// 主分析成功后才调用；任何一步失败都**不改记忆**。
-    private func runMemoryExtraction(personID: String, segments: [GoutouSegment]) {
+    private func runMemoryExtraction(personID: UUID, segments: [GoutouSegment], sessionID: UUID) {
         guard let config = config, config.isReady, !segments.isEmpty else { return }
         memoryNote = "正在归纳这次聊天…"
         refreshPanel()
@@ -703,28 +712,44 @@ final class KeyboardViewController: UIInputViewController {
                     self.refreshPanel()
                     return
                 }
-                self.commitMemory(candidates, personID: personID)
+                self.commitMemory(candidates, personID: personID, sessionID: sessionID, messageCount: segments.count)
             }
         }
     }
 
     /// 事务提交：再次确认还是这个人，再算新数组，最后一次性写回。
-    private func commitMemory(_ candidates: [GoutouMemoryCandidate], personID: String) {
+    private func commitMemory(
+        _ candidates: [GoutouMemoryCandidate],
+        personID: UUID,
+        sessionID: UUID,
+        messageCount: Int
+    ) {
         guard personID == activeProfileID else {
             memoryNote = nil
             refreshPanel()
             return
         }
-        let existing = GoutouMemoryStore.load()
-        let applied = GoutouMemoryApplier.apply(candidates, to: existing, personID: personID)
+        let existing = GoutouMemoryRepository.getMemories(personID: personID, includeArchived: true)
+        let applied = GoutouMemoryApplier.apply(
+            candidates,
+            to: existing,
+            personID: personID,
+            sessionID: sessionID,
+            messageRange: messageCount > 0 ? 1...messageCount : nil
+        )
         guard applied.changed > 0 else {
             memoryNote = "这次没有新的可记内容"
             refreshPanel()
             return
         }
-        GoutouMemoryStore.replaceAll(applied.items)
-        memory = GoutouMemoryStore.load()
-        memoryNote = "已从本次聊天更新 \(applied.changed) 条记忆"
+        do {
+            try GoutouMemoryRepository.replaceMemories(applied.items, personID: personID)
+            memory = GoutouMemoryRepository.getMemories(personID: personID)
+            memoryNote = "已从本次聊天更新 \(applied.changed) 条记忆"
+        } catch {
+            // 落盘失败：界面上的记忆保持原样，不做假承诺
+            memoryNote = "记忆没写进去（人物不存在），这次不算"
+        }
         refreshPanel()
     }
 
@@ -857,14 +882,14 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
             importMemoryFromClipboard()
 
         case .deleteMemory(let id):
-            GoutouMemoryStore.remove(id: id)
-            memory = GoutouMemoryStore.load()
+            try? GoutouMemoryRepository.deleteMemory(id: id, personID: activeProfileID)
+            memory = GoutouMemoryRepository.getMemories(personID: activeProfileID)
             refreshPanel()
 
         case .clearMemory:
             memory = []
             memoryNote = nil
-            GoutouMemoryStore.clear()
+            try? GoutouMemoryRepository.deleteAllMemories(personID: activeProfileID)
             refreshPanel()
 
         case .selectProfile(let id):

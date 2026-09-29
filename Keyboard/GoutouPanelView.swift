@@ -17,9 +17,9 @@ enum GoutouPanelState {
 struct GoutouPanelSnapshot {
     var state: GoutouPanelState
     var segments: [GoutouSegment]
-    var memory: [GoutouMemoryItem]
+    var memory: [PersonMemory]
     var profiles: [GoutouPersonProfile]
-    var activeProfileID: String
+    var activeProfileID: UUID
     /// 上一次成功的结果——失败时也保留，结果区高度不会忽上忽下
     var lastResult: GoutouResult?
     var configSummary: String
@@ -34,12 +34,12 @@ enum GoutouPanelAction {
     case addSegment(GoutouSpeaker)
     case deleteSegment(Int)
     case importMemory
-    case deleteMemory(String)
+    case deleteMemory(UUID)
     case clearMemory
-    case selectProfile(String)
+    case selectProfile(UUID)
     case createProfile
-    case deleteProfile(String)
-    case renameProfile(String)
+    case deleteProfile(UUID)
+    case renameProfile(UUID)
     case analyze
     case cancel
     case clearSegments
@@ -86,9 +86,9 @@ final class GoutouPanelView: UIView {
 
     private var state: GoutouPanelState = .empty(banner: nil)
     private var segments: [GoutouSegment] = []
-    private var memory: [GoutouMemoryItem] = []
+    private var memory: [PersonMemory] = []
     private var profiles: [GoutouPersonProfile] = []
-    private var activeProfileID = ""
+    private var activeProfileID: UUID? = nil
     private var lastResult: GoutouResult?
     private var memoryNote: String?
     private var configSummary = ""
@@ -586,7 +586,7 @@ final class GoutouPanelView: UIView {
         title.titleEdgeInsets = UIEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
         title.applyStyle(background: isActive ? GoutouTheme.candidatePrimary : GoutouTheme.key)
         title.accessibilityLabel = "切到 \(profile.name)"
-        title.accessibilityIdentifier = profile.id
+        title.accessibilityIdentifier = profile.id.uuidString
         title.addAction(UIAction { [weak self] _ in
             guard let self = self else { return }
             self.delegate?.goutouPanel(self, didTrigger: .selectProfile(profile.id))
@@ -635,7 +635,7 @@ final class GoutouPanelView: UIView {
         }
     }
 
-    private func makeMemoryRow(_ item: GoutouMemoryItem) -> UIView {
+    private func makeMemoryRow(_ item: PersonMemory) -> UIView {
         let row = UIStackView()
         row.axis = .horizontal
         row.spacing = 6

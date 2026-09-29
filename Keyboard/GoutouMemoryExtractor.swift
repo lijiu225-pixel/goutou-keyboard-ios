@@ -13,10 +13,10 @@ enum GoutouMemoryExtractor {
 
     static let maxCandidates = 8
 
-    static func systemPrompt(existing: [GoutouMemoryItem]) -> String {
+    static func systemPrompt(existing: [PersonMemory]) -> String {
         let known = existing.isEmpty
             ? "（现在还没有任何记忆）"
-            : existing.map { "- id=\($0.id) [\($0.category.label)] \($0.content)" }.joined(separator: "\n")
+            : existing.map { "- id=\($0.id.uuidString) [\($0.category.label)] \($0.content)" }.joined(separator: "\n")
         let contract = """
         只返回一个 JSON 对象，不要 Markdown、不要解释。格式：
         {"operations":[{"op":"ADD|UPDATE|MERGE|IGNORE","targetID":null,"content":"...","category":"stable_fact","importance":3,"confidence":0.8}]}
@@ -54,24 +54,25 @@ enum GoutouMemoryExtractor {
             guard let operation = GoutouMemoryOperation(rawValue: opText) else { continue }
 
             let content = ((dict["content"] as? String) ?? (dict["text"] as? String) ?? "").trimmed
-            let category = GoutouMemoryCategory.from((dict["category"] as? String) ?? "")
+            let category = MemoryCategory.from((dict["category"] as? String) ?? "")
             let importance = (dict["importance"] as? Int) ?? (dict["importance"] as? Double).map { Int($0) } ?? 3
             let confidence = (dict["confidence"] as? Double) ?? (dict["confidence"] as? Int).map { Double($0) } ?? 0.7
-            let target = ((dict["targetID"] as? String) ?? (dict["target_id"] as? String) ?? "").trimmed
+            let targetText = ((dict["targetID"] as? String) ?? (dict["target_id"] as? String) ?? "").trimmed
+            let targetID = UUID(uuidString: targetText)
 
             switch operation {
             case .add:
                 guard !content.isEmpty else { continue }
             case .update, .merge:
                 // 没给目标 = 这条不合法，丢掉（绝不当成 ADD 用）
-                guard !target.isEmpty, !content.isEmpty else { continue }
+                guard targetID != nil, !content.isEmpty else { continue }
             case .ignore:
                 break
             }
 
             candidates.append(GoutouMemoryCandidate(
                 operation: operation,
-                targetID: target.isEmpty ? nil : target,
+                targetID: targetID,
                 content: content,
                 category: category,
                 importance: GoutouMemoryApplier.clampImportance(importance),
@@ -85,7 +86,7 @@ enum GoutouMemoryExtractor {
     /// 跑一次提取。任何失败（请求错、超时、JSON 不合法）都回调 nil —— 调用方据此**不动记忆**。
     static func extract(
         config: GoutouConfig,
-        existing: [GoutouMemoryItem],
+        existing: [PersonMemory],
         segments: [GoutouSegment],
         completion: @escaping ([GoutouMemoryCandidate]?) -> Void
     ) {
