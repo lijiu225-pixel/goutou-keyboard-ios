@@ -9,17 +9,34 @@ import Foundation
 /// 多击循环本身留在 `NineKeyMapper` 里（作为 Android 口径参照），当前输入路径不走它。
 final class NineKeyInputEngine {
 
+    private let table: GoutouPinyinTable
+
+    init(table: GoutouPinyinTable = .shared) {
+        self.table = table
+    }
+
     /// 按过的数字键序列，例如 `64426`。
     private(set) var digits: String = ""
 
     /// 当前数字序列能出的候选词。
     var candidates: [String] {
-        GoutouDictionary.candidates(forDigits: digits)
+        table.candidates(forDigits: digits)
     }
 
-    /// 当前数字序列对应的拼音（界面顶部显示用），没有命中就是空串。
+    /// 顶部那行显示的拼音提示（`64426 · nihao`）。没有能成词的切分就返回空串。
+    ///
+    /// 单音节输入只在毫无歧义时才显示（7484 只有 shui 一种读法 → 显示；
+    /// 64 可能是 mi 也可能是 ni → 只显示数字，免得显示的和首选候选对不上）。
     var pinyinHint: String {
-        GoutouDictionary.pinyinHint(forDigits: digits)
+        guard !digits.isEmpty else { return "" }
+        let splits = table.split(Array(digits))
+        for segments in splits where segments.count > 1 {
+            let joined = segments.joined()
+            if table.hasWord(joined) { return joined }
+        }
+        let singles = Set(splits.filter { $0.count == 1 }.compactMap { $0.first })
+        if singles.count == 1 { return singles.first ?? "" }
+        return ""
     }
 
     /// 只在九键的 2…9 上调用；1 和 0 是独立动作，不进入数字序列。

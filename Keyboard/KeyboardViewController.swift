@@ -5,7 +5,7 @@ import UIKit
 ///
 /// 两种布局：
 /// - 英文 26 键（原有实现，行为不变）
-/// - 中文九键（对标 Android 稳定版布局，逻辑复用 NineKeyMapper / GoutouDictionary / NineKeyInputEngine）
+/// - 中文九键（对标 Android 稳定版布局；候选来自 GoutouPinyinTable，输入状态在 NineKeyInputEngine）
 final class KeyboardViewController: UIInputViewController {
 
     // MARK: - 布局数据
@@ -51,6 +51,8 @@ final class KeyboardViewController: UIInputViewController {
         let stored = UserDefaults.standard.string(forKey: KeyboardViewController.modeStorageKey)
         mode = Mode(rawValue: stored ?? "") ?? .chineseNineKey
         skillText = KeyboardViewController.loadSkillText()
+        // 词库 400KB 左右，提前读进来，别等到第一次按键时卡一下。
+        GoutouPinyinTable.shared.loadIfNeeded()
         rebuildKeyboard()
     }
 

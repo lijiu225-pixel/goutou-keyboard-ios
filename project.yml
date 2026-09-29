@@ -51,8 +51,15 @@ targets:
       - path: Keyboard
         excludes:
           - "GoutouSkill.md"
+          - "pinyin-chars.tsv"
+          - "pinyin-words.tsv"
       # 军师人格：和 Android / Web 共用同一个 SKILL.md，打进键盘 bundle 当 system prompt。
       - path: Keyboard/GoutouSkill.md
+        buildPhase: resources
+      # 九键拼音词库（由 tools/fetch-pinyin-data.py 从三份 MIT 数据生成）
+      - path: Keyboard/pinyin-chars.tsv
+        buildPhase: resources
+      - path: Keyboard/pinyin-words.tsv
         buildPhase: resources
     settings:
       base:

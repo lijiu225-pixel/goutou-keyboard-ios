@@ -3,7 +3,7 @@ import Foundation
 // 中文九键逻辑的冒烟测试。
 //
 // 跑法（macOS / CI runner，不需要模拟器）：
-//   swiftc -swift-version 5 Keyboard/NineKeyMapper.swift Keyboard/GoutouDictionary.swift \
+//   swiftc -swift-version 5 Keyboard/NineKeyMapper.swift Keyboard/GoutouPinyinTable.swift \
 //          Keyboard/NineKeyInputEngine.swift Keyboard/GoutouConfig.swift \
 //          Keyboard/GoutouPrompt.swift Keyboard/GoutouAIClient.swift \
 //          tools/NineKeyCheck/main.swift -o /tmp/ninekeycheck
@@ -40,52 +40,85 @@ func press(_ engine: NineKeyInputEngine, _ keys: String) {
     }
 }
 
-print("== 拼音 → 数字键序列 ==")
-expectEqual(GoutouDictionary.digits(for: "ni"), "64", "ni")
-expectEqual(GoutouDictionary.digits(for: "hao"), "426", "hao")
-expectEqual(GoutouDictionary.digits(for: "nihao"), "64426", "nihao")
-expectEqual(GoutouDictionary.digits(for: "women"), "96636", "women")
-expectEqual(GoutouDictionary.digits(for: "meiguanxi"), "634482694", "meiguanxi")
+// 测试用的数字映射（App 里不需要这个方向，词库是按拼音存的）
+let testDigitMap: [Character: Character] = [
+    "a": "2", "b": "2", "c": "2", "d": "3", "e": "3", "f": "3",
+    "g": "4", "h": "4", "i": "4", "j": "5", "k": "5", "l": "5",
+    "m": "6", "n": "6", "o": "6", "p": "7", "q": "7", "r": "7", "s": "7",
+    "t": "8", "u": "8", "v": "8", "w": "9", "x": "9", "y": "9", "z": "9",
+]
+func t9(_ pinyin: String) -> String {
+    String(pinyin.compactMap { testDigitMap[$0] })
+}
 
-print("== 九键主路径：按数字序列出候选（这次修的就是这条）==")
-let engine = NineKeyInputEngine()
+print("== 九键词库（从仓库里的 TSV 加载）==")
+let repoChars = try? String(contentsOfFile: "Keyboard/pinyin-chars.tsv", encoding: .utf8)
+let repoWords = try? String(contentsOfFile: "Keyboard/pinyin-words.tsv", encoding: .utf8)
+expect(repoChars != nil && repoWords != nil, "能读到 pinyin-chars.tsv / pinyin-words.tsv")
+let table = GoutouPinyinTable()
+table.load(charsText: repoChars, wordsText: repoWords)
+expect(table.syllableCount > 400, "音节数 > 400（实际 \(table.syllableCount)）")
+expect(table.wordKeyCount > 10000, "词条 > 10000（实际 \(table.wordKeyCount)）")
+
+print("== 数字串 → 切拼音 → 候选 ==")
+let niCandidates = table.candidates(forDigits: t9("ni"))
+expectEqual(niCandidates.first ?? "", "你", "64 首选「你」")
+expect(niCandidates.contains("尼"), "64 里有「尼」")
+expectEqual(table.candidates(forDigits: t9("nihao")).first ?? "", "你好", "64426 首选「你好」")
+expect(table.candidates(forDigits: t9("xihuan")).contains("喜欢"), "944826 里有「喜欢」")
+expectEqual(table.candidates(forDigits: t9("chifan")).first ?? "", "吃饭", "244326 首选「吃饭」")
+expectEqual(table.candidates(forDigits: t9("jintian")).first ?? "", "今天", "5468426 首选「今天」")
+expectEqual(table.candidates(forDigits: t9("meiguanxi")).first ?? "", "没关系", "634482694 首选「没关系」")
+expectEqual(table.candidates(forDigits: t9("shenme")).first ?? "", "什么", "743663 首选「什么」")
+expectEqual(table.candidates(forDigits: t9("duibuqi")).first ?? "", "对不起", "3842874 首选「对不起」")
+expectEqual(table.candidates(forDigits: t9("de")).first ?? "", "的", "33 首选「的」")
+expect(table.candidates(forDigits: t9("hao")).contains("好"), "426 里有「好」")
+expect(table.candidates(forDigits: "999").isEmpty, "999 切不出拼音，没有候选")
+expect(table.candidates(forDigits: "").isEmpty, "空串没有候选")
+expect(table.split(Array(t9("nihao"))).contains(["ni", "hao"]), "64426 能切成 ni+hao")
+expect(table.split(t9("nihao").map { $0 }, maxResults: 8).contains(["ni", "hao"]), "64426 能切成 ni+hao")
+
+print("== 九键主路径（按数字序列出候选）==")
+let engine = NineKeyInputEngine(table: table)
 press(engine, "6")
 expectEqual(engine.digits, "6", "按一下 6")
-expectEqual(engine.candidates.count, 0, "词库里没有单字母拼音，先不出候选")
+expect(engine.candidates.isEmpty, "6 切不出音节，先没候选")
 press(engine, "4")
 expectEqual(engine.digits, "64", "再按 4")
-expectEqual(engine.pinyinHint, "ni", "64 推出的拼音")
-expectEqual(engine.candidates.joined(separator: ","), "你,尼", "64 出候选「你」「尼」")
+expectEqual(engine.pinyinHint, "", "64 有 mi / ni 两种读法，顶部只显示数字")
+expectEqual(engine.candidates.first ?? "", "你", "64 首选「你」")
+
+engine.clear()
+press(engine, "7484")
+expectEqual(engine.pinyinHint, "shui", "7484 只有一种读法，顶部显示 shui")
+expectEqual(engine.candidates.first ?? "", "体", "7484 首选候选来自词频最高的字")
+engine.clear()
 
 press(engine, "426")
 expectEqual(engine.digits, "64426", "继续按 426")
-expectEqual(engine.candidates.joined(separator: ","), "你好", "64426 出候选「你好」")
+expectEqual(engine.candidates.first ?? "", "你好", "64426 首选「你好」")
 expectEqual(engine.flushText() ?? "", "你好", "空格/标点提交时上屏首候选")
 expectEqual(engine.digits, "", "提交后数字序列清空")
 
 print("== 候选点一下直接上屏（不走 flush）==")
 press(engine, "96")
-expectEqual(engine.candidates.joined(separator: ","), "我", "96 出候选「我」")
+expectEqual(engine.candidates.first ?? "", "我", "96 首选「我」")
 engine.clear()
 expectEqual(engine.digits, "", "清空")
-expectEqual(engine.candidates.count, 0, "清空后没有候选")
+expect(engine.candidates.isEmpty, "清空后没有候选")
 
 print("== 回删边界 ==")
 press(engine, "64426")
 expect(engine.deleteBackward(), "有数字序列时回删被它吃掉")
 expectEqual(engine.digits, "6442", "回删一位")
-expectEqual(engine.candidates.count, 0, "6442 没有候选")
 engine.clear()
 expect(!engine.deleteBackward(), "没有数字序列时回删交给正文（返回 false）")
 
-print("== 词库兜底 ==")
-expectEqual(GoutouDictionary.wordCount, 20, "词库条数与 Android 一致")
-expectEqual(GoutouDictionary.candidates(for: "ni").joined(separator: ","), "你,尼", "精确拼音查询保留")
-expectEqual(GoutouDictionary.candidates(forDigits: "634482694").joined(separator: ","), "没关系", "四字母以上的词条")
-expectEqual(GoutouDictionary.candidates(forDigits: "999").count, 0, "查不到的数字串返回空")
+print("== 切不出拼音时的兜底 ==")
 press(engine, "999")
-expectEqual(engine.flushText() ?? "", "999", "词库没有命中就原样上屏这串数字")
-expectEqual(GoutouDictionary.pinyinHint(forDigits: "999"), "", "没有命中时拼音提示为空")
+expect(engine.candidates.isEmpty, "999 没有候选")
+expectEqual(engine.flushText() ?? "", "999", "切不出拼音就原样上屏这串数字")
+expectEqual(engine.pinyinHint, "", "没有命中时拼音提示为空")
 
 print("== 1 和 0 不进数字序列 ==")
 engine.clear()

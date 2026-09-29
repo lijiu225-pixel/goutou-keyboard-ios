@@ -38,8 +38,8 @@ App/                                 宿主 App：启用向导 + 自测输入框
 Keyboard/                            键盘扩展：UIInputViewController + Auto Layout
   KeyboardViewController.swift       两种布局的控制器 + textDocumentProxy 上屏
   NineKeyKeyboardView.swift          中文九键界面（对标 Android 布局与配色）
-  NineKeyMapper.swift                九键多击字母循环（与 Android 逐行对应）
-  GoutouDictionary.swift             20 词词库（与 Android 一字不差）
+  NineKeyMapper.swift                九键多击字母循环（Android 口径参照，已不在输入路径上）
+  GoutouPinyinTable.swift            九键词库：数字串切分 + 候选（约 2 万词 + 两万汉字）
   NineKeyInputEngine.swift           中文九键输入状态机（composing / flush / 回删）
   GoutouPanelView.swift              军师面板（顶栏 / 状态行 / 归属行 / 结果区）
   GoutouConfig.swift                 接口配置（App 与键盘共用同一份结构）
@@ -55,13 +55,13 @@ tools/NineKeyCheck/main.swift        九键逻辑冒烟测试（CI 上 swiftc �
 
 ### 跨平台复用的那一层
 
-`NineKeyMapper` / `GoutouDictionary` / `NineKeyInputEngine` 只依赖 Foundation，不碰 UIKit，
+`NineKeyMapper` / `GoutouPinyinTable` / `NineKeyInputEngine` 只依赖 Foundation，不碰 UIKit，
 是 Android 那边 `NineKeyMapper.kt` 和 `GoutouInputMethodService` 里跟平台无关的部分：
 
 | Android | iOS |
 |---|---|
 | `NineKeyMapper.kt`（多击循环、650ms 窗口） | `NineKeyMapper.swift` 逐行对应 |
-| `dictionary` map（20 词） | `GoutouDictionary.swift` |
+| `dictionary` map（当年那 20 词） | 已换成 `GoutouPinyinTable.swift` + 生成的两份 TSV（Android 那 20 词不够打字） |
 | `composing` / `lastNineKey` / `flushComposing` / `deleteOnce` 的拼音部分 | `NineKeyInputEngine.swift` |
 | `renderNineKeyLayout` / `renderCandidateBar` / `handleKey` | `NineKeyKeyboardView.swift` + 控制器里的 `handleNineKeyAction` |
 
@@ -144,15 +144,24 @@ git tag adhoc-v1.0.0 && git push origin adhoc-v1.0.0
 
 默认进中文九键。底部左边「中英」切英文 26 键，26 键底部的「中」切回九键，切换结果会被记住。
 
-九键按**数字序列**出候选（和手机上其他九键输入法一致）：
+九键的做法是**数字串 → 切出所有可能的拼音组合 → 查词库**（和手机上其他九键输入法一样）：
 
-- 按 `6` `4` `4` `2` `6` → 候选「你好」，点一下上屏
-- 键盘顶部一行显示你按的数字和它命中的拼音（`64426 · nihao`），没有命中就只显示数字
+- 按 `6` `4` `4` `2` `6` → 切出 `ni+hao` → 首选「你好」，点一下上屏
+- 单字也行：`6` `4` → 切出 `ni`/`mi`，按常用度给出「你、米、密、尼…」
+- 键盘顶部一行显示你按的数字；只有**唯一读法**时才补拼音（`7484 · shui`）
 - `1` 直接上屏「，」；`0` / 空格：有候选先上屏首候选，没有就打空格
 - `重输` / `清空` 丢掉当前数字序列；`⌫` 先吃数字，数字空了才删正文
 - `123` 切**数字页**（完整 0-9），`符` 切**符号页**（标点 + @#￥%&*），两个页面第 4 行的 `ABC` 回九键
 
-> 词库还是 Android 那 20 个词，超出词库的拼音按完不会有候选（那串数字会被原样上屏）。要扩词库是另一件事，见「下一阶段」。
+词库是打进键盘的两份 TSV（约 500 KB，2 万个词条 + 两万汉字），由 [`tools/fetch-pinyin-data.py`](tools/fetch-pinyin-data.py)
+从三份 MIT 数据生成，来源与许可见 [THIRD-PARTY.md](THIRD-PARTY.md)：
+
+| 文件 | 内容 |
+|---|---|
+| `Keyboard/pinyin-chars.tsv` | 音节 → 候选汉字（含全局常用度排序），417 个音节 |
+| `Keyboard/pinyin-words.tsv` | 整串拼音 → 候选词，2 万条 |
+
+排序是**启发式**的：按词频分档排序，个别词（比如 `944826` 会先给「一贯/习惯」再给「喜欢」）不保证顺序最优。
 
 ### 军师怎么用
 
@@ -172,7 +181,7 @@ git tag adhoc-v1.0.0 && git push origin adhoc-v1.0.0
 
 ## 下一阶段（现在没做）
 
-- 中文大词库 / 整句拼音（现在是 20 词精确匹配，换 RIME，或把词库放宿主 App + App Group）
+- 整句输入 / 联想（现在是"数字串切拼音 + 词库命中"，没有再往上做整句模型；要更进一步就得考虑 RIME）
 - 任务/风格选择器（iOS 面板现在写死 Android 的两个默认值）
 - 宿主 App 里的完整面板 + 历史（现在是"键盘内面板 + 剪贴板传配置"）
 

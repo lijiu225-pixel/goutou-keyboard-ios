@@ -55,7 +55,7 @@ jobs:
         run: |
           swiftc -swift-version 5 \
             Keyboard/NineKeyMapper.swift \
-            Keyboard/GoutouDictionary.swift \
+            Keyboard/GoutouPinyinTable.swift \
             Keyboard/NineKeyInputEngine.swift \
             Keyboard/GoutouConfig.swift \
             Keyboard/GoutouPrompt.swift \
