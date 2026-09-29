@@ -161,7 +161,7 @@ struct PersonMemory: Codable, Equatable, Identifiable {
         if let type = try container.decodeIfPresent(MemorySourceType.self, forKey: .sourceType) {
             sourceType = type
         } else if let legacy = try? decoder.container(keyedBy: LegacyKeys.self)
-            .decodeIfPresent(String.self, forKey: .source), let legacy = legacy {
+            .decodeIfPresent(String.self, forKey: .source) {
             sourceType = MemorySourceType.fromLegacy(legacy)
         } else {
             sourceType = .manual
