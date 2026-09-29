@@ -8,17 +8,31 @@ import UIKit
 /// - 中文九键（对标 Android 稳定版布局；候选来自 GoutouPinyinTable，输入状态在 NineKeyInputEngine）
 final class KeyboardViewController: UIInputViewController {
 
-    // MARK: - 布局数据
+    // MARK: - 英文 26 键（照 iOS 系统键盘排）
 
-    private let letterRows: [[String]] = [
+    private enum EnglishPage { case letters, numbers, symbols }
+
+    private let englishKeyHeight: CGFloat = 46
+    private let englishSpacing: CGFloat = 6
+    private let englishHeight: CGFloat = 216
+
+    private var englishPage: EnglishPage = .letters
+    private var shiftOn = false
+
+    private let englishLetterRows: [[String]] = [
         ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
         ["a", "s", "d", "f", "g", "h", "j", "k", "l"],
         ["z", "x", "c", "v", "b", "n", "m"],
     ]
-
-    private let keyHeight: CGFloat = 46
-    private let keySpacing: CGFloat = 6
-    private let keyboardHeight: CGFloat = 258
+    private let englishNumberRows: [[String]] = [
+        ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"],
+        ["-", "/", ":", ";", "(", ")", "￥", "&", "@", "\""],
+    ]
+    private let englishSymbolRows: [[String]] = [
+        ["[", "]", "{", "}", "#", "%", "^", "*", "+", "="],
+        ["_", "\\", "|", "~", "<", ">", "€", "£", "¥", "·"],
+    ]
+    private let englishPunctuationRow = [".", ",", "?", "!", "'"]
 
     // MARK: - 布局模式（新增）
 
@@ -39,6 +53,7 @@ final class KeyboardViewController: UIInputViewController {
 
     private weak var mentorPanel: GoutouPanelView?
     private var segments: [GoutouSegment] = []
+    private var memory: [String] = []
     private var panelState: GoutouPanelState = .empty(banner: nil)
     private var panelTask: URLSessionTask?
     private var isPanelVisible = false
@@ -56,6 +71,7 @@ final class KeyboardViewController: UIInputViewController {
         GoutouPinyinTable.shared.loadIfNeeded()
         // 上次没清掉的上下文接着用（退出面板、键盘被回收都不会丢）
         segments = GoutouSegmentStore.load()
+        memory = GoutouMemoryStore.load()
         rebuildKeyboard()
     }
 
@@ -86,7 +102,7 @@ final class KeyboardViewController: UIInputViewController {
 
         switch mode {
         case .englishQWERTY:
-            view.backgroundColor = .secondarySystemBackground
+            view.backgroundColor = GoutouTheme.englishBackground
             buildLayout()
         case .chineseNineKey:
             view.backgroundColor = GoutouTheme.background
@@ -101,84 +117,229 @@ final class KeyboardViewController: UIInputViewController {
     // MARK: - 搭建界面
 
     private func buildLayout() {
+        for subview in view.subviews {
+            subview.removeFromSuperview()
+        }
+        for constraint in view.constraints {
+            view.removeConstraint(constraint)
+        }
+        view.backgroundColor = GoutouTheme.englishBackground
+
         let root = UIStackView()
         root.axis = .vertical
-        root.spacing = keySpacing
+        root.spacing = englishSpacing
         root.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(root)
 
         NSLayoutConstraint.activate([
-            root.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: keySpacing),
-            root.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -keySpacing),
+            root.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: englishSpacing),
+            root.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -englishSpacing),
             root.topAnchor.constraint(equalTo: view.topAnchor, constant: 8),
+            root.bottomAnchor.constraint(equalTo: view.bottomAnchor, constant: -8),
         ])
 
-        for row in letterRows {
-            root.addArrangedSubview(makeLetterRow(row))
+        switch englishPage {
+        case .letters:
+            root.addArrangedSubview(makeEnglishRow(englishLetterRows[0], letters: true))
+            root.addArrangedSubview(makeEnglishRow(englishLetterRows[1], letters: true))
+            root.addArrangedSubview(makeEnglishLetterBottomKeysRow())
+        case .numbers:
+            for row in englishNumberRows {
+                root.addArrangedSubview(makeEnglishRow(row, letters: false))
+            }
+            root.addArrangedSubview(makeEnglishPunctuationKeysRow(backTitle: "#+="))
+        case .symbols:
+            for row in englishSymbolRows {
+                root.addArrangedSubview(makeEnglishRow(row, letters: false))
+            }
+            root.addArrangedSubview(makeEnglishPunctuationKeysRow(backTitle: "123"))
         }
-        root.addArrangedSubview(makeBottomRow())
+        root.addArrangedSubview(makeEnglishBottomRow())
 
-        // 键盘高度写死，横竖屏不做特殊处理（第一阶段不做额外功能）。
-        let height = view.heightAnchor.constraint(equalToConstant: keyboardHeight)
+        // 键盘高度写死（和 iOS 自带键盘一致，横屏不做特殊处理）。
+        let height = view.heightAnchor.constraint(equalToConstant: englishHeight)
         height.priority = UILayoutPriority(999)
         height.isActive = true
     }
 
-    private func makeLetterRow(_ keys: [String]) -> UIStackView {
+    /// 一行键：按权重分宽度（权重和不要求等于 1，内部按比例算）。
+    private func makeEnglishRow(_ keys: [String], letters: Bool) -> UIStackView {
         let row = UIStackView()
         row.axis = .horizontal
-        row.spacing = keySpacing
-        row.distribution = .fillEqually
+        row.spacing = englishSpacing
+        row.distribution = .fill
         row.alignment = .fill
         for key in keys {
-            row.addArrangedSubview(makeKey(title: key, action: #selector(handleLetter(_:))))
+            let title = letters ? (shiftOn ? key.uppercased() : key.lowercased()) : key
+            row.addArrangedSubview(makeEnglishKey(
+                title: title,
+                action: letters ? #selector(handleLetter(_:)) : #selector(handleLiteral(_:))
+            ))
         }
+        applyWeights(row, weights: Array(repeating: 1, count: keys.count))
         return row
     }
 
-    private func makeBottomRow() -> UIStackView {
+    /// 字母页第三行：⇧ + zxcvbnm + ⌫
+    private func makeEnglishLetterBottomKeysRow() -> UIStackView {
         let row = UIStackView()
         row.axis = .horizontal
-        row.spacing = keySpacing
+        row.spacing = englishSpacing
         row.distribution = .fill
         row.alignment = .fill
 
-        var keys: [UIButton] = []
+        let shift = makeEnglishKey(
+            title: shiftOn ? "⬆︎" : "⇧",
+            action: #selector(handleShift),
+            background: shiftOn ? GoutouTheme.englishKey : GoutouTheme.englishFunctionKey
+        )
+        shift.accessibilityLabel = shiftOn ? "关闭大写" : "大写"
+        row.addArrangedSubview(shift)
 
-        if needsInputModeSwitchKey {
-            let globe = makeKey(title: "🌐", action: #selector(handleNextKeyboard), fontSize: 20)
-            globe.addTarget(self, action: #selector(handleInputModeList(from:with:)), for: .allTouchEvents)
-            keys.append(globe)
+        for key in englishLetterRows[2] {
+            let title = shiftOn ? key.uppercased() : key.lowercased()
+            row.addArrangedSubview(makeEnglishKey(title: title, action: #selector(handleLetter(_:))))
         }
 
-        let space = makeKey(title: "空格", action: #selector(handleSpace), fontSize: 15)
-        keys.append(space)
-        keys.append(makeKey(title: "⌫", action: #selector(handleDelete), fontSize: 20))
-        keys.append(makeKey(title: "中", action: #selector(handleSwitchToChinese), fontSize: 18))
-        keys.append(makeKey(title: "换行", action: #selector(handleReturn), fontSize: 15))
+        let delete = makeEnglishKey(
+            title: "⌫",
+            action: #selector(handleDelete),
+            background: GoutouTheme.englishFunctionKey
+        )
+        delete.accessibilityLabel = "删除"
+        row.addArrangedSubview(delete)
 
-        for key in keys {
-            row.addArrangedSubview(key)
-        }
-
-        // 空格键吃掉剩余宽度，其余按键给固定宽度。
-        for key in keys where key !== space {
-            key.widthAnchor.constraint(equalToConstant: 54).isActive = true
-        }
+        applyWeights(row, weights: [1.5] + Array(repeating: 1, count: englishLetterRows[2].count) + [1.5])
         return row
     }
 
-    private func makeKey(title: String, action: Selector, fontSize: CGFloat = 22) -> UIButton {
-        let button = UIButton(type: .system)
-        button.setTitle(title, for: .normal)
-        button.titleLabel?.font = .systemFont(ofSize: fontSize, weight: .regular)
-        button.setTitleColor(.label, for: .normal)
-        button.backgroundColor = .systemBackground
-        button.layer.cornerRadius = 7
-        button.layer.masksToBounds = true
-        button.addTarget(self, action: action, for: .touchUpInside)
-        button.heightAnchor.constraint(equalToConstant: keyHeight).isActive = true
-        return button
+    /// 数字/符号页第三行：#+= 或 123 + 标点 + ⌫
+    private func makeEnglishPunctuationKeysRow(backTitle: String) -> UIStackView {
+        let row = UIStackView()
+        row.axis = .horizontal
+        row.spacing = englishSpacing
+        row.distribution = .fill
+        row.alignment = .fill
+
+        let back = makeEnglishKey(
+            title: backTitle,
+            action: #selector(handleSwitchEnglishPage),
+            fontSize: 15,
+            background: GoutouTheme.englishFunctionKey
+        )
+        back.accessibilityLabel = backTitle == "123" ? "回到数字页" : "切换到更多符号"
+        row.addArrangedSubview(back)
+
+        for key in englishPunctuationRow {
+            row.addArrangedSubview(makeEnglishKey(title: key, action: #selector(handleLiteral(_:))))
+        }
+
+        let delete = makeEnglishKey(
+            title: "⌫",
+            action: #selector(handleDelete),
+            background: GoutouTheme.englishFunctionKey
+        )
+        delete.accessibilityLabel = "删除"
+        row.addArrangedSubview(delete)
+
+        applyWeights(row, weights: [1.5] + Array(repeating: 1, count: englishPunctuationRow.count) + [1.5])
+        return row
+    }
+
+    /// 底行：123/ABC + 🌐 + 中 + 空格 + 换行（和系统键盘一样）。
+    private func makeEnglishBottomRow() -> UIStackView {
+        let row = UIStackView()
+        row.axis = .horizontal
+        row.spacing = englishSpacing
+        row.distribution = .fill
+        row.alignment = .fill
+
+        let pageTitle = englishPage == .letters ? "123" : "ABC"
+        let pageKey = makeEnglishKey(
+            title: pageTitle,
+            action: #selector(handleToggleEnglishPage),
+            fontSize: 16,
+            background: GoutouTheme.englishFunctionKey
+        )
+        pageKey.accessibilityLabel = pageTitle == "123" ? "数字和符号" : "回到字母"
+        row.addArrangedSubview(pageKey)
+
+        if needsInputModeSwitchKey {
+            let globe = makeEnglishKey(
+                title: "🌐",
+                action: #selector(handleNextKeyboard),
+                fontSize: 18,
+                background: GoutouTheme.englishFunctionKey
+            )
+            globe.addTarget(self, action: #selector(handleInputModeList(from:with:)), for: .allTouchEvents)
+            row.addArrangedSubview(globe)
+        }
+
+        row.addArrangedSubview(makeEnglishKey(
+            title: "中",
+            action: #selector(handleSwitchToChinese),
+            fontSize: 16,
+            background: GoutouTheme.englishFunctionKey
+        ))
+        row.addArrangedSubview(makeEnglishKey(title: "空格", action: #selector(handleSpace), fontSize: 15))
+        row.addArrangedSubview(makeEnglishKey(
+            title: "换行",
+            action: #selector(handleReturn),
+            fontSize: 15,
+            background: GoutouTheme.englishFunctionKey
+        ))
+
+        var weights: [CGFloat] = [1.5]
+        if needsInputModeSwitchKey { weights.append(1.5) }
+        weights.append(contentsOf: [1.5, 5, 1.5])
+        applyWeights(row, weights: weights)
+        return row
+    }
+
+    /// 按行内权重把宽度分下去（用一个 layout guide 扣掉间距，避免和 spacing 打架）。
+    private func applyWeights(_ row: UIStackView, weights: [CGFloat]) {
+        let views = row.arrangedSubviews
+        guard !views.isEmpty, views.count == weights.count else { return }
+        let total = weights.reduce(0, +)
+        guard total > 0 else { return }
+
+        let guide = UILayoutGuide()
+        row.addLayoutGuide(guide)
+        guide.leadingAnchor.constraint(equalTo: row.leadingAnchor).isActive = true
+        guide.widthAnchor.constraint(
+            equalTo: row.widthAnchor,
+            constant: -englishSpacing * CGFloat(views.count - 1)
+        ).isActive = true
+        for subview in views {
+            guard let index = views.firstIndex(of: subview) else { continue }
+            subview.widthAnchor.constraint(
+                equalTo: guide.widthAnchor,
+                multiplier: weights[index] / total
+            ).isActive = true
+        }
+    }
+
+    private func makeEnglishKey(
+        title: String,
+        action: Selector,
+        fontSize: CGFloat = 22,
+        background: UIColor = GoutouTheme.englishKey
+    ) -> NineKeyButton {
+        let key = NineKeyButton(type: .system)
+        key.setTitle(title, for: .normal)
+        key.titleLabel?.font = .systemFont(ofSize: fontSize, weight: .regular)
+        key.applyStyle(background: background, cornerRadius: 5)
+        key.setTitleColor(GoutouTheme.englishText, for: .normal)
+        key.pressedColor = GoutouTheme.englishKeyPressed
+        key.layer.borderWidth = 0
+        key.layer.masksToBounds = false
+        key.layer.shadowColor = UIColor.black.cgColor
+        key.layer.shadowOpacity = 0.22
+        key.layer.shadowRadius = 0
+        key.layer.shadowOffset = CGSize(width: 0, height: 1)
+        key.addTarget(self, action: action, for: .touchUpInside)
+        key.heightAnchor.constraint(equalToConstant: englishKeyHeight).isActive = true
+        return key
     }
 
     // MARK: - 按键动作
@@ -186,6 +347,34 @@ final class KeyboardViewController: UIInputViewController {
     @objc private func handleLetter(_ sender: UIButton) {
         guard let text = sender.title(for: .normal) else { return }
         textDocumentProxy.insertText(text)
+        if shiftOn {
+            // 和系统键盘一样：大写只作用一个字母
+            shiftOn = false
+            buildLayout()
+        }
+    }
+
+    /// 数字页 / 符号页的字符键：按下就上屏。
+    @objc private func handleLiteral(_ sender: UIButton) {
+        guard let text = sender.title(for: .normal) else { return }
+        textDocumentProxy.insertText(text)
+    }
+
+    @objc private func handleShift() {
+        shiftOn.toggle()
+        buildLayout()
+    }
+
+    /// 字母页的「123」/ 数字页的「ABC」：字母页 ↔ 数字页。
+    @objc private func handleToggleEnglishPage() {
+        englishPage = englishPage == .letters ? .numbers : .letters
+        buildLayout()
+    }
+
+    /// 数字页的「#+=」/ 符号页的「123」：数字页 ↔ 符号页。
+    @objc private func handleSwitchEnglishPage() {
+        englishPage = englishPage == .numbers ? .symbols : .numbers
+        buildLayout()
     }
 
     @objc private func handleSpace() {
@@ -245,7 +434,7 @@ final class KeyboardViewController: UIInputViewController {
         isPanelVisible = true
         nineKeyView?.isHidden = true
         mentorPanel?.isHidden = false
-        mentorPanel?.setShowingSettings(false)
+        mentorPanel?.resetScreen()
         refreshPanel()
     }
 
@@ -262,6 +451,7 @@ final class KeyboardViewController: UIInputViewController {
         mentorPanel?.render(
             state: panelState,
             segments: segments,
+            memory: memory,
             configSummary: config?.summary ?? ""
         )
     }
@@ -289,6 +479,19 @@ final class KeyboardViewController: UIInputViewController {
         segments.append(GoutouSegment(speaker: speaker, text: text))
         GoutouSegmentStore.save(segments)
         panelState = .empty(banner: nil)
+        refreshPanel()
+    }
+
+    /// 长期档案：把剪贴板里的一段文字当成一条记忆存下来。
+    private func importMemoryFromClipboard() {
+        guard let text = clipboardText() else {
+            panelState = .needsFullAccess("剪贴板里没读到内容。先把「她生日 3 月 5 日」这类内容复制好，再点导入。没开「允许完全访问」时读剪贴板会失败。")
+            refreshPanel()
+            return
+        }
+        memory.append(text)
+        GoutouMemoryStore.save(memory)
+        panelState = .empty(banner: "已记下第 \(memory.count) 条，下次分析会带上")
         refreshPanel()
     }
 
@@ -331,7 +534,7 @@ final class KeyboardViewController: UIInputViewController {
         refreshPanel()
 
         let systemPrompt = GoutouPrompt.systemPrompt(skill: skillText)
-        let userMessage = GoutouPrompt.userMessage(segments: segments)
+        let userMessage = GoutouPrompt.userMessage(segments: segments, memory: memory)
         panelTask = GoutouAIClient.analyze(
             config: config,
             systemPrompt: systemPrompt,
@@ -457,9 +660,6 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
         case .back:
             hideMentorPanel()
 
-        case .toggleSettings:
-            panel.setShowingSettings(!panel.isShowingSettings)
-
         case .importConfig:
             importConfigFromClipboard()
 
@@ -477,6 +677,20 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
             segments.remove(at: index)
             GoutouSegmentStore.save(segments)
             panelState = .empty(banner: "已删掉第 \(index + 1) 段，可以重新分析")
+            refreshPanel()
+
+        case .importMemory:
+            importMemoryFromClipboard()
+
+        case .deleteMemory(let index):
+            guard memory.indices.contains(index) else { break }
+            memory.remove(at: index)
+            GoutouMemoryStore.save(memory)
+            refreshPanel()
+
+        case .clearMemory:
+            memory = []
+            GoutouMemoryStore.clear()
             refreshPanel()
 
         case .analyze:

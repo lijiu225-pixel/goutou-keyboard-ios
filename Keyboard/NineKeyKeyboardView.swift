@@ -13,6 +13,15 @@ enum GoutouTheme {
     static let pressed = UIColor(goutouHex: 0x56565A)
     static let candidatePrimary = UIColor(goutouHex: 0x304E70)
     static let warning = UIColor(goutouHex: 0xFF9F0A)
+    /// 品牌色：和 Android 那个 dog.svg 底色一致（#202836）
+    static let brand = UIColor(goutouHex: 0x202836)
+
+    // 英文 26 键照 iOS 系统键盘：浅色下白键 + 浅灰底，深色下深灰键 + 近黑底。
+    static let englishBackground = UIColor { $0.userInterfaceStyle == .dark ? UIColor(goutouHex: 0x1C1C1E) : UIColor(goutouHex: 0xD1D5DB) }
+    static let englishKey = UIColor { $0.userInterfaceStyle == .dark ? UIColor(goutouHex: 0x3A3A3C) : UIColor(goutouHex: 0xFFFFFF) }
+    static let englishKeyPressed = UIColor { $0.userInterfaceStyle == .dark ? UIColor(goutouHex: 0x5A5A5C) : UIColor(goutouHex: 0xE3E4E8) }
+    static let englishFunctionKey = UIColor { $0.userInterfaceStyle == .dark ? UIColor(goutouHex: 0x2C2C2E) : UIColor(goutouHex: 0xAEB4BF) }
+    static let englishText = UIColor.label
 }
 
 private extension UIColor {
@@ -179,7 +188,8 @@ final class NineKeyKeyboardView: UIView {
         compositionLabel.lineBreakMode = .byTruncatingTail
         compositionLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let mentor = makeFunctionKey(title: "军师", fontSize: 13, action: #selector(didTapMentor))
+        // 军师入口用狗头图标（就是 Android 那边 dog.svg 里那个 🐶，底色 #202836）
+        let mentor = makeKey(title: "🐶", background: GoutouTheme.brand, fontSize: 16, action: #selector(didTapMentor))
         mentor.translatesAutoresizingMaskIntoConstraints = false
         mentor.accessibilityLabel = "打开狗头军师面板"
 
@@ -582,11 +592,12 @@ final class NineKeyKeyboardView: UIView {
     }
 
     @objc private func didTapShowNumbers() {
-        delegate?.nineKeyKeyboardView(self, didTrigger: .showNumbers)
+        // 再点一次同一个键就回九键（用户要的行为）
+        delegate?.nineKeyKeyboardView(self, didTrigger: page == .numbers ? .showLetters : .showNumbers)
     }
 
     @objc private func didTapShowSymbols() {
-        delegate?.nineKeyKeyboardView(self, didTrigger: .showSymbols)
+        delegate?.nineKeyKeyboardView(self, didTrigger: page == .symbols ? .showLetters : .showSymbols)
     }
 
     @objc private func didTapToggleMode() {

@@ -17,9 +17,9 @@ enum GoutouSpeaker: String, Codable {
 
     var buttonTitle: String {
         switch self {
-        case .opponent: return "👤 对方"
-        case .me: return "🙋 我"
-        case .background: return "📝 背景"
+        case .opponent: return "👤对方"
+        case .me: return "🙋我"
+        case .background: return "📝背景"
         }
     }
 }
@@ -61,12 +61,20 @@ enum GoutouPrompt {
     }
 
     /// 把叠加的几段拼成 skill 认得的格式：`对方：…` / `我：…` / `背景：…`。
-    static func userMessage(segments: [GoutouSegment]) -> String {
+    /// `memory` 是长期档案，会以单独一段放在对话前面（每次分析都带上）。
+    static func userMessage(segments: [GoutouSegment], memory: [String] = []) -> String {
         let body = segments
             .map { "\($0.speaker.promptLabel)：\($0.text.trimmed)" }
             .filter { $0.count > 3 }
             .joined(separator: "\n")
-        return "聊天内容：\n\(body)"
+        let archive = memory
+            .map { $0.trimmed }
+            .filter { !$0.isEmpty }
+        guard !archive.isEmpty else {
+            return "聊天内容：\n\(body)"
+        }
+        let archiveText = archive.map { "- \($0)" }.joined(separator: "\n")
+        return "长期档案（用户自己提供的背景事实，不是本次对话）：\n\(archiveText)\n\n聊天内容：\n\(body)"
     }
 
     /// 只取 relationship 的第一句，超过 20 字就截断加省略号。

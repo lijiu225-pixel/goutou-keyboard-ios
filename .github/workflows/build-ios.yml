@@ -60,6 +60,7 @@ jobs:
             Keyboard/GoutouConfig.swift \
             Keyboard/GoutouPrompt.swift \
             Keyboard/GoutouSegmentStore.swift \
+            Keyboard/GoutouMemoryStore.swift \
             Keyboard/GoutouAIClient.swift \
             tools/NineKeyCheck/main.swift \
             -o "$RUNNER_TEMP/ninekeycheck"

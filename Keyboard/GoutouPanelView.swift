@@ -14,11 +14,13 @@ enum GoutouPanelState {
 
 enum GoutouPanelAction {
     case back
-    case toggleSettings
     case importConfig
     case clearConfig
     case addSegment(GoutouSpeaker)
     case deleteSegment(Int)
+    case importMemory
+    case deleteMemory(Int)
+    case clearMemory
     case analyze
     case cancel
     case clearSegments
@@ -57,11 +59,14 @@ final class GoutouPanelView: UIView {
     private let bodyScroll = UIScrollView()
     private let bodyStack = UIStackView()
     private let settingsButton = NineKeyButton(type: .system)
+    private let memoryButton = NineKeyButton(type: .system)
 
     private var state: GoutouPanelState = .empty(banner: nil)
     private var segments: [GoutouSegment] = []
+    private var memory: [String] = []
     private var configSummary = ""
-    private var showingSettings = false
+    private enum Screen { case main, settings, memory }
+    private var screen: Screen = .main
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -156,19 +161,29 @@ final class GoutouPanelView: UIView {
         row.distribution = .fillEqually
         row.heightAnchor.constraint(equalToConstant: speakerHeight).isActive = true
 
-        row.addArrangedSubview(makeClosureKey(title: GoutouSpeaker.opponent.buttonTitle, background: GoutouTheme.function, fontSize: 14) {
+        row.addArrangedSubview(makeClosureKey(title: GoutouSpeaker.opponent.buttonTitle, background: GoutouTheme.function, fontSize: 13) {
             self.delegate?.goutouPanel(self, didTrigger: .addSegment(.opponent))
         })
-        row.addArrangedSubview(makeClosureKey(title: GoutouSpeaker.me.buttonTitle, background: GoutouTheme.function, fontSize: 14) {
+        row.addArrangedSubview(makeClosureKey(title: GoutouSpeaker.me.buttonTitle, background: GoutouTheme.function, fontSize: 13) {
             self.delegate?.goutouPanel(self, didTrigger: .addSegment(.me))
         })
-        row.addArrangedSubview(makeClosureKey(title: GoutouSpeaker.background.buttonTitle, background: GoutouTheme.function, fontSize: 14) {
+        row.addArrangedSubview(makeClosureKey(title: GoutouSpeaker.background.buttonTitle, background: GoutouTheme.function, fontSize: 13) {
             self.delegate?.goutouPanel(self, didTrigger: .addSegment(.background))
         })
-        row.addArrangedSubview(makeClosureKey(title: "⟳ 分析", background: GoutouTheme.blue, fontSize: 14) {
+        memoryButton.setTitle(memoryButtonTitle, for: .normal)
+        memoryButton.titleLabel?.font = .systemFont(ofSize: 13)
+        memoryButton.applyStyle(background: GoutouTheme.function)
+        memoryButton.accessibilityLabel = "长期档案（记忆）"
+        memoryButton.addTarget(self, action: #selector(didTapMemory), for: .touchUpInside)
+        row.addArrangedSubview(memoryButton)
+        row.addArrangedSubview(makeClosureKey(title: "⟳分析", background: GoutouTheme.blue, fontSize: 13) {
             self.delegate?.goutouPanel(self, didTrigger: .analyze)
         })
         return row
+    }
+
+    private var memoryButtonTitle: String {
+        memory.isEmpty ? "🧠 记忆" : "🧠 记忆\(memory.count)"
     }
 
     private func makeBodyArea() -> UIView {
@@ -201,13 +216,20 @@ final class GoutouPanelView: UIView {
 
     // MARK: - 渲染
 
-    func render(state: GoutouPanelState, segments: [GoutouSegment], configSummary: String) {
+    func render(state: GoutouPanelState, segments: [GoutouSegment], memory: [String], configSummary: String) {
         self.state = state
         self.segments = segments
+        self.memory = memory
         self.configSummary = configSummary
         renderStatus()
         rebuildBody()
-        settingsButton.setTitle(showingSettings ? "⬅ 返回" : "⚙ 设置", for: .normal)
+        updateTopTitles()
+    }
+
+    /// 面板顶部两个入口的标题：停在那一屏时显示「返回」。
+    private func updateTopTitles() {
+        settingsButton.setTitle(screen == .settings ? "⬅ 返回" : "⚙ 设置", for: .normal)
+        memoryButton.setTitle(screen == .memory ? "⬅ 返回" : memoryButtonTitle, for: .normal)
     }
 
     private func renderStatus() {
@@ -244,10 +266,8 @@ final class GoutouPanelView: UIView {
             bodyStack.removeArrangedSubview(subview)
             subview.removeFromSuperview()
         }
-        if showingSettings {
-            buildSettingsBody()
-            return
-        }
+        if screen == .settings { buildSettingsBody(); return }
+        if screen == .memory { buildMemoryBody(); return }
         switch state {
         case .empty(let banner):
             if let banner = banner, !banner.isEmpty {
@@ -277,7 +297,7 @@ final class GoutouPanelView: UIView {
         case .needsConfig:
             bodyStack.addArrangedSubview(makeNoticeLabel("还没配置 AI 接口（Base URL / Model / Key）。", color: GoutouTheme.warning))
             bodyStack.addArrangedSubview(makeActionButton(title: "去配置", background: GoutouTheme.blue, fontSize: 14) {
-                self.delegate?.goutouPanel(self, didTrigger: .toggleSettings)
+                self.setScreen(.settings)
             })
         }
     }
@@ -342,6 +362,51 @@ final class GoutouPanelView: UIView {
             "在「狗头军师」App 里填好 Base URL / Model / Key → 点「复制配置」→ 回这里导入。\nkey 只存在这台手机的键盘里，不进代码仓库。",
             color: GoutouTheme.secondary
         ))
+    }
+
+    /// 长期档案：每次分析都会带上，用来养这个军师。
+    private func buildMemoryBody() {
+        bodyStack.addArrangedSubview(makeNoticeLabel(
+            memory.isEmpty
+                ? "还没有长期档案。把「她生日 3 月 5 日」「我们认识三个月」这类事实复制过来，点下面导入。"
+                : "长期档案 \(memory.count) 条（每次分析都会带上）：",
+            color: memory.isEmpty ? GoutouTheme.secondary : GoutouTheme.text
+        ))
+        for (index, entry) in memory.enumerated() {
+            bodyStack.addArrangedSubview(makeMemoryRow(index: index, text: entry))
+        }
+        bodyStack.addArrangedSubview(makeActionButton(title: "⬇️ 从剪贴板导入一条", background: GoutouTheme.blue, fontSize: 14) {
+            self.delegate?.goutouPanel(self, didTrigger: .importMemory)
+        })
+        if !memory.isEmpty {
+            bodyStack.addArrangedSubview(makeActionButton(title: "🗑 全部清空", background: GoutouTheme.function, fontSize: 13) {
+                self.delegate?.goutouPanel(self, didTrigger: .clearMemory)
+            })
+        }
+    }
+
+    private func makeMemoryRow(index: Int, text: String) -> UIView {
+        let row = UIStackView()
+        row.axis = .horizontal
+        row.spacing = 6
+        row.alignment = .fill
+
+        let label = makeNoticeLabel("- \(text)", color: GoutouTheme.text)
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        row.addArrangedSubview(label)
+
+        let delete = NineKeyButton(type: .system)
+        delete.setTitle("✕", for: .normal)
+        delete.titleLabel?.font = .systemFont(ofSize: 14)
+        delete.applyStyle(background: GoutouTheme.function)
+        delete.accessibilityLabel = "删掉第 \(index + 1) 条记忆"
+        delete.addAction(UIAction { [weak self] _ in
+            guard let self = self else { return }
+            self.delegate?.goutouPanel(self, didTrigger: .deleteMemory(index))
+        }, for: .touchUpInside)
+        delete.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        row.addArrangedSubview(delete)
+        return row
     }
 
     private func makeLoadingRow() -> UIView {
@@ -435,7 +500,11 @@ final class GoutouPanelView: UIView {
     }
 
     @objc private func didTapSettings() {
-        delegate?.goutouPanel(self, didTrigger: .toggleSettings)
+        setScreen(.settings)
+    }
+
+    @objc private func didTapMemory() {
+        setScreen(.memory)
     }
 
     @objc private func didTapCancel() {
@@ -447,11 +516,17 @@ final class GoutouPanelView: UIView {
         delegate?.goutouPanel(self, didTrigger: .insertReply(text))
     }
 
-    func setShowingSettings(_ showing: Bool) {
-        showingSettings = showing
-        settingsButton.setTitle(showing ? "⬅ 返回" : "⚙ 设置", for: .normal)
+    /// 切到某一屏；再点同一次标题就回到主屏。
+    private func setScreen(_ target: Screen) {
+        screen = (screen == target) ? .main : target
+        updateTopTitles()
         rebuildBody()
     }
 
-    var isShowingSettings: Bool { showingSettings }
+    /// 回到主屏（控制器在每次打开面板时调用）。
+    func resetScreen() {
+        screen = .main
+        updateTopTitles()
+        rebuildBody()
+    }
 }

@@ -6,7 +6,7 @@ import Foundation
 //   swiftc -swift-version 5 Keyboard/NineKeyMapper.swift Keyboard/GoutouPinyinTable.swift \
 //          Keyboard/NineKeyInputEngine.swift Keyboard/GoutouConfig.swift \
 //          Keyboard/GoutouPrompt.swift Keyboard/GoutouSegmentStore.swift \
-//          Keyboard/GoutouAIClient.swift \
+//          Keyboard/GoutouMemoryStore.swift Keyboard/GoutouAIClient.swift \
 //          tools/NineKeyCheck/main.swift -o /tmp/ninekeycheck
 //   /tmp/ninekeycheck
 //
@@ -156,6 +156,27 @@ expectEqual(reloaded.last?.speaker.promptLabel ?? "", "背景", "第三段归属
 expectEqual(GoutouPrompt.userMessage(segments: reloaded), GoutouPrompt.userMessage(segments: storedSegments), "读回来拼出来的 prompt 一致")
 GoutouSegmentStore.save([], to: scratchDefaults)
 expect(GoutouSegmentStore.load(from: scratchDefaults).isEmpty, "手动清空之后就是空的")
+
+print("== 长期档案（记忆）==")
+let scratchMemory = UserDefaults(suiteName: "goutou.check.memory") ?? .standard
+GoutouMemoryStore.clear(from: scratchMemory)
+expect(GoutouMemoryStore.load(from: scratchMemory).isEmpty, "一开始没有记忆")
+GoutouMemoryStore.save(["她生日 3 月 5 日", "   ", "我们认识三个月"], to: scratchMemory)
+let loadedMemory = GoutouMemoryStore.load(from: scratchMemory)
+expectEqual(loadedMemory.count, 2, "空白条目会被丢掉")
+expectEqual(loadedMemory.first ?? "", "她生日 3 月 5 日", "第一条内容")
+
+let withMemory = GoutouPrompt.userMessage(
+    segments: [GoutouSegment(speaker: .opponent, text: "睡了吗")],
+    memory: loadedMemory
+)
+expect(withMemory.hasPrefix("长期档案（用户自己提供的背景事实，不是本次对话）："), "记忆放在对话前面")
+expect(withMemory.contains("- 她生日 3 月 5 日"), "记忆按条目列出")
+expect(withMemory.contains("聊天内容：\n对方：睡了吗"), "对话部分照旧")
+let withoutMemory = GoutouPrompt.userMessage(segments: [GoutouSegment(speaker: .opponent, text: "嗯")])
+expect(!withoutMemory.contains("长期档案"), "没有记忆就不带这一段")
+GoutouMemoryStore.clear(from: scratchMemory)
+expect(GoutouMemoryStore.load(from: scratchMemory).isEmpty, "清空后为空")
 
 print("== 军师配置：导出 / 导入 ==")
 let sample = GoutouConfig(baseURL: "https://api.example.com/v1", model: "gpt-4o-mini", apiKey: "sk-test-1234")
