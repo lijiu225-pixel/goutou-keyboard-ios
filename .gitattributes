@@ -1,0 +1,5 @@
+# 流水线脚本在 macOS runner 上用 bash 跑，CRLF 会让 shebang/行尾炸掉。
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ipa binary
