@@ -470,13 +470,15 @@ do {
 }
 
 print("== 自动归纳：MemoryExtractor 解析（AI 只能改不能删）==")
+let updateTarget = UUID().uuidString
+let mergeTarget = UUID().uuidString
 let extractorReply = """
 {"operations":[
  {"op":"ADD","content":"她在互联网公司做运营","category":"stable_fact","importance":4,"confidence":0.9},
- {"op":"UPDATE","targetID":"abc","content":"她生日是 3 月 5 日","category":"stable_fact","importance":4,"confidence":0.9},
- {"op":"MERGE","targetID":"def","content":"他养了只猫","category":"偏好","importance":2,"confidence":0.6},
- {"op":"IGNORE","targetID":"abc"},
- {"op":"DELETE","targetID":"abc"},
+ {"op":"UPDATE","targetID":"\(updateTarget)","content":"她生日是 3 月 5 日","category":"stable_fact","importance":4,"confidence":0.9},
+ {"op":"MERGE","targetID":"\(mergeTarget)","content":"他养了只猫","category":"偏好","importance":2,"confidence":0.6},
+ {"op":"IGNORE","targetID":"\(updateTarget)"},
+ {"op":"DELETE","targetID":"\(updateTarget)"},
  {"op":"UPDATE","content":"没带 target 的更新应该被丢掉"}
 ]}
 """
@@ -484,7 +486,7 @@ let parsedOps = GoutouMemoryExtractor.parse(extractorReply) ?? []
 expectEqual(parsedOps.count, 4, "只认 ADD/UPDATE/MERGE/IGNORE，UPDATE 必须带 target，DELETE 直接丢")
 expect(parsedOps.first?.operation == .add, "第一条是 ADD")
 expect((parsedOps.first?.category ?? .recentStatus) == .stableFact, "英文分类解析")
-expectEqual(parsedOps.count > 1 ? (parsedOps[1].targetID ?? "") : "", "abc", "UPDATE 的 targetID")
+expectEqual(parsedOps.count > 1 ? (parsedOps[1].targetID?.uuidString ?? "") : "", updateTarget, "UPDATE 的 targetID 解析成 UUID")
 expect(parsedOps.count > 2 ? parsedOps[2].operation == .merge : false, "MERGE 认出来")
 expect((parsedOps.count > 2 ? parsedOps[2].category : .stableFact) == .preference, "中文分类也认（偏好）")
 expect(parsedOps.count > 3 ? parsedOps[3].operation == .ignore : false, "IGNORE 认出来")
