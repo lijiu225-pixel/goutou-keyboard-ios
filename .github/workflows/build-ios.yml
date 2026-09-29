@@ -50,6 +50,17 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      # 九键逻辑的冒烟测试：纯 Foundation，不需要模拟器，失败就整条流水线停在这儿。
+      - name: Smoke test nine-key logic
+        run: |
+          swiftc -swift-version 5 \
+            Keyboard/NineKeyMapper.swift \
+            Keyboard/GoutouDictionary.swift \
+            Keyboard/NineKeyInputEngine.swift \
+            tools/NineKeyCheck/main.swift \
+            -o "$RUNNER_TEMP/ninekeycheck"
+          "$RUNNER_TEMP/ninekeycheck"
+
       - name: Generate Xcode project
         run: |
           xcodegen generate

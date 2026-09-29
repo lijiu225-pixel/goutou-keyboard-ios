@@ -1,15 +1,23 @@
-# 狗头军师输入法 · iOS 键盘扩展（第一阶段）
+# 狗头军师输入法 · iOS 键盘扩展
 
 基于 [tiantianlaolao/ios-cicd-no-mac](https://github.com/tiantianlaolao/ios-cicd-no-mac) 的 example 工程改造的**最小可运行 iOS 键盘扩展**：Windows 上写代码 → push GitHub → Actions 的 macOS runner 云端编译签名 → 出可安装 IPA。全程不碰 Mac。
 
-## 第一阶段只做四件事
+## 已完成
+
+**第一阶段（跑通链路）**
 
 1. iPhone 能装上
 2. 设置里能添加这个第三方键盘
 3. 打开键盘显示 QWERTY
 4. 点字母能正常输入
 
-**明确不做**：不移植安卓代码、不做中文拼音、不接 AI、不做九键、不读剪贴板、不联网、不使用 App Group。
+**第二阶段（中文九键移植中）**
+
+1. 中文九键界面，布局对标 Android 稳定版（标点列 | 1-9 宫格 | ⌫/重输/0 列 + 候选条 + 底部动作行）
+2. 九键多击打拼音，词库出候选，点候选上屏
+3. 九键 ↔ 英文 26 键随时切换，英文 26 键功能不变
+
+**明确不做**：不移植狗头军师 AI、Function Kit、读屏、剪贴板、联网、App Group，也不做中文大词库 / RIME。
 
 ## 工程结构
 
@@ -20,12 +28,32 @@ App/                                 宿主 App：启用向导 + 自测输入框
   ContentView.swift
   Info.plist
 Keyboard/                            键盘扩展：UIInputViewController + Auto Layout
-  KeyboardViewController.swift       三行字母 + 空格/删除/换行/地球
+  KeyboardViewController.swift       两种布局的控制器 + textDocumentProxy 上屏
+  NineKeyKeyboardView.swift          中文九键界面（对标 Android 布局与配色）
+  NineKeyMapper.swift                九键多击字母循环（与 Android 逐行对应）
+  GoutouDictionary.swift             20 词词库（与 Android 一字不差）
+  NineKeyInputEngine.swift           中文九键输入状态机（composing / flush / 回删）
   Info.plist                         NSExtension: com.apple.keyboard-service
+tools/NineKeyCheck/main.swift        九键逻辑冒烟测试（CI 上 swiftc 直接跑，不需要模拟器）
 .github/workflows/build-ios.yml      无 Mac 构建流水线
 ```
 
 两个 target：`GoutouInput`（App）和 `GoutouKeyboard`（app-extension，被嵌进 App 的 `PlugIns/`）。扩展只依赖 UIKit，纯系统控件，没有 WebView、没有第三方库，内存曲线是平的。
+
+### 跨平台复用的那一层
+
+`NineKeyMapper` / `GoutouDictionary` / `NineKeyInputEngine` 只依赖 Foundation，不碰 UIKit，
+是 Android 那边 `NineKeyMapper.kt` 和 `GoutouInputMethodService` 里跟平台无关的部分：
+
+| Android | iOS |
+|---|---|
+| `NineKeyMapper.kt`（多击循环、650ms 窗口） | `NineKeyMapper.swift` 逐行对应 |
+| `dictionary` map（20 词） | `GoutouDictionary.swift` |
+| `composing` / `lastNineKey` / `flushComposing` / `deleteOnce` 的拼音部分 | `NineKeyInputEngine.swift` |
+| `renderNineKeyLayout` / `renderCandidateBar` / `handleKey` | `NineKeyKeyboardView.swift` + 控制器里的 `handleNineKeyAction` |
+
+Android 专属的 `InputMethodService`、`View` 树、JNI 一律没搬，按 Keyboard Extension 的
+`UIInputViewController` + `textDocumentProxy` 重写。
 
 ## 构建产物有两种
 
@@ -82,9 +110,25 @@ git tag adhoc-v1.0.0 && git push origin adhoc-v1.0.0
 
 > 密码框系统会强制切回自带键盘，这是 iOS 的行为，不是 bug。
 
+### 中文九键怎么打
+
+默认进中文九键。底部左边「中英」切英文 26 键，26 键底部的「中」切回九键，切换结果会被记住。
+
+九键用的是 Android 稳定版那套**多击循环**，不是整句拼音：
+
+- 同一个键 650ms 内连按 → 在该键的字母组里循环（6 按一下是 `m`，两下 `n`，三下 `o`）
+- 换键，或者停超过 650ms → 起一个新字母（6 键按一下永远是 `m`）
+- 拼出的字母串命中词库才出候选（`ni` → 你/尼，`nihao` → 你好），点候选上屏
+- `1` 直接上屏「，」；`0` / 空格：有拼音先上屏首候选，没有就打空格
+- `重输` / `清空` 丢掉当前拼音；`⌫` 先吃拼音，拼音空了才删正文
+- `符` / `123` 切数字符号页，第四行 `ABC` 切回来
+
+例：打「你好」= `6` `6`（n）→ `4` `4` `4`（i）→ 停一下再按 `4` `4`（h）→ `2`（a）→ `6` `6` `6`（o）。
+同一键上的相邻字母（i 和 h 都在 4 键）必须停过 650ms 才能分开，这是 Android 稳定版就有的行为，不是 iOS 这边的 bug。
+
 ## 下一阶段（现在没做）
 
-- 中文 / 九键（`NineKeyMapper` 的多击逻辑与平台无关，是最省事的移植点）
+- 中文大词库 / 整句拼音（现在是 20 词精确匹配，换 RIME 或把词库放宿主 App + App Group）
 - 军师面板（WebView 不要进键盘，放宿主 App，键盘只读 App Group）
 - AI 请求（需要 `RequestsOpenAccess = YES` + 用户开「允许完全访问」）
 
