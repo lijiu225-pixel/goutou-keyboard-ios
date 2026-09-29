@@ -78,7 +78,8 @@ enum GoutouPrompt {
         var sections: [String] = []
         if !archive.isEmpty {
             let archiveText = archive.map { "- \($0)" }.joined(separator: "\n")
-            sections.append("长期档案（用户自己提供的背景事实，不是本次对话）：\n\(archiveText)")
+            // 只带筛选后的相关记忆（relevanceScore 只用于客户端排序，不发给模型）
+            sections.append("【与当前聊天最相关的长期记忆】\n\(archiveText)")
         }
         sections.append("聊天内容：\n\(body)")
         if let extraRequirement = extraRequirement, !extraRequirement.trimmed.isEmpty {

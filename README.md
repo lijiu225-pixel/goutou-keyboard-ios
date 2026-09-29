@@ -48,6 +48,8 @@ Keyboard/                            键盘扩展：UIInputViewController + Auto
   GoutouSegmentStore.swift           军师上下文落盘（存到你手动清空为止）
   PersonMemory.swift                 记忆条目模型（UUID 永久身份 / 分类 / 来源追踪 / 归档位）+ 候选事务合并
   GoutouMemoryRepository.swift       记忆唯一访问层：按 personID 隔离、按 id 操作、时间字段规则
+  MemoryRankingConfig.swift          记忆排序的全部权重与预算（Top-K / 字符预算 / 类别优先级）
+  MemorySelector.swift               相关记忆筛选：本地评分 + 保底 + 近义降权 + 预算（不引 Embedding）
   GoutouMemoryExtractor.swift        分析成功后的自动归纳（提取候选，不存原文；不改网络层）
   GoutouProfileStore.swift           多人档案（人物/上下文/记忆/总结 一人一份 + 老数据迁移）
   GoutouSkill.md                     军师人格，从 Android 仓库原样拷来（口径只有一份）

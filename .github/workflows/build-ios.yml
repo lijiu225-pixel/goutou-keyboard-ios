@@ -62,6 +62,8 @@ jobs:
             Keyboard/GoutouProfileStore.swift \
             Keyboard/PersonMemory.swift \
             Keyboard/GoutouMemoryRepository.swift \
+            Keyboard/MemoryRankingConfig.swift \
+            Keyboard/MemorySelector.swift \
             Keyboard/GoutouMemoryExtractor.swift \
             Keyboard/GoutouSegmentStore.swift \
             Keyboard/GoutouAIClient.swift \

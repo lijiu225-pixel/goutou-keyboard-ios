@@ -7,6 +7,7 @@ import Foundation
 //          Keyboard/NineKeyInputEngine.swift Keyboard/GoutouConfig.swift \
 //          Keyboard/GoutouPrompt.swift Keyboard/GoutouProfileStore.swift \
 //          Keyboard/PersonMemory.swift Keyboard/GoutouMemoryRepository.swift \
+//          Keyboard/MemoryRankingConfig.swift Keyboard/MemorySelector.swift \
 //          Keyboard/GoutouMemoryExtractor.swift \
 //          Keyboard/GoutouSegmentStore.swift \
 //          Keyboard/GoutouAIClient.swift \
@@ -239,7 +240,7 @@ let withMemory = GoutouPrompt.userMessage(
     segments: [GoutouSegment(speaker: .opponent, text: "睡了吗")],
     memory: loadedMemory.map { $0.content }
 )
-expect(withMemory.hasPrefix("长期档案（用户自己提供的背景事实，不是本次对话）："), "记忆放在对话前面")
+expect(withMemory.hasPrefix("【与当前聊天最相关的长期记忆】"), "记忆段用「与当前聊天最相关的长期记忆」开头")
 expect(withMemory.contains("- 她生日 3 月 5 日"), "记忆按条目列出")
 expect(withMemory.contains("聊天内容：\n对方：睡了吗"), "对话部分照旧")
 let withoutMemory = GoutouPrompt.userMessage(segments: [GoutouSegment(speaker: .opponent, text: "嗯")])
@@ -696,6 +697,126 @@ expect(v1Book.profiles.first?.memory.first?.content == "老版条目", "内容�
 expect(v1Book.profiles.first?.memory.first?.id == v1MemoryID, "v1 的 UUID 保留")
 expect(v1Book.profiles.first?.memory.first?.personID == v1ProfileID, "归属被纠正为本档案")
 expectEqual(v1Book.memorySchemaVersion, GoutouProfileStore.currentMemorySchemaVersion, "v1 → v2 写完版本号")
+
+print("== 相关记忆筛选：Top-K / 隔离 / 关键词 / 保底 / 时间 / 去重 / 预算 ==")
+let selectorPerson = UUID()
+let otherPerson = UUID()
+let selectorNow = Date(timeIntervalSince1970: 1_700_000_000)
+
+func remember(
+    _ content: String,
+    person: UUID,
+    daysAgo: Double = 1,
+    confirmedDaysAgo: Double? = nil,
+    category: MemoryCategory = .stableFact,
+    importance: Int = 3,
+    confidence: Double = 0.8,
+    archived: Bool = false
+) -> PersonMemory {
+    PersonMemory(
+        personID: person,
+        content: content,
+        category: category,
+        importance: importance,
+        confidence: confidence,
+        createdAt: selectorNow.addingTimeInterval(-86_400 * (daysAgo + 30)),
+        updatedAt: selectorNow.addingTimeInterval(-86_400 * daysAgo),
+        lastConfirmedAt: confirmedDaysAgo.map { selectorNow.addingTimeInterval(-86_400 * $0) },
+        sourceType: .aiExtracted,
+        archived: archived
+    )
+}
+
+// 测试 1：100 条记忆，默认最多 20
+var hundred: [PersonMemory] = (0..<100).map {
+    remember("第 \($0) 条普通记忆", person: selectorPerson, daysAgo: Double($0), importance: 2)
+}
+let topTwenty = MemorySelector.select(personID: selectorPerson, memories: hundred, now: selectorNow)
+expectEqual(topTwenty.items.count, 20, "100 条记忆默认只取 20 条")
+expect(topTwenty.items.allSatisfy { $0.personID == selectorPerson }, "结果全是这个人的")
+
+// 测试 2：跨人物不参与排序，也不会进结果
+hundred.append(remember("B 的秘密", person: otherPerson, importance: 5))
+let crossResult = MemorySelector.select(personID: selectorPerson, memories: hundred, now: selectorNow)
+expect(crossResult.scored.allSatisfy { $0.memory.personID == selectorPerson }, "候选里根本没有 B 的记忆")
+expect(crossResult.items.allSatisfy { $0.memory.personID == selectorPerson }, "结果里也没有 B 的")
+
+// 测试 3：关键词相关 > 高重要度但不相关
+let workChat = [GoutouSegment(speaker: .opponent, text: "最近工作太忙了，天天加班")]
+let workMemory = remember("近期工作较忙，经常加班。", person: selectorPerson, daysAgo: 3, category: .recentStatus)
+let foodMemory = remember("喜欢吃香蕉。", person: selectorPerson, daysAgo: 3, category: .preference, importance: 5)
+let keywordResult = MemorySelector.select(personID: selectorPerson, chat: workChat, memories: [foodMemory, workMemory], now: selectorNow)
+expectEqual(keywordResult.items.first?.content ?? "", "近期工作较忙，经常加班。", "工作相关的排在香蕉前面（哪怕后者 importance 更高）")
+
+// 测试 4：保底——关键词没命中的长期高重要度记忆也能进
+let smallConfig = MemoryRankingConfig(defaultTopK: 6)
+var crowded: [PersonMemory] = (0..<20).map {
+    remember("今天聊到的事 \($0)", person: selectorPerson, daysAgo: 1, category: .recentStatus, importance: 2, confidence: 0.9)
+}
+crowded.append(remember("她是我女朋友", person: selectorPerson, daysAgo: 400, category: .relationship, importance: 5))
+let baselineResult = MemorySelector.select(personID: selectorPerson, chat: workChat, memories: crowded, config: smallConfig, now: selectorNow)
+expect(baselineResult.items.contains { $0.content == "她是我女朋友" }, "关键词没命中的长期重要记忆拿到保底名额")
+
+// 测试 5：最近确认过的 > 多年未更新但同样相关
+let freshConfirmed = remember("工作上的事：最近加班很凶", person: selectorPerson, daysAgo: 200, confirmedDaysAgo: 2, category: .recentStatus)
+let staleRelevant = remember("工作上的事：以前经常加班", person: selectorPerson, daysAgo: 700, category: .recentStatus)
+let recencyResult = MemorySelector.select(personID: selectorPerson, chat: workChat, memories: [staleRelevant, freshConfirmed], now: selectorNow)
+expect(recencyResult.items.first?.content.contains("最近加班很凶") ?? false, "最近确认的排在多年没动的前面")
+
+// 测试 6：archived 默认不参与
+let archivedResult = MemorySelector.select(
+    personID: selectorPerson,
+    chat: workChat,
+    memories: [remember("已归档的工作记忆", person: selectorPerson, archived: true), foodMemory],
+    now: selectorNow
+)
+expect(!archivedResult.items.contains { $0.content.contains("已归档") }, "archived 默认不进结果")
+
+// 测试 7：一组同话题近义记忆不霸榜
+var nearDuplicates: [PersonMemory] = [
+    remember("最近工作很忙", person: selectorPerson, daysAgo: 1, category: .recentStatus, importance: 4),
+    remember("近期经常加班", person: selectorPerson, daysAgo: 1, category: .recentStatus, importance: 4),
+    remember("最近项目赶进度，非常忙", person: selectorPerson, daysAgo: 1, category: .recentStatus, importance: 4),
+    remember("这段时间工作压力大", person: selectorPerson, daysAgo: 1, category: .recentStatus, importance: 4),
+]
+nearDuplicates.append(contentsOf: (0..<20).map {
+    remember("别的记忆 \($0)", person: selectorPerson, daysAgo: 2, category: .recentStatus, importance: 3, confidence: 0.9)
+})
+let dedupResult = MemorySelector.select(personID: selectorPerson, chat: workChat, memories: nearDuplicates, config: smallConfig, now: selectorNow)
+let nearDupCount = dedupResult.items.filter {
+    ["最近工作很忙", "近期经常加班", "最近项目赶进度，非常忙", "这段时间工作压力大"].contains($0.content)
+}.count
+expect(nearDupCount < 4, "四条同话题记忆不会全部占满名额（实际 \(nearDupCount)）")
+expectEqual(dedupResult.items.count, 6, "名额被别的记忆用上了，总量还是 6")
+
+// 测试 8：字符预算到量就停，且不截断记忆
+let longConfig = MemoryRankingConfig(defaultTopK: 20, maxMemoryCharacters: 1200)
+let longMemories: [PersonMemory] = (0..<10).map {
+    remember(String(repeating: "很", count: 500) + "\($0)", person: selectorPerson, daysAgo: 1, category: .recentStatus, importance: 4)
+}
+let budgetResult = MemorySelector.select(personID: selectorPerson, memories: longMemories, config: longConfig, now: selectorNow)
+expectEqual(budgetResult.items.count, 2, "500 字一条、预算 1200 → 只放得下 2 条")
+expect(budgetResult.totalCharacters <= 1200, "总字数没有超预算")
+expect(budgetResult.items.allSatisfy { $0.content.count == 501 }, "记忆没有被截断")
+
+// 测试 9：筛选拿不出东西时不崩，兜底给高重要度记忆
+let emptySelection = MemorySelector.select(personID: selectorPerson, memories: [], now: selectorNow)
+expect(emptySelection.items.isEmpty, "没有记忆时返回空，而不是崩")
+let fallbackResult = MemorySelector.fallback(personID: selectorPerson, memories: crowded)
+expectEqual(fallbackResult.items.count, 5, "兜底最多给 5 条")
+expectEqual(fallbackResult.items.first?.content ?? "", "她是我女朋友", "兜底优先高重要度")
+expect(fallbackResult.usedFallback, "标记为走了兜底路径")
+
+// 关键词提取是独立函数（以后好换成 Embedding）
+let extracted = MemorySelector.extractKeywords(from: "最近工作太忙了，天天加班 meeting")
+expect(extracted.contains("工作") && extracted.contains("加班"), "中文 2-gram 抓到了「工作」「加班」")
+expect(extracted.contains("meeting"), "英文按词抓到了 meeting")
+expect(!extracted.contains("，"), "标点不算关键词")
+// 缓存：同样的输入复用上一轮结果（同一轮分析不重复算）
+let cacheKey1 = MemorySelector.select(personID: selectorPerson, memories: hundred, now: selectorNow)
+let cacheKey2 = MemorySelector.select(personID: selectorPerson, memories: hundred, now: selectorNow)
+expectEqual(cacheKey1.items.count, cacheKey2.items.count, "重复调用结果一致（缓存命中）")
+expect(cacheKey1.scored.count == cacheKey2.scored.count, "候选数也一致")
 
 print("")
 if failures == 0 {

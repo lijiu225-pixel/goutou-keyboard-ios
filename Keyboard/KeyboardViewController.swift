@@ -56,6 +56,8 @@ final class KeyboardViewController: UIInputViewController {
     private var memory: [PersonMemory] = []
     /// 自动归纳完之后给一句提示
     private var memoryNote: String?
+    /// 上一次分析的记忆筛选结果（调试用，不进主界面）
+    private var lastMemorySelection: MemorySelectionResult?
     /// 全部人物档案 + 当前是谁（第六阶段：一人一份上下文/记忆/总结）
     private var profiles: [GoutouPersonProfile] = []
     private var activeProfileID: UUID = GoutouProfileStore.activeProfile().id
@@ -655,8 +657,23 @@ final class KeyboardViewController: UIInputViewController {
         refreshPanel()
 
         let systemPrompt = GoutouPrompt.systemPrompt(skill: skillText)
+        // 只把「和这次聊天最相关」的 Top-K 发给模型；筛选出任何问题就退回少量高重要度记忆
+        let selection = MemorySelector.select(
+            personID: activeProfileID,
+            chat: segments,
+            task: .current,
+            memories: memory
+        )
+        let chosen = (selection.items.isEmpty && !memory.isEmpty)
+            ? MemorySelector.fallback(personID: activeProfileID, memories: memory).items
+            : selection.items
+        lastMemorySelection = selection
+        #if DEBUG
+        print("[MemorySelector] 选中 \(chosen.count) 条 / \(selection.totalCharacters) 字（候选 \(memory.count) 条）")
+        selection.debugLines.forEach { print("  \($0)") }
+        #endif
         // 近期状态标一下，免得模型把它当永久事实
-        let memoryLines = memory.map { $0.category.isStable ? $0.content : "（近期）\($0.content)" }
+        let memoryLines = chosen.map { $0.category.isStable ? $0.content : "（近期）\($0.content)" }
         let userMessage = GoutouPrompt.userMessage(
             segments: segments,
             memory: memoryLines,
