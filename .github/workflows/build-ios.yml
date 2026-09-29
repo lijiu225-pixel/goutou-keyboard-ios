@@ -71,6 +71,18 @@ jobs:
           xcodegen generate
           xcodebuild -list -project $APP_NAME.xcodeproj
 
+      # 2.8 第 16 项：Debug 也要能构建（模拟器 SDK，不签名）
+      - name: Debug build check (simulator)
+        run: |
+          xcodebuild build \
+            -project $APP_NAME.xcodeproj \
+            -scheme $SCHEME \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO
+
       - name: Resolve build number and version
         run: |
           echo "BUILD_NUM=$(git rev-list --count HEAD)" >> $GITHUB_ENV

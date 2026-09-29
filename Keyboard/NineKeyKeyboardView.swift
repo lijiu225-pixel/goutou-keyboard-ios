@@ -65,8 +65,8 @@ final class NineKeyButton: UIButton {
 enum NineKeyAction {
     /// 九键上 2…9：按数字序列查候选。
     case digit(Character)
-    /// 数字 1：中文下直接上屏「，」（与 Android 一致）。
-    case one
+    /// 数字 1（键上标着「分词」）：在当前位置钉一条音节边界。
+    case boundary
     /// 数字 0：有候选先上屏，没有就空格。
     case zero
     /// 标点列 / 数字页 / 符号页：直接上屏的文本。
@@ -550,7 +550,7 @@ final class NineKeyKeyboardView: UIView {
 
     @objc private func didTapDigit(_ sender: NineKeyButton) {
         guard let payload = sender.payload, let key = payload.first else { return }
-        delegate?.nineKeyKeyboardView(self, didTrigger: key == "1" ? .one : .digit(key))
+        delegate?.nineKeyKeyboardView(self, didTrigger: key == "1" ? .boundary : .digit(key))
     }
 
     @objc private func didTapZero() {

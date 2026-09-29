@@ -556,7 +556,7 @@ final class KeyboardViewController: UIInputViewController {
 
     private func refreshNineKeyView() {
         nineKeyView?.render(
-            digits: nineKeyEngine.digits,
+            digits: nineKeyEngine.digitsDisplay,
             pinyinHint: nineKeyEngine.pinyinHint,
             candidates: nineKeyEngine.candidates,
             page: page
@@ -578,9 +578,9 @@ final class KeyboardViewController: UIInputViewController {
             nineKeyEngine.appendDigit(key)
             refreshNineKeyView()
 
-        case .one:
-            flushComposing()
-            textDocumentProxy.insertText("，")
+        case .boundary:
+            nineKeyEngine.toggleBoundaryAtEnd()
+            refreshNineKeyView()
 
         case .zero, .space:
             if nineKeyEngine.digits.isEmpty {

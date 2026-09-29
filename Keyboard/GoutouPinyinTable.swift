@@ -100,11 +100,12 @@ final class GoutouPinyinTable {
     // MARK: - 候选
 
     /// 按键数字串 → 候选词/字。词优先，然后是最后一个音节的单字（方便一个字一个字打）。
-    func candidates(forDigits digits: String, limit: Int = 12) -> [String] {
+    /// `boundaries` 是用户用「分词」键强制指定的音节边界（数字串下标），切分不许跨过它。
+    func candidates(forDigits digits: String, boundaries: Set<Int> = [], limit: Int = 12) -> [String] {
         loadIfNeeded()
         guard isLoaded, !digits.isEmpty, limit > 0 else { return [] }
 
-        let splits = split(Array(digits))
+        let splits = split(Array(digits), boundaries: boundaries)
         guard !splits.isEmpty else { return [] }
 
         var result: [String] = []
@@ -185,10 +186,11 @@ final class GoutouPinyinTable {
     /// 例：`64426` → `["ni", "hao"]`；`26` 既可以切成 `an` 也可以切成 `ao`，两种都算。
     /// **长的音节优先**：不这样排，`嗯/呣` 这种单字母音节（m/n/o）会把
     /// `meiguanxi` 切成 `m+di+gu+a+m+xi`，把结果额度用光，真正的分段反而排不进来。
-    func split(_ digits: [Character], maxResults: Int = 64) -> [[String]] {
+    func split(_ digits: [Character], maxResults: Int = 64, boundaries: Set<Int> = []) -> [[String]] {
         guard isLoaded else { return [] }
         var results: [[String]] = []
         var stack: [String] = []
+        let cuts = boundaries.filter { $0 > 0 && $0 < digits.count }.sorted()
 
         func walk(_ index: Int) {
             guard results.count < maxResults else { return }
@@ -196,11 +198,13 @@ final class GoutouPinyinTable {
                 results.append(stack)
                 return
             }
+            // 人工分词边界：这个音节最多只能长到下一个边界
+            let limit = cuts.first(where: { $0 > index }) ?? digits.count
             var chunk = ""
             var cursor = index
             var reachable: [(end: Int, options: [String])] = []
             // 拼音音节最长 6 个字母（zhuang / chuang）
-            while cursor < digits.count, cursor - index < 7 {
+            while cursor < digits.count, cursor < limit, cursor - index < 7 {
                 chunk.append(digits[cursor])
                 cursor += 1
                 if let options = syllablesByDigits[chunk] {
