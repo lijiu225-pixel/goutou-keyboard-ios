@@ -1,4 +1,3 @@
-import QuartzCore
 import UIKit
 
 /// 狗头军师 iOS 键盘。纯系统控件 + Auto Layout，不联网、不读剪贴板。
@@ -31,7 +30,7 @@ final class KeyboardViewController: UIInputViewController {
     private let nineKeyHeight: CGFloat = 302
 
     private var mode: Mode = .chineseNineKey
-    private var symbols = false
+    private var page: NineKeyPage = .nineKey
     private let nineKeyEngine = NineKeyInputEngine()
     private weak var nineKeyView: NineKeyKeyboardView?
 
@@ -54,7 +53,7 @@ final class KeyboardViewController: UIInputViewController {
         }
         nineKeyView = nil
         nineKeyEngine.clear()
-        symbols = false
+        page = .nineKey
 
         switch mode {
         case .englishQWERTY:
@@ -197,9 +196,10 @@ final class KeyboardViewController: UIInputViewController {
 
     private func refreshNineKeyView() {
         nineKeyView?.render(
-            composing: nineKeyEngine.composing,
-            candidates: symbols ? [] : GoutouDictionary.candidates(for: nineKeyEngine.composing),
-            isSymbols: symbols
+            digits: nineKeyEngine.digits,
+            pinyinHint: nineKeyEngine.pinyinHint,
+            candidates: nineKeyEngine.candidates,
+            page: page
         )
     }
 
@@ -215,7 +215,7 @@ final class KeyboardViewController: UIInputViewController {
     private func handleNineKeyAction(_ action: NineKeyAction) {
         switch action {
         case .digit(let key):
-            nineKeyEngine.appendDigit(key, timestamp: CACurrentMediaTime())
+            nineKeyEngine.appendDigit(key)
             refreshNineKeyView()
 
         case .one:
@@ -223,7 +223,7 @@ final class KeyboardViewController: UIInputViewController {
             textDocumentProxy.insertText("，")
 
         case .zero, .space:
-            if nineKeyEngine.composing.isEmpty {
+            if nineKeyEngine.digits.isEmpty {
                 textDocumentProxy.insertText(" ")
             } else {
                 flushComposing()
@@ -248,9 +248,13 @@ final class KeyboardViewController: UIInputViewController {
             nineKeyEngine.clear()
             refreshNineKeyView()
 
-        case .toggleSymbols:
+        case .showLetters, .showNumbers, .showSymbols:
             flushComposing()
-            symbols.toggle()
+            switch action {
+            case .showNumbers: page = .numbers
+            case .showSymbols: page = .symbols
+            default: page = .nineKey
+            }
             refreshNineKeyView()
 
         case .toggleMode:

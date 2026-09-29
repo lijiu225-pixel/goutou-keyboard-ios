@@ -53,23 +53,32 @@ final class NineKeyButton: UIButton {
 // MARK: - 键盘 → 控制器的动作
 
 enum NineKeyAction {
-    /// 九键上 2…9 的多击循环。
+    /// 九键上 2…9：按数字序列查候选。
     case digit(Character)
     /// 数字 1：中文下直接上屏「，」（与 Android 一致）。
     case one
-    /// 数字 0：有拼音先上屏，没有就空格。
+    /// 数字 0：有候选先上屏，没有就空格。
     case zero
-    /// 标点列 / 符号页：直接上屏的文本。
+    /// 标点列 / 数字页 / 符号页：直接上屏的文本。
     case literal(String)
-    /// 候选词：清掉拼音后直接上屏（不再走 flush）。
+    /// 候选词：清掉数字序列后直接上屏。
     case candidate(String)
     case delete
     case space
     case clear
-    case toggleSymbols
+    case showLetters
+    case showNumbers
+    case showSymbols
     case toggleMode
     case returnKey
     case nextKeyboard
+}
+
+/// 九键里的三个页面。
+enum NineKeyPage {
+    case nineKey
+    case numbers
+    case symbols
 }
 
 protocol NineKeyKeyboardViewDelegate: AnyObject {
@@ -99,15 +108,24 @@ final class NineKeyKeyboardView: UIView {
     private let candidateStack = UIStackView()
     private let keysContainer = UIStackView()
 
-    private var isSymbols = false
+    private var page: NineKeyPage = .nineKey
     private var hasRenderedKeys = false
     private var renderedCandidateSignature = ""
 
-    private let symbolRows: [[String]] = [
+    /// 数字页：完整 0-9，第 4 行挂回九键和删除。
+    private let numberRows: [[String]] = [
         ["1", "2", "3"],
-        ["@", "#", "￥"],
-        ["%", "&", "*"],
+        ["4", "5", "6"],
+        ["7", "8", "9"],
         ["ABC", "0", "⌫"],
+    ]
+
+    /// 符号页：标点 + 常用符号，第 4 行挂回九键和删除。
+    private let symbolRows: [[String]] = [
+        ["，", "。", "？", "！"],
+        ["、", "；", "：", "…"],
+        ["@", "#", "￥", "&"],
+        ["ABC", "%", "*", "⌫"],
     ]
 
     private let punctuationKeys = ["，", "。", "？", "！"]
@@ -211,8 +229,8 @@ final class NineKeyKeyboardView: UIView {
         let row = UIView()
         row.heightAnchor.constraint(equalToConstant: bottomHeight).isActive = true
 
-        let symbolsKey = makeFunctionKey(title: "符", action: #selector(didTapToggleSymbols))
-        let numbersKey = makeFunctionKey(title: "123", action: #selector(didTapToggleSymbols))
+        let symbolsKey = makeFunctionKey(title: "符", action: #selector(didTapShowSymbols))
+        let numbersKey = makeFunctionKey(title: "123", action: #selector(didTapShowNumbers))
         let spaceKey = makeKey(title: "空格", background: GoutouTheme.key, fontSize: 15, action: #selector(didTapSpace))
         let languageKey = makeFunctionKey(title: "中英", action: #selector(didTapToggleMode))
         let returnKey = makeFunctionKey(title: "↵", fontSize: 19, action: #selector(didTapReturn))
@@ -262,12 +280,17 @@ final class NineKeyKeyboardView: UIView {
             keysContainer.removeArrangedSubview(subview)
             subview.removeFromSuperview()
         }
-        if isSymbols {
-            for row in symbolRows {
-                keysContainer.addArrangedSubview(makeSymbolRow(row))
-            }
-        } else {
+        switch page {
+        case .nineKey:
             keysContainer.addArrangedSubview(makeNineKeyArea())
+        case .numbers:
+            for row in numberRows {
+                keysContainer.addArrangedSubview(makePageRow(row))
+            }
+        case .symbols:
+            for row in symbolRows {
+                keysContainer.addArrangedSubview(makePageRow(row))
+            }
         }
     }
 
@@ -393,16 +416,24 @@ final class NineKeyKeyboardView: UIView {
         return column
     }
 
-    private func makeSymbolRow(_ keys: [String]) -> UIView {
+    private func makePageRow(_ keys: [String]) -> UIView {
         let row = UIStackView()
         row.axis = .horizontal
         row.spacing = keySpacing
         row.distribution = .fillEqually
 
         for key in keys {
-            let button = makeKey(title: key, background: GoutouTheme.function, fontSize: 20, action: #selector(didTapSymbol(_:)))
+            let isDigit = key.count == 1 && key >= "0" && key <= "9"
+            let background = isDigit ? GoutouTheme.key : GoutouTheme.function
+            let button = makeKey(title: key, background: background, fontSize: 20, action: #selector(didTapPageKey(_:)))
             button.payload = key
-            button.accessibilityLabel = key == "ABC" ? "回到九键字母" : "按键 \(key)"
+            if key == "ABC" {
+                button.accessibilityLabel = "回到九键字母"
+            } else if key == "⌫" {
+                button.accessibilityLabel = "删除"
+            } else {
+                button.accessibilityLabel = "按键 \(key)"
+            }
             row.addArrangedSubview(button)
         }
         return row
@@ -410,14 +441,14 @@ final class NineKeyKeyboardView: UIView {
 
     // MARK: - 候选项
 
-    private func rebuildCandidates(_ candidates: [String], composing: String) {
+    private func rebuildCandidates(_ candidates: [String], digits: String) {
         for subview in candidateStack.arrangedSubviews {
             candidateStack.removeArrangedSubview(subview)
             subview.removeFromSuperview()
         }
         if candidates.isEmpty {
             let label = UILabel()
-            label.text = composing.isEmpty ? "候选词" : "继续输入"
+            label.text = digits.isEmpty ? "候选词" : "无候选"
             label.font = .systemFont(ofSize: 13)
             label.textColor = GoutouTheme.secondary
             label.textAlignment = .center
@@ -446,25 +477,32 @@ final class NineKeyKeyboardView: UIView {
 
     // MARK: - 对外渲染入口
 
-    func render(composing: String, candidates: [String], isSymbols: Bool) {
-        compositionLabel.text = compositionText(composing: composing, isSymbols: isSymbols)
+    func render(digits: String, pinyinHint: String, candidates: [String], page: NineKeyPage) {
+        compositionLabel.text = compositionText(digits: digits, pinyinHint: pinyinHint, page: page)
 
-        let signature = candidates.joined(separator: "|") + "#" + composing
+        let signature = candidates.joined(separator: "|") + "#" + digits
         if signature != renderedCandidateSignature {
             renderedCandidateSignature = signature
-            rebuildCandidates(candidates, composing: composing)
+            rebuildCandidates(candidates, digits: digits)
         }
 
-        if !hasRenderedKeys || isSymbols != self.isSymbols {
-            self.isSymbols = isSymbols
+        if !hasRenderedKeys || page != self.page {
+            self.page = page
             hasRenderedKeys = true
             rebuildKeys()
         }
     }
 
-    private func compositionText(composing: String, isSymbols: Bool) -> String {
-        if !composing.isEmpty { return composing }
-        return isSymbols ? "数字 · 符号" : "中文九键 · 拼音"
+    /// 顶部一行显示"按了什么、可能是什么拼音"，空了就按页面显示提示。
+    private func compositionText(digits: String, pinyinHint: String, page: NineKeyPage) -> String {
+        if !digits.isEmpty {
+            return pinyinHint.isEmpty ? digits : "\(digits) · \(pinyinHint)"
+        }
+        switch page {
+        case .numbers: return "数字"
+        case .symbols: return "符号"
+        case .nineKey: return "中文九键 · 拼音"
+        }
     }
 
     // MARK: - 造键
@@ -505,11 +543,11 @@ final class NineKeyKeyboardView: UIView {
         delegate?.nineKeyKeyboardView(self, didTrigger: .candidate(payload))
     }
 
-    @objc private func didTapSymbol(_ sender: NineKeyButton) {
+    @objc private func didTapPageKey(_ sender: NineKeyButton) {
         guard let payload = sender.payload else { return }
         switch payload {
         case "ABC":
-            delegate?.nineKeyKeyboardView(self, didTrigger: .toggleSymbols)
+            delegate?.nineKeyKeyboardView(self, didTrigger: .showLetters)
         case "⌫":
             delegate?.nineKeyKeyboardView(self, didTrigger: .delete)
         default:
@@ -529,8 +567,12 @@ final class NineKeyKeyboardView: UIView {
         delegate?.nineKeyKeyboardView(self, didTrigger: .clear)
     }
 
-    @objc private func didTapToggleSymbols() {
-        delegate?.nineKeyKeyboardView(self, didTrigger: .toggleSymbols)
+    @objc private func didTapShowNumbers() {
+        delegate?.nineKeyKeyboardView(self, didTrigger: .showNumbers)
+    }
+
+    @objc private func didTapShowSymbols() {
+        delegate?.nineKeyKeyboardView(self, didTrigger: .showSymbols)
     }
 
     @objc private func didTapToggleMode() {

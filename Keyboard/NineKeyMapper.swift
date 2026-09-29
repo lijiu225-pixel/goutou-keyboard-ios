@@ -5,6 +5,9 @@ import Foundation
 /// 纯逻辑、只依赖 Foundation，所以 iOS 键盘扩展和 macOS 上的命令行冒烟测试
 /// （`tools/NineKeyCheck/main.swift`）可以共用同一份实现。
 ///
+/// 注意：iOS 的输入路径现在已经改成"按数字序列查候选"（见 `NineKeyInputEngine`），
+/// `group(for:)` 仍在使用；`next()` 保留为 Android 多击循环的口径参照与回归基线。
+///
 /// 语义（与 Android 完全一致）：
 /// - 同一个键在 650ms 内连按 → 在该键的字母组里循环（2 → A,B,C → A…）
 /// - 换键，或距上次按键超过 650ms → 在末尾追加该键字母组的第一个字母
