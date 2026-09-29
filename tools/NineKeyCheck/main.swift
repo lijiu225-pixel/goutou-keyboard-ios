@@ -1269,7 +1269,7 @@ expectEqual(
     "自动整理把过期近况归档了"
 )
 expect(
-    GoutouMemoryRepository.getStaleMemories(personID: triggerProfile.id, from: triggerSuite).isEmpty,
+    GoutouMemoryRepository.getStaleMemories(personID: triggerProfile.id, at: maintainNow, from: triggerSuite).isEmpty,
     "归档之后它就不在正常 stale 名单里了"
 )
 
