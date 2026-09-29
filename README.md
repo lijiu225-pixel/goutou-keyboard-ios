@@ -50,6 +50,7 @@ Keyboard/                            键盘扩展：UIInputViewController + Auto
   GoutouMemoryRepository.swift       记忆唯一访问层：按 personID 隔离、按 id 操作、时间字段规则
   MemoryRankingConfig.swift          记忆排序的全部权重与预算（Top-K / 字符预算 / 类别优先级）
   MemoryDecayConfig.swift            时间衰减 / stale 参数（近况 0-7 天新鲜、7 天后平滑衰减、60 天后算可能过时）
+  MemoryMaintenance.swift            记忆整理：同类别高度相似才合并、过期近况才归档（只归档不删除）
   MemorySelector.swift               相关记忆筛选：本地评分 + 保底 + 近义降权 + 预算（不引 Embedding）
   GoutouMemoryExtractor.swift        分析成功后的自动归纳（提取候选，不存原文；不改网络层）
   GoutouProfileStore.swift           多人档案（人物/上下文/记忆/总结 一人一份 + 老数据迁移）

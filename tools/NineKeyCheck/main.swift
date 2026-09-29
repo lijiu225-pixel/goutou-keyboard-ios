@@ -8,7 +8,7 @@ import Foundation
 //          Keyboard/GoutouPrompt.swift Keyboard/GoutouProfileStore.swift \
 //          Keyboard/PersonMemory.swift Keyboard/GoutouMemoryRepository.swift \
 //          Keyboard/MemoryRankingConfig.swift Keyboard/MemoryDecayConfig.swift \
-//          Keyboard/MemorySelector.swift \
+//          Keyboard/MemoryMaintenance.swift Keyboard/MemorySelector.swift \
 //          Keyboard/GoutouMemoryExtractor.swift \
 //          Keyboard/GoutouSegmentStore.swift \
 //          Keyboard/GoutouAIClient.swift \
@@ -41,6 +41,10 @@ func expectEqual(_ actual: Int, _ expected: Int, _ label: String) {
 
 func expectEqual(_ actual: Double, _ expected: Double, _ label: String) {
     expect(abs(actual - expected) < 0.000_001, "\(label) → 期望 \(expected)，实际 \(actual)")
+}
+
+func expectEqual(_ actual: Date, _ expected: Date, _ label: String) {
+    expect(actual == expected, "\(label) → 期望 \(expected)，实际 \(actual)")
 }
 
 /// 依次按下一串数字键。
@@ -1043,6 +1047,230 @@ expect(reloadedA?.memory.first { $0.id == weather90.id }?.lastConfirmedAt == dec
 expect(
     MemoryDecay.isStale(decayReloadedBook.profiles.first { $0.id == decayOther.id }?.memory.first ?? otherStale, at: decayNow),
     "重启后 stale 照样算得出来（本来就是算的，不靠库里存 Bool）"
+)
+
+print("== 6.8 记忆整理：合并 / 归档（没有 DELETE）==")
+let maintainNow = Date(timeIntervalSince1970: 1_700_000_000)
+
+func maintained(
+    _ content: String,
+    person: UUID,
+    days: Double = 0,
+    category: MemoryCategory = .recentStatus,
+    importance: Int = 3,
+    confidence: Double = 0.9,
+    archived: Bool = false
+) -> PersonMemory {
+    PersonMemory(
+        personID: person,
+        content: content,
+        category: category,
+        importance: importance,
+        confidence: confidence,
+        createdAt: maintainNow.addingTimeInterval(-86_400 * (days + 5)),
+        updatedAt: maintainNow.addingTimeInterval(-86_400 * days),
+        lastConfirmedAt: nil,
+        sourceType: .aiExtracted,
+        archived: archived
+    )
+}
+
+func clearMaintenanceKeys(_ defaults: UserDefaults) {
+    for key in [
+        GoutouProfileStore.storageKey,
+        GoutouProfileStore.legacySegmentsKey,
+        GoutouProfileStore.legacyMemoryKey,
+        GoutouProfileStore.backupKey,
+        MemoryMaintenance.analysesSinceRunKey,
+        MemoryMaintenance.lastRunAtKey,
+    ] {
+        defaults.removeObject(forKey: key)
+    }
+}
+
+let maintainSuite = UserDefaults(suiteName: "goutou.check.maintenance") ?? .standard
+clearMaintenanceKeys(maintainSuite)
+let maintainProfile = GoutouProfileStore.loadBook(from: maintainSuite).profiles[0]
+let maintainOther = GoutouProfileStore.create(name: "表弟", in: maintainSuite)
+
+// 测试 1：重复 / 近义记忆能正确合并，并且保留更完整的信息
+let nearDupA = maintained("最近工作很忙", person: maintainProfile.id, importance: 2)
+let nearDupB = maintained("最近工作很忙，天天加班", person: maintainProfile.id, importance: 4, confidence: 0.95)
+let mergePlan = MemoryMaintenance.plan(personID: maintainProfile.id, memories: [nearDupA, nearDupB], now: maintainNow)
+expectEqual(mergePlan.items.count, 1, "两条近义记忆并成一条")
+expect(mergePlan.items.first?.id == nearDupA.id, "保留插入更早的那条（id 稳定）")
+expectEqual(mergePlan.items.first?.content ?? "", "最近工作很忙，天天加班", "合并后取更完整的内容")
+expectEqual(mergePlan.items.first?.importance ?? 0, 4, "importance 取较大值")
+expectEqual(mergePlan.items.first?.confidence ?? 0, 0.95, "confidence 取较大值")
+expectEqual(mergePlan.mergedGroupCount, 1, "记录了一组合并")
+expectEqual(mergePlan.absorbedCount, 1, "并掉了 1 条")
+
+// 测试 2：不相关 / 不同类别 / 不同人 / 数字不一致的，一条都不许并
+let unrelatedPlan = MemoryMaintenance.plan(
+    personID: maintainProfile.id,
+    memories: [
+        maintained("她喜欢吃香蕉", person: maintainProfile.id, category: .preference),
+        maintained("她讨厌下雨天", person: maintainProfile.id, category: .preference),
+    ],
+    now: maintainNow
+)
+expect(unrelatedPlan.isEmpty, "内容不相关 → 一条都不动（不确定就 KEEP）")
+expect(
+    !MemoryMaintenance.canMerge(
+        maintained("她生日是 3 月 5 日", person: maintainProfile.id, category: .stableFact),
+        maintained("她生日是 3 月 6 日", person: maintainProfile.id, category: .stableFact)
+    ),
+    "日期不一样（3 月 5 日 vs 3 月 6 日）一律不合并"
+)
+expect(
+    !MemoryMaintenance.canMerge(
+        maintained("最近工作很忙", person: maintainProfile.id, category: .recentStatus),
+        maintained("最近工作很忙", person: maintainProfile.id, category: .stableFact)
+    ),
+    "类别不同不合并"
+)
+expect(
+    !MemoryMaintenance.canMerge(
+        maintained("最近工作很忙", person: maintainProfile.id),
+        maintained("最近工作很忙", person: maintainOther.id)
+    ),
+    "不同人的记忆不合并"
+)
+
+// 测试 3 / 4 / 5：stale 近况归档；长期信息与高重要度受保护
+let staleStatusMemory = maintained("最近在准备考试", person: maintainProfile.id, days: 90)
+let freshStatusMemory = maintained("最近在减肥", person: maintainProfile.id, days: 3)
+let importantStatusMemory = maintained("最近工作压力很大", person: maintainProfile.id, days: 120, importance: 5)
+let longFactMemory = maintained("她生日是 3 月 13 日", person: maintainProfile.id, days: 400, category: .stableFact, importance: 2)
+let longEventMemory = maintained("去年一起去过西安", person: maintainProfile.id, days: 400, category: .importantEvent)
+let longRelationMemory = maintained("她和我是同事", person: maintainProfile.id, days: 400, category: .relationship, importance: 4)
+let longPreferenceMemory = maintained("她喜欢喝美式咖啡", person: maintainProfile.id, days: 400, category: .preference, importance: 2)
+let baseMemories = [
+    staleStatusMemory,
+    freshStatusMemory,
+    importantStatusMemory,
+    longFactMemory,
+    longEventMemory,
+    longRelationMemory,
+    longPreferenceMemory,
+]
+GoutouProfileStore.updateProfile(id: maintainProfile.id, in: maintainSuite) { $0.memory = baseMemories }
+
+let archivePlan = MemoryMaintenance.plan(personID: maintainProfile.id, memories: baseMemories, now: maintainNow)
+expectEqual(archivePlan.archivedCount, 1, "只有 1 条被归档")
+expect(archivePlan.items.first { $0.id == staleStatusMemory.id }?.archived == true, "90 天没确认的低重要度近况被归档")
+expect(archivePlan.items.first { $0.id == freshStatusMemory.id }?.archived == false, "没过期的近况不归档")
+expect(archivePlan.items.first { $0.id == importantStatusMemory.id }?.archived == false, "高重要度（5）的过期近况也受保护")
+expect(archivePlan.items.first { $0.id == longFactMemory.id }?.archived == false, "stableFact 不会因为时间久被自动归档")
+expect(archivePlan.items.first { $0.id == longEventMemory.id }?.archived == false, "importantEvent 受保护")
+expect(archivePlan.items.first { $0.id == longRelationMemory.id }?.archived == false, "relationship 受保护")
+expect(archivePlan.items.first { $0.id == longPreferenceMemory.id }?.archived == false, "preference 不会被自动归档")
+expectEqual(
+    archivePlan.items.first { $0.id == staleStatusMemory.id }?.updatedAt ?? Date(),
+    staleStatusMemory.updatedAt,
+    "归档只翻 archived 位，不动 updatedAt"
+)
+expectEqual(archivePlan.items.first { $0.id == staleStatusMemory.id }?.content ?? "", staleStatusMemory.content, "归档不动内容")
+
+// 测试 6：归档之后数据仍然在库里（只是 archived = true）
+let ranPlan = MemoryMaintenance.run(personID: maintainProfile.id, now: maintainNow, from: maintainSuite)
+expect(ranPlan != nil, "整理真的落盘了")
+expectEqual(ranPlan?.archivedCount ?? 0, 1, "这次归档了 1 条")
+let afterMaintenance = GoutouMemoryRepository.getMemories(personID: maintainProfile.id, includeArchived: true, from: maintainSuite)
+expectEqual(afterMaintenance.count, 7, "归档不删数据：条数还是 7")
+expect(afterMaintenance.first { $0.id == staleStatusMemory.id }?.archived == true, "库里那条是 archived")
+expect(MemoryDecay.isStale(staleStatusMemory, at: maintainNow), "被归档那条在 6.7 眼里仍然是 stale（衰减逻辑没被动）")
+
+// 测试 7：archived 不进入正常查询 / Top-K
+expectEqual(GoutouMemoryRepository.getMemories(personID: maintainProfile.id, from: maintainSuite).count, 6, "默认查询不返回归档的")
+let maintenanceChat = [GoutouSegment(speaker: .opponent, text: "最近在准备考试，压力好大")]
+let afterTopK = MemorySelector.select(personID: maintainProfile.id, chat: maintenanceChat, memories: afterMaintenance, now: maintainNow)
+expect(!afterTopK.items.contains { $0.id == staleStatusMemory.id }, "归档的记忆不进正常 Top-K")
+expect(!afterTopK.items.isEmpty, "整理之后 Top-K 仍然能选出记忆")
+
+// 测试 8：A / B 不串档
+let otherStaleMemory = maintained("表弟最近换工作了", person: maintainOther.id, days: 200)
+let otherFreshMemory = maintained("表弟最近在健身", person: maintainOther.id, days: 2)
+GoutouProfileStore.updateProfile(id: maintainOther.id, in: maintainSuite) { $0.memory = [otherStaleMemory, otherFreshMemory] }
+let mixedPlan = MemoryMaintenance.plan(
+    personID: maintainOther.id,
+    memories: [staleStatusMemory, importantStatusMemory, otherStaleMemory, otherFreshMemory],
+    now: maintainNow
+)
+expectEqual(mixedPlan.items.count, 2, "只处理这个人的记忆（别人的直接不看）")
+expect(mixedPlan.items.allSatisfy { $0.personID == maintainOther.id }, "整理结果里没有别人的记忆")
+expectEqual(mixedPlan.archivedCount, 1, "B 自己那条过期近况被归档")
+let archivingB = MemoryMaintenance.run(personID: maintainOther.id, now: maintainNow, from: maintainSuite)
+expectEqual(archivingB?.archivedCount ?? 0, 1, "整理 B 落盘成功")
+expectEqual(
+    GoutouMemoryRepository.getMemories(personID: maintainProfile.id, includeArchived: true, from: maintainSuite).filter { $0.archived }.count,
+    1,
+    "整理 B 没有动到 A 的归档状态"
+)
+expectEqual(
+    GoutouMemoryRepository.getMemories(personID: maintainOther.id, includeArchived: true, from: maintainSuite).count,
+    2,
+    "B 的记忆条数不变（只归档不删）"
+)
+
+// 测试 9：整理失败 / 越界计划 → 一个字都不改
+let snapshotBefore = GoutouMemoryRepository.getMemories(personID: maintainProfile.id, includeArchived: true, from: maintainSuite)
+expect(MemoryMaintenance.run(personID: UUID(), now: maintainNow, from: maintainSuite) == nil, "人物不存在 → 直接放弃")
+let crossPersonPlan = MemoryMaintenancePlan(personID: maintainProfile.id, items: [otherStaleMemory], changes: [])
+expect(!MemoryMaintenance.isSafe(crossPersonPlan, against: snapshotBefore, personID: maintainProfile.id), "计划里混进别人的记忆 → 校验不通过")
+let snapshotAfter = GoutouMemoryRepository.getMemories(personID: maintainProfile.id, includeArchived: true, from: maintainSuite)
+expectEqual(snapshotAfter.count, snapshotBefore.count, "失败路径下条数没变")
+expectEqual(
+    snapshotAfter.map(\.id.uuidString).sorted().joined(separator: ","),
+    snapshotBefore.map(\.id.uuidString).sorted().joined(separator: ","),
+    "失败路径下 id 一个都没变"
+)
+expectEqual(
+    snapshotAfter.filter { $0.archived }.count,
+    snapshotBefore.filter { $0.archived }.count,
+    "失败路径下归档状态也没变"
+)
+
+// 测试 10：触发时机——不是每打一个字就整理
+expect(!MemoryMaintenance.shouldRun(memoryCount: 5, analysesSinceRun: 1, lastRunAt: nil, now: maintainNow), "条数少、次数没到 → 不整理")
+expect(MemoryMaintenance.shouldRun(memoryCount: 5, analysesSinceRun: 5, lastRunAt: nil, now: maintainNow), "够 5 次成功分析 → 整理一次")
+expect(MemoryMaintenance.shouldRun(memoryCount: 50, analysesSinceRun: 0, lastRunAt: nil, now: maintainNow), "记忆到 40 条 → 整理一次")
+expect(
+    !MemoryMaintenance.shouldRun(memoryCount: 50, analysesSinceRun: 9, lastRunAt: maintainNow.addingTimeInterval(-3_600), now: maintainNow),
+    "距上次整理不到 6 小时 → 先不整理"
+)
+expect(
+    MemoryMaintenance.shouldRun(memoryCount: 50, analysesSinceRun: 9, lastRunAt: maintainNow.addingTimeInterval(-7 * 3_600), now: maintainNow),
+    "过了 6 小时 → 可以整理"
+)
+
+// 触发链路：连着分析 5 次，第 5 次自动整理并清零计数
+let triggerSuite = UserDefaults(suiteName: "goutou.check.maintenance.trigger") ?? .standard
+clearMaintenanceKeys(triggerSuite)
+let triggerProfile = GoutouProfileStore.loadBook(from: triggerSuite).profiles[0]
+GoutouProfileStore.updateProfile(id: triggerProfile.id, in: triggerSuite) { profile in
+    profile.memory = [
+        maintained("最近在准备考试", person: triggerProfile.id, days: 90),
+        maintained("最近在减肥", person: triggerProfile.id, days: 2),
+    ]
+}
+for round in 1...5 {
+    let auto = MemoryMaintenance.noteAnalysisAndMaybeRun(personID: triggerProfile.id, now: maintainNow, from: triggerSuite)
+    if round < 5 {
+        expect(auto == nil, "第 \(round) 次分析还不整理（本地判断，不花 Token）")
+    } else {
+        expect(auto != nil, "第 5 次分析触发整理")
+    }
+}
+expectEqual(triggerSuite.object(forKey: MemoryMaintenance.analysesSinceRunKey) as? Int ?? -1, 0, "整理完计数器归零")
+expectEqual(
+    GoutouMemoryRepository.getMemories(personID: triggerProfile.id, includeArchived: true, from: triggerSuite).filter { $0.archived }.count,
+    1,
+    "自动整理把过期近况归档了"
+)
+expect(
+    GoutouMemoryRepository.getStaleMemories(personID: triggerProfile.id, from: triggerSuite).isEmpty,
+    "归档之后它就不在正常 stale 名单里了"
 )
 
 print("")

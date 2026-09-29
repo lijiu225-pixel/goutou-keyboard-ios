@@ -757,15 +757,34 @@ final class KeyboardViewController: UIInputViewController {
         guard applied.changed > 0 else {
             memoryNote = "这次没有新的可记内容"
             refreshPanel()
+            runMemoryMaintenanceIfNeeded(personID: personID)
             return
         }
         do {
             try GoutouMemoryRepository.replaceMemories(applied.items, personID: personID)
             memory = GoutouMemoryRepository.getMemories(personID: personID)
             memoryNote = "已从本次聊天更新 \(applied.changed) 条记忆"
+            refreshPanel()
+            runMemoryMaintenanceIfNeeded(personID: personID)
+            return
         } catch {
             // 落盘失败：界面上的记忆保持原样，不做假承诺
             memoryNote = "记忆没写进去（人物不存在），这次不算"
+        }
+        refreshPanel()
+    }
+
+    /// 6.8 轻量整理：合并近义记忆、归档过期的近期状态。
+    ///
+    /// 全在本地算（不联网、不花 Token、没有 Timer）：每次分析成功只累加计数，
+    /// 达到阈值（条数 / 次数的任一）且距上次整理够久，才真正整理一次。
+    private func runMemoryMaintenanceIfNeeded(personID: UUID) {
+        guard personID == activeProfileID else { return }
+        guard let plan = MemoryMaintenance.noteAnalysisAndMaybeRun(personID: personID) else { return }
+        memory = GoutouMemoryRepository.getMemories(personID: personID)
+        lastMemorySelection = nil
+        if plan.mergedGroupCount > 0 || plan.archivedCount > 0 {
+            memoryNote = "顺手整理了记忆：合并 \(plan.mergedGroupCount) 组、归档 \(plan.archivedCount) 条"
         }
         refreshPanel()
     }

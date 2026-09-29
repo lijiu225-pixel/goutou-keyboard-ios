@@ -395,7 +395,12 @@ enum MemorySelector {
 
     private static func memoryVersion(of memories: [PersonMemory]) -> String {
         memories
-            .map { "\($0.id.uuidString):\(Int($0.updatedAt.timeIntervalSince1970)):\($0.archived ? 1 : 0)" }
+            .map {
+                // 内容也算进版本：6.8 的合并会改内容但不一定动 updatedAt，
+                // 不带上内容的话缓存可能还拿着合并前的旧条目。
+                "\($0.id.uuidString):\(Int($0.updatedAt.timeIntervalSince1970)):\($0.archived ? 1 : 0)"
+                    + ":\($0.content.count):\($0.content.hashValue)"
+            }
             .sorted()
             .joined(separator: "|")
     }
