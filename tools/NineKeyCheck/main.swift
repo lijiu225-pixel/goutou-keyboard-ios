@@ -5,7 +5,8 @@ import Foundation
 // 跑法（macOS / CI runner，不需要模拟器）：
 //   swiftc -swift-version 5 Keyboard/NineKeyMapper.swift Keyboard/GoutouPinyinTable.swift \
 //          Keyboard/NineKeyInputEngine.swift Keyboard/GoutouConfig.swift \
-//          Keyboard/GoutouPrompt.swift Keyboard/GoutouAIClient.swift \
+//          Keyboard/GoutouPrompt.swift Keyboard/GoutouSegmentStore.swift \
+//          Keyboard/GoutouAIClient.swift \
 //          tools/NineKeyCheck/main.swift -o /tmp/ninekeycheck
 //   /tmp/ninekeycheck
 //
@@ -137,6 +138,24 @@ let cycle2 = NineKeyMapper.next(text: cycle.text, key: "6", previous: cycle.stat
 expectEqual(cycle2.text, "n", "650ms 内再按 6 循环到 n")
 let cycle3 = NineKeyMapper.next(text: "m", key: "6", previous: cycle.state, timestamp: 5.0)
 expectEqual(cycle3.text, "mm", "超过 650ms 另起一个字母")
+
+let scratchDefaults = UserDefaults(suiteName: "goutou.check.scratch") ?? .standard
+print("== 军师上下文落盘（退出面板 / 键盘被回收都不丢，只有点清空才没）==")
+GoutouSegmentStore.clear(from: scratchDefaults)
+expect(GoutouSegmentStore.load(from: scratchDefaults).isEmpty, "一开始没有存过就是空的")
+let storedSegments = [
+    GoutouSegment(speaker: .opponent, text: "睡了吗"),
+    GoutouSegment(speaker: .me, text: "刚忙完"),
+    GoutouSegment(speaker: .background, text: "我们上周吵过架"),
+]
+GoutouSegmentStore.save(storedSegments, to: scratchDefaults)
+let reloaded = GoutouSegmentStore.load(from: scratchDefaults)
+expectEqual(reloaded.count, 3, "读回来还是 3 段")
+expectEqual(reloaded.first?.text ?? "", "睡了吗", "第一段内容")
+expectEqual(reloaded.last?.speaker.promptLabel ?? "", "背景", "第三段归属")
+expectEqual(GoutouPrompt.userMessage(segments: reloaded), GoutouPrompt.userMessage(segments: storedSegments), "读回来拼出来的 prompt 一致")
+GoutouSegmentStore.save([], to: scratchDefaults)
+expect(GoutouSegmentStore.load(from: scratchDefaults).isEmpty, "手动清空之后就是空的")
 
 print("== 军师配置：导出 / 导入 ==")
 let sample = GoutouConfig(baseURL: "https://api.example.com/v1", model: "gpt-4o-mini", apiKey: "sk-test-1234")

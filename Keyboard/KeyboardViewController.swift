@@ -54,6 +54,8 @@ final class KeyboardViewController: UIInputViewController {
         skillText = KeyboardViewController.loadSkillText()
         // 词库 400KB 左右，提前读进来，别等到第一次按键时卡一下。
         GoutouPinyinTable.shared.loadIfNeeded()
+        // 上次没清掉的上下文接着用（退出面板、键盘被回收都不会丢）
+        segments = GoutouSegmentStore.load()
         rebuildKeyboard()
     }
 
@@ -285,6 +287,7 @@ final class KeyboardViewController: UIInputViewController {
             return
         }
         segments.append(GoutouSegment(speaker: speaker, text: text))
+        GoutouSegmentStore.save(segments)
         panelState = .empty(banner: nil)
         refreshPanel()
     }
@@ -480,6 +483,7 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
 
         case .clearSegments:
             segments = []
+            GoutouSegmentStore.clear()
             panelState = .empty(banner: nil)
             refreshPanel()
 

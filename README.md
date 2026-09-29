@@ -45,6 +45,7 @@ Keyboard/                            键盘扩展：UIInputViewController + Auto
   GoutouConfig.swift                 接口配置（App 与键盘共用同一份结构）
   GoutouPrompt.swift                 prompt 组装 + 一行判断提取
   GoutouAIClient.swift               OpenAI 兼容请求 + 返回解析（纯 Foundation）
+  GoutouSegmentStore.swift           军师上下文落盘（存到你手动清空为止）
   GoutouSkill.md                     军师人格，从 Android 仓库原样拷来（口径只有一份）
   Info.plist                         NSExtension: com.apple.keyboard-service
 tools/NineKeyCheck/main.swift        九键逻辑冒烟测试（CI 上 swiftc 直接跑，不需要模拟器）
@@ -174,7 +175,9 @@ git tag adhoc-v1.0.0 && git push origin adhoc-v1.0.0
 之后每次就三步：**复制对方的话 → 点 👤对方 / 🙋我 / 📝背景 → 点 ⟳ 分析 → 点一条话术上屏**。
 
 - `📝背景` 优先读你正在输入框里打的那句草稿（不发出去），读不到才退到剪贴板——用来补「我们上周吵过架」这种对话里没有的信息
-- 上下文**段数不限**，面板里会全部列出来；要重来点「清空上下文」。状态行会显示总字数，超过 4000 字会变橙色提醒（请求会变慢，15 秒可能超时）
+- 上下文**段数不限**，面板里会全部列出来；状态行显示总字数，超过 4000 字变橙色提醒（请求会变慢，15 秒可能超时）
+- 上下文**会落盘**（存在键盘自己的 UserDefaults 里），退出面板、切走 App、键盘被系统回收都不会丢；**只有你点「✕ 清空上下文」才会清掉**
+- ⚠️ 因为落盘，聊天内容会以明文写进键盘这个 App 的沙盒目录。自用可以接受，但你要知道这件事
 - 请求超时 15 秒，失败会给原因 + 「重试」；等待中可以「取消」
 - 没开「允许完全访问」→ 面板顶部直接提示，点一下复制开启步骤。**这个开关是军师能不能用的硬前提**（读剪贴板、联网都靠它）
 - 话术只填进输入框，**不会自动发送**

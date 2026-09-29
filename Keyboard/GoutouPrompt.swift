@@ -24,7 +24,7 @@ enum GoutouSpeaker: String, Codable {
     }
 }
 
-struct GoutouSegment: Equatable {
+struct GoutouSegment: Codable, Equatable {
     let speaker: GoutouSpeaker
     let text: String
 }
