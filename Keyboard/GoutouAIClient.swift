@@ -43,7 +43,7 @@ enum GoutouAIError: Error, Equatable {
 /// 连请求体长什么样都能在 macOS 上验，不用真机、不用模拟器。
 enum GoutouAIClient {
 
-    static let timeout: TimeInterval = 15
+    static let timeout: TimeInterval = 60
     static let temperature = 0.6
     /// 与 Android 面板一致：推理模型会把思考也算进这个预算，给小了可能只剩思考没有正文。
     static let maxTokens = 4096
@@ -136,7 +136,7 @@ enum GoutouAIClient {
         return result
     }
 
-    // MARK: - 发送（15 秒超时，可取消）
+    // MARK: - 发送（60 秒超时，可取消）
 
     @discardableResult
     static func analyze(

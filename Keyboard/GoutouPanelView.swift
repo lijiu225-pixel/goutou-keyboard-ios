@@ -18,6 +18,7 @@ enum GoutouPanelAction {
     case importConfig
     case clearConfig
     case addSegment(GoutouSpeaker)
+    case deleteSegment(Int)
     case analyze
     case cancel
     case clearSegments
@@ -43,7 +44,7 @@ final class GoutouPanelView: UIView {
 
     /// 没开「允许完全访问」时，一键复制这句给用户照着走。
     static let fullAccessSteps = "设置 → 通用 → 键盘 → 狗头军师 → 允许完全访问"
-    /// 上下文段数不设上限；超过这个字数就在状态行提醒一下（请求会变慢，15 秒会超时）。
+    /// 上下文段数不设上限；超过这个字数就在状态行提醒一下（请求会变慢，可能撞上 60 秒超时）。
     static let contextWarningLength = 4000
 
     private let topBarHeight: CGFloat = 30
@@ -291,14 +292,39 @@ final class GoutouPanelView: UIView {
             return
         }
         for (index, segment) in segments.enumerated() {
-            bodyStack.addArrangedSubview(makeNoticeLabel(
-                "\(index + 1). \(segment.speaker.promptLabel)：\(segment.text)",
-                color: GoutouTheme.text
-            ))
+            bodyStack.addArrangedSubview(makeSegmentRow(index: index, segment: segment))
         }
         bodyStack.addArrangedSubview(makeActionButton(title: "✕ 清空上下文", background: GoutouTheme.function, fontSize: 13) {
             self.delegate?.goutouPanel(self, didTrigger: .clearSegments)
         })
+    }
+
+    /// 一行上下文：左边是内容，右边一个 ✕ 单独删掉这一段。
+    private func makeSegmentRow(index: Int, segment: GoutouSegment) -> UIView {
+        let row = UIStackView()
+        row.axis = .horizontal
+        row.spacing = 6
+        row.alignment = .fill
+
+        let label = makeNoticeLabel(
+            "\(index + 1). \(segment.speaker.promptLabel)：\(segment.text)",
+            color: GoutouTheme.text
+        )
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        row.addArrangedSubview(label)
+
+        let delete = NineKeyButton(type: .system)
+        delete.setTitle("✕", for: .normal)
+        delete.titleLabel?.font = .systemFont(ofSize: 14)
+        delete.applyStyle(background: GoutouTheme.function)
+        delete.accessibilityLabel = "删掉第 \(index + 1) 段"
+        delete.addAction(UIAction { [weak self] _ in
+            guard let self = self else { return }
+            self.delegate?.goutouPanel(self, didTrigger: .deleteSegment(index))
+        }, for: .touchUpInside)
+        delete.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        row.addArrangedSubview(delete)
+        return row
     }
 
     private func buildSettingsBody() {
@@ -330,7 +356,7 @@ final class GoutouPanelView: UIView {
         row.addArrangedSubview(spinner)
 
         let label = UILabel()
-        label.text = "分析中…（超时 15 秒）"
+        label.text = "分析中…（超时 \(Int(GoutouAIClient.timeout)) 秒）"
         label.font = .systemFont(ofSize: 13)
         label.textColor = GoutouTheme.secondary
         row.addArrangedSubview(label)

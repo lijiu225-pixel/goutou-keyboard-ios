@@ -472,6 +472,13 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
         case .addSegment(let speaker):
             addSegment(speaker)
 
+        case .deleteSegment(let index):
+            guard segments.indices.contains(index) else { break }
+            segments.remove(at: index)
+            GoutouSegmentStore.save(segments)
+            panelState = .empty(banner: "已删掉第 \(index + 1) 段，可以重新分析")
+            refreshPanel()
+
         case .analyze:
             startAnalysis()
 
