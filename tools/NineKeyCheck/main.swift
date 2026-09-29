@@ -90,7 +90,7 @@ expectEqual(engine.candidates.first ?? "", "你", "64 首选「你」")
 
 engine.clear()
 press(engine, "7484")
-expectEqual(engine.pinyinHint, "qiti", "7484 有能成词的切分（qiti）就显示它")
+expectEqual(engine.pinyinHint, "qi'ti", "7484 有能成词的切分（qi'ti）就按音节显示")
 expectEqual(engine.candidates.first ?? "", "体", "7484 首选候选来自词频最高的字")
 engine.clear()
 
