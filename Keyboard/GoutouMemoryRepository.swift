@@ -54,6 +54,7 @@ enum GoutouMemoryRepository {
         guard profile(id: personID, in: defaults) != nil else { throw MemoryRepositoryError.personNotFound }
 
         let now = Date()
+        // createdAt / updatedAt 一致；personID 绑定调用方传进来的人
         let memory = PersonMemory(
             personID: personID,
             content: text,
@@ -91,10 +92,9 @@ enum GoutouMemoryRepository {
         }
 
         var memory = profile.memory[index]
-        let originalCreatedAt = memory.createdAt
+        // id / personID / createdAT 都是 `let`——「身份不改、createdAt 永不覆盖」由类型强制，
+        // 这里不需要（也没法）再手动保护。
         mutate(&memory)
-        memory.personID = personID          // 归属不许被改掉
-        memory.createdAt = originalCreatedAt // createdAt 永远不变
         memory.updatedAt = Date()
         if memory.content.trimmed.isEmpty { throw MemoryRepositoryError.emptyContent }
 

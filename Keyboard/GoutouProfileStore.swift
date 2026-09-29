@@ -53,10 +53,8 @@ struct GoutouPersonProfile: Codable, Equatable, Identifiable {
 
         if let items = try? container.decode([PersonMemory].self, forKey: .memory) {
             memory = items.map { item in
-                var copy = item
                 // 记忆归属一律以所属档案为准：旧数据缺 personID、或写错的，这里一次性纠正
-                copy.personID = id
-                return copy
+                item.ownedBy(id)
             }
         } else if let legacy = try? container.decode([String].self, forKey: .memory) {
             // v0：纯字符串数组 → 迁移成条目（分类未知用 other，来源记 migratedLegacy）
@@ -66,10 +64,10 @@ struct GoutouPersonProfile: Codable, Equatable, Identifiable {
                     personID: id,
                     content: $0,
                     category: .other,
-                    sourceType: .migratedLegacy,
                     createdAt: now,
                     updatedAt: now,
                     lastConfirmedAt: nil,
+                    sourceType: .migratedLegacy,
                     archived: false
                 )
             }
@@ -234,10 +232,10 @@ enum GoutouProfileStore {
                     personID: profile.id,
                     content: $0,
                     category: .other,
-                    sourceType: .migratedLegacy,
                     createdAt: now,
                     updatedAt: now,
                     lastConfirmedAt: nil,
+                    sourceType: .migratedLegacy,
                     archived: false
                 )
             }

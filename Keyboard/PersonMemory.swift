@@ -172,6 +172,27 @@ struct PersonMemory: Codable, Equatable, Identifiable {
     func isSameTopic(as other: PersonMemory) -> Bool {
         GoutouMemoryApplier.similarity(content, other.content) >= GoutouMemoryApplier.duplicateThreshold
     }
+
+    /// 迁移专用：把归属纠正成某个人（`id` / `createdAt` 等一律原样保留）。
+    /// `personID` 是 `let`，所以只能这样生成副本，不能就地改。
+    func ownedBy(_ personID: UUID) -> PersonMemory {
+        PersonMemory(
+            id: id,
+            personID: personID,
+            content: content,
+            category: category,
+            importance: importance,
+            confidence: confidence,
+            createdAt: createdAt,
+            updatedAt: updatedAt,
+            lastConfirmedAt: lastConfirmedAt,
+            sourceType: sourceType,
+            sourceSessionID: sourceSessionID,
+            sourceMessageStart: sourceMessageStart,
+            sourceMessageEnd: sourceMessageEnd,
+            archived: archived
+        )
+    }
 }
 
 /// 把提取出来的候选**当作一次事务**应用到某个人的记忆上。
