@@ -936,11 +936,28 @@ expectEqual(GoutouMemoryRepository.getStaleMemories(personID: decayProfile.id, a
 
 // 测试 10：再次确认不会产生重复记忆
 expectEqual(GoutouMemoryRepository.getMemories(personID: decayProfile.id, includeArchived: true, from: decaySuite).count, 4, "确认不会新增条数")
-expectEqual(
-    GoutouMemoryRepository.getMemories(personID: decayProfile.id, includeArchived: true, from: decaySuite).filter { $0.content == weather90.content }.count,
-    1,
-    "同样内容仍然只有一条"
+expect(
+    GoutouMemoryRepository.getMemories(personID: decayProfile.id, includeArchived: true, from: decaySuite).contains { $0.id == weather90.id },
+    "被确认的还是原来那一条（身份按 id，不看下标）"
 )
+// 真正的「不会重复」路径：ADD 一条和已有记忆高度相似的内容 → 并到原来那条，不新增
+let duplicateSeed = aged("她喜欢吃香蕉", days: 80, person: decayProfile.id, category: .preference)
+let duplicateApplied = GoutouMemoryApplier.apply(
+    [GoutouMemoryCandidate(
+        operation: .add,
+        targetID: nil,
+        content: "她喜欢吃香蕉",
+        category: .preference,
+        importance: 3,
+        confidence: 0.9
+    )],
+    to: [duplicateSeed],
+    personID: decayProfile.id,
+    now: decayNow
+)
+expectEqual(duplicateApplied.items.count, 1, "ADD 一条重复内容不会变成第二条")
+expect(duplicateApplied.items[0].id == duplicateSeed.id, "重复内容并回原来那条（id 不变）")
+expect(duplicateApplied.items[0].lastConfirmedAt == decayNow, "顺带算一次重新确认")
 
 // 测试 11：A 的确认操作不能改到 B
 let decayOther = GoutouProfileStore.create(name: "表弟", in: decaySuite)
