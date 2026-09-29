@@ -1309,8 +1309,8 @@ let busyStatus = managed("最近工作经常加班", person: manageProfile.id, d
 let bananaPref = managed("喜欢吃香蕉", person: manageProfile.id, days: 120, category: .preference, importance: 2)
 let examStatus = managed("最近在准备考试", person: manageProfile.id, days: 90, importance: 2)
 let xianEvent = managed("去年一起去过西安", person: manageProfile.id, days: 200, category: .importantEvent, importance: 5)
-let birthdayFact = managed("她生日是 3 月 13 日", person: manageProfile.id, days: 30, category: .stableFact, importance: 5, archived: true)
-let manageBase = [busyStatus, bananaPref, examStatus, xianEvent, birthdayFact]
+let archivedBirthday = managed("她生日是 3 月 13 日", person: manageProfile.id, days: 30, category: .stableFact, importance: 5, archived: true)
+let manageBase = [busyStatus, bananaPref, examStatus, xianEvent, archivedBirthday]
 GoutouProfileStore.updateProfile(id: manageProfile.id, in: manageSuite) { $0.memory = manageBase }
 let otherPersonMemory = managed("表弟换工作了", person: manageOther.id, days: 100)
 GoutouProfileStore.updateProfile(id: manageOther.id, in: manageSuite) { $0.memory = [otherPersonMemory] }
@@ -1318,7 +1318,7 @@ GoutouProfileStore.updateProfile(id: manageOther.id, in: manageSuite) { $0.memor
 // 测试 1：能看到当前人物全部（未归档）记忆
 let allItems = MemoryManagement.items(personID: manageProfile.id, memories: manageBase, filter: .all, now: manageNow)
 expectEqual(allItems.count, 4, "全部：4 条未归档")
-expect(!allItems.contains { $0.id == birthdayFact.id }, "全部里不含已归档那条")
+expect(!allItems.contains { $0.id == archivedBirthday.id }, "全部里不含已归档那条")
 
 // 测试 2：搜索（本地纯文本）
 let searchHit = MemoryManagement.items(personID: manageProfile.id, memories: manageBase, filter: .all, query: "加班", now: manageNow)
