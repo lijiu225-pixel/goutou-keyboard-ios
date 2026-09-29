@@ -669,7 +669,7 @@ final class KeyboardViewController: UIInputViewController {
             : selection.items
         lastMemorySelection = selection
         #if DEBUG
-        print("[MemorySelector] 选中 \(chosen.count) 条 / \(selection.totalCharacters) 字（候选 \(memory.count) 条）")
+        print("[MemorySelector] 选中 \(chosen.count) 条 / \(selection.totalCharacters) 字（候选 \(memory.count) 条，其中 stale \(selection.staleCount) 条）")
         selection.debugLines.forEach { print("  \($0)") }
         #endif
         // 近期状态标一下，免得模型把它当永久事实

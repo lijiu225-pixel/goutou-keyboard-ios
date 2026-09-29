@@ -63,6 +63,7 @@ jobs:
             Keyboard/PersonMemory.swift \
             Keyboard/GoutouMemoryRepository.swift \
             Keyboard/MemoryRankingConfig.swift \
+            Keyboard/MemoryDecayConfig.swift \
             Keyboard/MemorySelector.swift \
             Keyboard/GoutouMemoryExtractor.swift \
             Keyboard/GoutouSegmentStore.swift \

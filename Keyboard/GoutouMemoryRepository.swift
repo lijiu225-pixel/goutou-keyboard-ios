@@ -133,6 +133,41 @@ enum GoutouMemoryRepository {
         }
     }
 
+    // MARK: - 时间衰减 / stale（只读：绝不归档、绝不删除）
+
+    /// 现在有哪些记忆「可能过时」——按 `MemoryDecay` 实时算，不写库。
+    ///
+    /// `stale != archived != deleted`：这里只是把名单挑出来（管理页 / 调试用），
+    /// 数据本身一个字节都不动。
+    static func getStaleMemories(
+        personID: UUID,
+        includeArchived: Bool = false,
+        at now: Date = Date(),
+        config: MemoryDecayConfig = .default,
+        from defaults: UserDefaults = .standard
+    ) -> [PersonMemory] {
+        guard let profile = profile(id: personID, in: defaults) else { return [] }
+        return profile.memory
+            .filter { includeArchived || !$0.archived }
+            .filter { MemoryDecay.isStale($0, at: now, config: config) }
+    }
+
+    /// 统一重算入口：返回这个人物现在有多少条 stale。
+    ///
+    /// 为什么没有「写回数据库」：本项目把 stale 设计成**算出来的**状态，而不是存一个 Bool——
+    /// 存了就会出现「时间过去了，库里的值永远不刷新」的老问题。
+    /// 所以这里只是按需算一次（查询 / 切换人物 / 打开记忆页 / 写入后调用都行），
+    /// 没有 Timer、没有后台轮询、没有网络请求。
+    @discardableResult
+    static func refreshStaleState(
+        personID: UUID,
+        at now: Date = Date(),
+        config: MemoryDecayConfig = .default,
+        from defaults: UserDefaults = .standard
+    ) -> Int {
+        getStaleMemories(personID: personID, includeArchived: true, at: now, config: config, from: defaults).count
+    }
+
     // MARK: - 归档 / 删
 
     static func archiveMemory(

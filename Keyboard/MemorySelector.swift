@@ -8,11 +8,20 @@ struct MemoryScoreBreakdown: Equatable {
     var confirmed: Double = 0
     var keyword: Double = 0
     var category: Double = 0
+    /// 时间衰减系数（6.7）：近期状态越旧越小；长期稳定信息恒为 1
+    var decayMultiplier: Double = 1
+    /// 这条记忆当前是不是「可能过时」（只标记，不删不归档）
+    var isStale: Bool = false
     /// 近义惩罚（1 = 没被罚）
     var redundancyMultiplier: Double = 1
 
+    /// 没算时间衰减 / 近义惩罚之前的原始分
+    var rawTotal: Double {
+        importance + confidence + recency + confirmed + keyword + category
+    }
+
     var total: Double {
-        (importance + confidence + recency + confirmed + keyword + category) * redundancyMultiplier
+        rawTotal * decayMultiplier * redundancyMultiplier
     }
 
     func penalized(by multiplier: Double) -> MemoryScoreBreakdown {
@@ -40,19 +49,26 @@ struct MemorySelectionResult {
 
     static let empty = MemorySelectionResult(items: [], scored: [], totalCharacters: 0, usedFallback: false)
 
+    /// 候选里有多少条已经「可能过时」（调试 / 以后的管理页用）
+    var staleCount: Int { scored.filter { $0.breakdown.isStale }.count }
+
     /// 调试用的一行行明细（不要塞进主界面）
     var debugLines: [String] {
         scored.prefix(30).map { entry in
             let detail = entry.breakdown
             let preview = String(entry.memory.content.prefix(18))
-            return "「\(preview)」 score=\(Self.two(entry.score))"
+            return "「\(preview)」 age=\(Self.two(MemoryDecay.ageDays(of: entry.memory)))天"
+                + " decay=\(Self.two(detail.decayMultiplier))"
+                + " stale=\(detail.isStale ? "是" : "否")"
+                + " raw=\(Self.two(detail.rawTotal))"
+                + " final=\(Self.two(entry.score))"
+                + " [\(entry.memory.category.rawValue)]"
                 + " imp=\(Self.two(detail.importance))"
                 + " conf=\(Self.two(detail.confidence))"
                 + " rec=\(Self.two(detail.recency))"
                 + " kw=\(Self.two(detail.keyword))"
                 + " cat=\(Self.two(detail.category))"
-                + " x\(Self.two(detail.redundancyMultiplier))"
-                + " [\(entry.memory.category.label)]"
+                + " x冗余\(Self.two(detail.redundancyMultiplier))"
         }
     }
 
@@ -69,10 +85,16 @@ struct MemorySelectionResult {
 enum MemorySelector {
 
     /// 同一轮分析不重复算（键 = 人物 + 聊天 + 记忆版本）。只留一条，不落盘。
+    ///
+    /// 6.7 起还带上「哪一天」：时间衰减按天变化，跨天必须重算，
+    /// 免得昨天缓存的结果今天还拿着用（不要求分钟级失效）。
+    /// 也带上 config——换了 Top-K / 预算 / 衰减参数就得重新算。
     private struct CacheKey: Equatable {
         let personID: UUID
         let chat: String
         let memoryVersion: String
+        let day: Date
+        let config: MemoryRankingConfig
     }
     private static var lastKey: CacheKey?
     private static var lastResult: MemorySelectionResult?
@@ -88,7 +110,14 @@ enum MemorySelector {
         now: Date = Date()
     ) -> MemorySelectionResult {
         let chatText = chat.map { "\($0.speaker.promptLabel)：\($0.text)" }.joined(separator: "\n")
-        let key = CacheKey(personID: personID, chat: chatText, memoryVersion: memoryVersion(of: memories))
+        let day = Calendar.current.startOfDay(for: now)
+        let key = CacheKey(
+            personID: personID,
+            chat: chatText,
+            memoryVersion: memoryVersion(of: memories),
+            day: day,
+            config: config
+        )
         if let lastKey = lastKey, lastKey == key, let cached = lastResult { return cached }
 
         // 硬性安全：只认这个人的、未归档的、有内容的
@@ -268,12 +297,17 @@ enum MemorySelector {
         breakdown.confirmed = config.confirmedWeight * (memory.lastConfirmedAt == nil ? 0 : 1)
         breakdown.keyword = config.keywordWeight * keywordRatio(memory: memory, keywords: keywords)
         breakdown.category = config.categoryWeight * categoryRatio(memory.category, task: task, config: config)
+        // 6.7：时间衰减（近期状态越旧分越低；长期稳定信息恒为 1），原始 confidence / importance 不动
+        let decay = MemoryDecay.state(for: memory, at: now, config: config.decay)
+        breakdown.decayMultiplier = decay.multiplier
+        breakdown.isStale = decay.isStale
         return breakdown
     }
 
     /// 平滑衰减：7 天≈接近满分、30 天中等、90 天较低、更久继续降但不归零。
+    /// 时间基准统一走 `MemoryDecay.effectiveDate`（lastConfirmedAt → updatedAt → createdAt）。
     static func recencyRatio(memory: PersonMemory, config: MemoryRankingConfig, now: Date) -> Double {
-        let reference = memory.lastConfirmedAt ?? memory.updatedAt
+        let reference = MemoryDecay.effectiveDate(of: memory)
         let days = max(0, now.timeIntervalSince(reference) / 86_400)
         let decay = exp(-days / max(1, config.recencyHalfLifeDays))
         return config.recencyFloor + (1 - config.recencyFloor) * decay

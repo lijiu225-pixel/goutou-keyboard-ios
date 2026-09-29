@@ -7,7 +7,8 @@ import Foundation
 //          Keyboard/NineKeyInputEngine.swift Keyboard/GoutouConfig.swift \
 //          Keyboard/GoutouPrompt.swift Keyboard/GoutouProfileStore.swift \
 //          Keyboard/PersonMemory.swift Keyboard/GoutouMemoryRepository.swift \
-//          Keyboard/MemoryRankingConfig.swift Keyboard/MemorySelector.swift \
+//          Keyboard/MemoryRankingConfig.swift Keyboard/MemoryDecayConfig.swift \
+//          Keyboard/MemorySelector.swift \
 //          Keyboard/GoutouMemoryExtractor.swift \
 //          Keyboard/GoutouSegmentStore.swift \
 //          Keyboard/GoutouAIClient.swift \
@@ -825,6 +826,203 @@ let cacheKey1 = MemorySelector.select(personID: selectorPerson, memories: hundre
 let cacheKey2 = MemorySelector.select(personID: selectorPerson, memories: hundred, now: selectorNow)
 expectEqual(cacheKey1.items.count, cacheKey2.items.count, "重复调用结果一致（缓存命中）")
 expect(cacheKey1.scored.count == cacheKey2.scored.count, "候选数也一致")
+
+print("== 6.7 时间衰减 / stale（近况会过时，但绝不自动归档 / 删除）==")
+let decayNow = Date(timeIntervalSince1970: 1_700_000_000)
+let decayConfig = MemoryDecayConfig.default
+
+func aged(
+    _ content: String,
+    days: Double,
+    person: UUID,
+    category: MemoryCategory = .recentStatus,
+    importance: Int = 3,
+    confidence: Double = 0.92,
+    confirmedDaysAgo: Double? = nil,
+    archived: Bool = false
+) -> PersonMemory {
+    PersonMemory(
+        personID: person,
+        content: content,
+        category: category,
+        importance: importance,
+        confidence: confidence,
+        createdAt: decayNow.addingTimeInterval(-86_400 * (days + 10)),
+        updatedAt: decayNow.addingTimeInterval(-86_400 * days),
+        lastConfirmedAt: confirmedDaysAgo.map { decayNow.addingTimeInterval(-86_400 * $0) },
+        sourceType: .aiExtracted,
+        archived: archived
+    )
+}
+
+let decaySuite = UserDefaults(suiteName: "goutou.check.decay") ?? .standard
+for key in [
+    GoutouProfileStore.storageKey,
+    GoutouProfileStore.legacySegmentsKey,
+    GoutouProfileStore.legacyMemoryKey,
+    GoutouProfileStore.backupKey,
+] {
+    decaySuite.removeObject(forKey: key)
+}
+let decayProfile = GoutouProfileStore.loadBook(from: decaySuite).profiles[0]
+
+// 测试 1：recentStatus 当天 = 新鲜
+let freshStatus = aged("这几天身体不舒服", days: 0, person: decayProfile.id)
+expectEqual(MemoryDecay.multiplier(for: freshStatus, at: decayNow), 1.0, "近况当天不衰减")
+expect(!MemoryDecay.isStale(freshStatus, at: decayNow), "近况当天不算 stale")
+expectEqual(Int(MemoryDecay.ageDays(of: freshStatus, at: decayNow)), 0, "当天 ageDays = 0")
+
+// 测试 2：平滑下降（30 天≈0.7、45 天≈0.5、60 天≈0.4），越久越低且永不归零
+let decayAt7 = MemoryDecay.multiplier(for: aged("最近工作很忙", days: 7, person: decayProfile.id), at: decayNow)
+let decayAt30 = MemoryDecay.multiplier(for: aged("最近工作很忙", days: 30, person: decayProfile.id), at: decayNow)
+let decayAt45 = MemoryDecay.multiplier(for: aged("最近工作很忙", days: 45, person: decayProfile.id), at: decayNow)
+let decayAt60 = MemoryDecay.multiplier(for: aged("最近工作很忙", days: 60, person: decayProfile.id), at: decayNow)
+let decayAt90 = MemoryDecay.multiplier(for: aged("最近工作很忙", days: 90, person: decayProfile.id), at: decayNow)
+expectEqual(decayAt7, 1.0, "7 天以内视为新鲜")
+expect(decayAt30 > decayAt45 && decayAt45 > decayAt60 && decayAt60 > decayAt90, "越旧系数越低（平滑，不是阶梯归零）")
+expect(decayAt30 > 0.6 && decayAt30 < 0.75, "30 天约 0.7（实际 \(MemorySelectionResult.two(decayAt30))）")
+expect(decayAt45 > 0.45 && decayAt45 < 0.6, "45 天约 0.5（实际 \(MemorySelectionResult.two(decayAt45))）")
+expect(decayAt60 > 0.35 && decayAt60 < 0.5, "60 天约 0.4（实际 \(MemorySelectionResult.two(decayAt60))）")
+expect(decayAt90 >= decayConfig.recentStatusCurve.minimumMultiplier, "再久也不低于下限，永不归零")
+
+// 测试 3：超过 staleDays → isStale = true
+let staleSeed = aged("最近在准备考试", days: decayConfig.recentStatusCurve.staleDays + 1, person: decayProfile.id)
+expect(MemoryDecay.isStale(staleSeed, at: decayNow), "超过 60 天判 stale")
+expect(!MemoryDecay.isStale(aged("最近在准备考试", days: decayConfig.recentStatusCurve.staleDays - 1, person: decayProfile.id), at: decayNow), "没到 60 天不算 stale")
+
+// 造一份真实数据：今天 / 45 天 / 90 天的近况 + 180 天的稳定事实
+let weatherToday = aged("近期工作经常加班", days: 0, person: decayProfile.id)
+let weather45 = aged("近期工作经常加班", days: 45, person: decayProfile.id)
+let weather90 = aged("近期工作经常加班", days: 90, person: decayProfile.id)
+let birthdayFact = aged("生日是 3 月 13 日", days: 180, person: decayProfile.id, category: .stableFact, importance: 4)
+GoutouProfileStore.updateProfile(id: decayProfile.id, in: decaySuite) { profile in
+    profile.memory = [weatherToday, weather45, weather90, birthdayFact]
+}
+
+// 测试 4：stale 之后数据仍然存在
+let staleList = GoutouMemoryRepository.getStaleMemories(personID: decayProfile.id, at: decayNow, from: decaySuite)
+expectEqual(staleList.count, 1, "只有 90 天那条算 stale")
+expect(staleList.first?.id == weather90.id, "stale 名单就是 90 天那条")
+expectEqual(GoutouMemoryRepository.refreshStaleState(personID: decayProfile.id, at: decayNow, from: decaySuite), 1, "统一重算入口返回 1")
+expect(
+    GoutouMemoryRepository.getMemories(personID: decayProfile.id, includeArchived: true, from: decaySuite).contains { $0.id == weather90.id },
+    "stale 之后数据仍然在库里"
+)
+// 测试 5：stale 不会自动 archived
+expect(GoutouMemoryRepository.getMemory(id: weather90.id, personID: decayProfile.id, from: decaySuite)?.archived == false, "stale 不会被自动归档")
+// 测试 6：stale 不会 delete
+expectEqual(GoutouMemoryRepository.getMemories(personID: decayProfile.id, includeArchived: true, from: decaySuite).count, 4, "stale 不会被删除")
+
+// 测试 7：stableFact 再久也不套用近况的强衰减
+expectEqual(MemoryDecay.multiplier(for: birthdayFact, at: decayNow), 1.0, "stableFact 180 天也不衰减")
+expect(!MemoryDecay.isStale(birthdayFact, at: decayNow), "stableFact 不会因为时间变 stale")
+// 测试 8：其余长期信息同样不自动 stale
+for category in [MemoryCategory.preference, .relationship, .communicationStyle, .importantEvent] {
+    let longAgo = aged("长期信息", days: 200, person: decayProfile.id, category: category)
+    expectEqual(MemoryDecay.multiplier(for: longAgo, at: decayNow), 1.0, "\(category.rawValue) 不随时间衰减")
+    expect(!MemoryDecay.isStale(longAgo, at: decayNow), "\(category.rawValue) 不会因为超过 60 天自动 stale")
+}
+
+// 测试 9：再次确认 → lastConfirmedAt 更新、不再是 stale、权重恢复
+let reconfirmed = try? GoutouMemoryRepository.confirmMemory(id: weather90.id, personID: decayProfile.id, at: decayNow, from: decaySuite)
+expect(reconfirmed?.lastConfirmedAt == decayNow, "确认把 lastConfirmedAt 盖成当前时间")
+expect(reconfirmed.map { !MemoryDecay.isStale($0, at: decayNow) } ?? false, "确认之后不再是 stale")
+expectEqual(reconfirmed.map { MemoryDecay.multiplier(for: $0, at: decayNow) } ?? 0, 1.0, "确认之后衰减系数恢复 1")
+expectEqual(GoutouMemoryRepository.getStaleMemories(personID: decayProfile.id, at: decayNow, from: decaySuite).count, 0, "确认完 A 名下没有 stale 了")
+
+// 测试 10：再次确认不会产生重复记忆
+expectEqual(GoutouMemoryRepository.getMemories(personID: decayProfile.id, includeArchived: true, from: decaySuite).count, 4, "确认不会新增条数")
+expectEqual(
+    GoutouMemoryRepository.getMemories(personID: decayProfile.id, includeArchived: true, from: decaySuite).filter { $0.content == weather90.content }.count,
+    1,
+    "同样内容仍然只有一条"
+)
+
+// 测试 11：A 的确认操作不能改到 B
+let decayOther = GoutouProfileStore.create(name: "表弟", in: decaySuite)
+do {
+    _ = try GoutouMemoryRepository.confirmMemory(id: weather45.id, personID: decayOther.id, at: decayNow, from: decaySuite)
+    expect(false, "跨人物确认应该抛错")
+} catch let error as MemoryRepositoryError {
+    expect(error == .personMismatch, "跨人物确认报 personMismatch")
+} catch {
+    expect(false, "抛出的应该是 MemoryRepositoryError")
+}
+expect(GoutouMemoryRepository.getMemories(personID: decayOther.id, from: decaySuite).isEmpty, "B 名下还是空的")
+
+// 测试 12 / 13：时间衰减不动原始 confidence / importance
+let aged45Stored = GoutouMemoryRepository.getMemory(id: weather45.id, personID: decayProfile.id, from: decaySuite)
+expectEqual(aged45Stored?.confidence ?? 0, 0.92, "confidence 没被时间衰减改过")
+expectEqual(aged45Stored?.importance ?? 0, 3, "importance 没被时间衰减改过")
+expect(MemoryDecay.multiplier(for: aged45Stored ?? weather45, at: decayNow) < 1.0, "但它的排序权重确实掉了")
+
+// 测试 14 + 十九、实机场景（本地复现）：A 今天 / B 45 天 / C 90 天 / D 稳定事实 180 天
+let decayChat = [GoutouSegment(speaker: .opponent, text: "最近工作太忙了，天天加班")]
+let scene = MemorySelector.select(
+    personID: decayProfile.id,
+    chat: decayChat,
+    task: .analyzeMeaning,
+    memories: [weather90, weather45, weatherToday, birthdayFact],
+    now: decayNow
+)
+func sceneRank(_ id: UUID) -> Int { scene.items.firstIndex { $0.id == id } ?? 999 }
+expectEqual(scene.items.count, 4, "4 条都在 Top-K 内（Top-K 仍然正常）")
+expect(sceneRank(weatherToday.id) < sceneRank(weather45.id), "今天的排 45 天前面")
+expect(sceneRank(weather45.id) < sceneRank(weather90.id), "45 天排 90 天前面（90 天已经 stale、被降权）")
+expect(sceneRank(birthdayFact.id) < sceneRank(weather90.id), "180 天稳定事实（不衰减）排在 stale 的近况前面")
+expect(scene.staleCount >= 1, "筛选结果里统计得到 stale 条数")
+
+// 测试 15：字符预算照旧生效、不截断
+let tightConfig = MemoryRankingConfig(defaultTopK: 20, maxMemoryCharacters: 10)
+let tight = MemorySelector.select(
+    personID: decayProfile.id,
+    chat: decayChat,
+    memories: [weatherToday, weather45, weather90, birthdayFact],
+    config: tightConfig,
+    now: decayNow
+)
+expect(tight.totalCharacters <= 10, "字符预算仍然生效")
+expect(tight.items.allSatisfy { $0.content.count <= 10 }, "预算内不会截断单条记忆")
+
+// 测试 16 / 17：现有自动归纳的 IGNORE（= 再次确认）能救活 stale 记忆，且不新增重复
+let staleForApply = aged("最近项目赶进度，非常忙", days: 70, person: decayProfile.id)
+let appliedDecay = GoutouMemoryApplier.apply(
+    [GoutouMemoryCandidate(
+        operation: .ignore,
+        targetID: staleForApply.id,
+        content: staleForApply.content,
+        category: .recentStatus,
+        importance: 3,
+        confidence: 0.9
+    )],
+    to: [staleForApply],
+    personID: decayProfile.id,
+    now: decayNow
+)
+expectEqual(appliedDecay.items.count, 1, "再次确认不会新增一条")
+expect(appliedDecay.items[0].lastConfirmedAt == decayNow, "IGNORE 把 lastConfirmedAt 盖成现在 = 重新确认")
+expect(!MemoryDecay.isStale(appliedDecay.items[0], at: decayNow), "确认后不再是 stale")
+expectEqual(MemoryDecay.multiplier(for: appliedDecay.items[0], at: decayNow), 1.0, "确认后权重恢复")
+
+// 测试 18：人物切换不串档
+let otherStale = aged("表弟换工作了", days: 120, person: decayOther.id)
+GoutouProfileStore.updateProfile(id: decayOther.id, in: decaySuite) { profile in
+    profile.memory = [otherStale]
+}
+expectEqual(GoutouMemoryRepository.getStaleMemories(personID: decayProfile.id, at: decayNow, from: decaySuite).count, 0, "A 的 stale 名单里没有 B 的")
+expectEqual(GoutouMemoryRepository.getStaleMemories(personID: decayOther.id, at: decayNow, from: decaySuite).count, 1, "B 自己那条是 stale")
+expectEqual(GoutouMemoryRepository.refreshStaleState(personID: decayProfile.id, at: decayNow, from: decaySuite), 0, "重算只算自己那份")
+
+// 测试 19：重启（重新从 UserDefaults 读）后一切正常
+let reloadedBook = GoutouProfileStore.loadBook(from: decaySuite)
+let reloadedA = reloadedBook.profiles.first { $0.id == decayProfile.id }
+expectEqual(reloadedA?.memory.count ?? 0, 4, "重启后条数不变")
+expect(reloadedA?.memory.first { $0.id == weather45.id }?.confidence == 0.92, "重启后原始 confidence 不变")
+expect(reloadedA?.memory.first { $0.id == weather90.id }?.lastConfirmedAt == decayNow, "重启后 lastConfirmedAt 还在")
+expect(
+    MemoryDecay.isStale(reloadedBook.profiles.first { $0.id == decayOther.id }?.memory.first ?? otherStale, at: decayNow),
+    "重启后 stale 照样算得出来（本来就是算的，不靠库里存 Bool）"
+)
 
 print("")
 if failures == 0 {

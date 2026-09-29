@@ -67,5 +67,9 @@ struct MemoryRankingConfig: Equatable {
         .analyzeMeaning: [.recentStatus, .communicationStyle, .relationship, .preference, .importantEvent, .stableFact, .other],
     ]
 
+    /// 时间衰减 / stale 的参数（6.7）。放在这里是为了「排序相关的可调项只有一个入口」，
+    /// 具体数字仍然集中在 `MemoryDecayConfig`。
+    var decay: MemoryDecayConfig = .default
+
     static let `default` = MemoryRankingConfig()
 }
