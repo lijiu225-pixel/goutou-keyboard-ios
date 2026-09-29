@@ -8,7 +8,8 @@ import Foundation
 //          Keyboard/GoutouPrompt.swift Keyboard/GoutouProfileStore.swift \
 //          Keyboard/PersonMemory.swift Keyboard/GoutouMemoryRepository.swift \
 //          Keyboard/MemoryRankingConfig.swift Keyboard/MemoryDecayConfig.swift \
-//          Keyboard/MemoryMaintenance.swift Keyboard/MemorySelector.swift \
+//          Keyboard/MemoryMaintenance.swift Keyboard/MemoryManagement.swift \
+//          Keyboard/MemorySelector.swift \
 //          Keyboard/GoutouMemoryExtractor.swift \
 //          Keyboard/GoutouSegmentStore.swift \
 //          Keyboard/GoutouAIClient.swift \
@@ -1272,6 +1273,235 @@ expect(
     GoutouMemoryRepository.getStaleMemories(personID: triggerProfile.id, at: maintainNow, from: triggerSuite).isEmpty,
     "归档之后它就不在正常 stale 名单里了"
 )
+
+print("== 6.9 记忆管理：列表 / 搜索 / 筛选 / 详情 / 编辑 / 归档 / 确认 ==")
+let manageNow = Date(timeIntervalSince1970: 1_700_000_000)
+
+func managed(
+    _ content: String,
+    person: UUID,
+    days: Double = 0,
+    category: MemoryCategory = .recentStatus,
+    importance: Int = 3,
+    confidence: Double = 0.9,
+    archived: Bool = false
+) -> PersonMemory {
+    PersonMemory(
+        personID: person,
+        content: content,
+        category: category,
+        importance: importance,
+        confidence: confidence,
+        createdAt: manageNow.addingTimeInterval(-86_400 * (days + 5)),
+        updatedAt: manageNow.addingTimeInterval(-86_400 * days),
+        lastConfirmedAt: nil,
+        sourceType: .aiExtracted,
+        archived: archived
+    )
+}
+
+let manageSuite = UserDefaults(suiteName: "goutou.check.management") ?? .standard
+clearMaintenanceKeys(manageSuite)
+let manageProfile = GoutouProfileStore.loadBook(from: manageSuite).profiles[0]
+let manageOther = GoutouProfileStore.create(name: "表弟", in: manageSuite)
+
+let busyStatus = managed("最近工作经常加班", person: manageProfile.id, days: 5, importance: 4)
+let bananaPref = managed("喜欢吃香蕉", person: manageProfile.id, days: 120, category: .preference, importance: 2)
+let examStatus = managed("最近在准备考试", person: manageProfile.id, days: 90, importance: 2)
+let xianEvent = managed("去年一起去过西安", person: manageProfile.id, days: 200, category: .importantEvent, importance: 5)
+let birthdayFact = managed("她生日是 3 月 13 日", person: manageProfile.id, days: 30, category: .stableFact, importance: 5, archived: true)
+let manageBase = [busyStatus, bananaPref, examStatus, xianEvent, birthdayFact]
+GoutouProfileStore.updateProfile(id: manageProfile.id, in: manageSuite) { $0.memory = manageBase }
+let otherPersonMemory = managed("表弟换工作了", person: manageOther.id, days: 100)
+GoutouProfileStore.updateProfile(id: manageOther.id, in: manageSuite) { $0.memory = [otherPersonMemory] }
+
+// 测试 1：能看到当前人物全部（未归档）记忆
+let allItems = MemoryManagement.items(personID: manageProfile.id, memories: manageBase, filter: .all, now: manageNow)
+expectEqual(allItems.count, 4, "全部：4 条未归档")
+expect(!allItems.contains { $0.id == birthdayFact.id }, "全部里不含已归档那条")
+
+// 测试 2：搜索（本地纯文本）
+let searchHit = MemoryManagement.items(personID: manageProfile.id, memories: manageBase, filter: .all, query: "加班", now: manageNow)
+expectEqual(searchHit.count, 1, "搜「加班」只命中一条")
+expectEqual(searchHit.first?.content ?? "", "最近工作经常加班", "搜到的就是那条")
+expectEqual(
+    MemoryManagement.items(personID: manageProfile.id, memories: manageBase, filter: .all, query: "  加班 ", now: manageNow).count,
+    1,
+    "搜索忽略前后空白"
+)
+expect(MemoryManagement.items(personID: manageProfile.id, memories: manageBase, filter: .all, query: "查无此词", now: manageNow).isEmpty, "搜不到就是空")
+expectEqual(MemoryManagement.items(personID: manageProfile.id, memories: manageBase, filter: .all, query: "加班", now: manageNow).count, 1, "空搜索词之外的都一样")
+
+// 测试 3：筛选 recentStatus
+let recentItems = MemoryManagement.items(personID: manageProfile.id, memories: manageBase, filter: .recent, now: manageNow)
+expectEqual(recentItems.count, 2, "近期 = 2 条近期状态")
+expect(recentItems.allSatisfy { $0.subtitle.contains("近期状态") }, "副标题写着「近期状态」")
+
+// 测试 4：筛选 stale（复用 6.7 的 isStale）
+let staleItems = MemoryManagement.items(personID: manageProfile.id, memories: manageBase, filter: .stale, now: manageNow)
+expectEqual(staleItems.count, 1, "可能过期：只有 90 天那条")
+expect(staleItems.first?.id == examStatus.id, "就是「最近在准备考试」")
+expect(staleItems.first?.badges.contains("可能过期") == true, "徽标里有「可能过期」")
+
+// 测试 5：筛选 archived
+let archivedItems = MemoryManagement.items(personID: manageProfile.id, memories: manageBase, filter: .archived, now: manageNow)
+expectEqual(archivedItems.count, 1, "已归档：1 条")
+expect(archivedItems.first?.badges.contains("已归档") == true, "徽标里有「已归档」")
+
+// 筛选条上的数字
+let manageCounts = MemoryManagement.counts(personID: manageProfile.id, memories: manageBase, now: manageNow)
+expectEqual(manageCounts[.all] ?? -1, 4, "全部计数")
+expectEqual(manageCounts[.recent] ?? -1, 2, "近期计数")
+expectEqual(manageCounts[.stale] ?? -1, 1, "可能过期计数")
+expectEqual(manageCounts[.archived] ?? -1, 1, "已归档计数")
+
+// 快捷搜索词（键盘里没法打字，点词就等于输入）
+let quickWords = MemoryManagement.quickKeywords(personID: manageProfile.id, memories: manageBase)
+expect(quickWords.contains("最近"), "快捷词里有「最近」（两条记忆都出现）")
+expect(!quickWords.contains("香蕉"), "只出现一次的词不当快捷词")
+
+// 测试 13：A 绝对看不到 B 的记忆
+let mixedMemories = manageBase + [otherPersonMemory]
+let manageAIDs = Set(manageBase.map(\.id))
+expect(
+    MemoryManagement.items(personID: manageProfile.id, memories: mixedMemories, filter: .all, now: manageNow).allSatisfy { manageAIDs.contains($0.id) },
+    "A 的列表里没有 B 的记忆"
+)
+expect(
+    MemoryManagement.items(personID: manageProfile.id, memories: mixedMemories, filter: .archived, now: manageNow).allSatisfy { manageAIDs.contains($0.id) },
+    "归档筛选也不串档"
+)
+expectEqual(MemoryManagement.counts(personID: manageProfile.id, memories: mixedMemories, now: manageNow)[.all] ?? -1, 4, "计数也不含 B 的")
+expect(MemoryManagement.detail(id: otherPersonMemory.id, personID: manageProfile.id, memories: mixedMemories, now: manageNow) == nil, "拿 B 的 id 查 A 的详情 → 空")
+
+// 测试 14：切换人物，列表换一批
+let manageBItems = MemoryManagement.items(personID: manageOther.id, memories: mixedMemories, filter: .all, now: manageNow)
+expectEqual(manageBItems.count, 1, "切到表弟只剩他自己那条")
+expect(manageBItems.first?.id == otherPersonMemory.id, "而且就是他那条")
+
+// 跨人物写操作必须被拒
+do {
+    _ = try MemoryManagement.apply(.archive(otherPersonMemory.id), personID: manageProfile.id, from: manageSuite)
+    expect(false, "跨人物归档应该抛错")
+} catch let error as MemoryRepositoryError {
+    expect(error == .personMismatch, "跨人物归档报 personMismatch")
+} catch {
+    expect(false, "抛出的应该是 MemoryRepositoryError")
+}
+expect(
+    GoutouMemoryRepository.getMemory(id: otherPersonMemory.id, personID: manageOther.id, from: manageSuite)?.archived == false,
+    "B 那条一个字没动"
+)
+
+// 测试 6 / 7：编辑记忆，UUID 和归属都不变
+let editedMemory = try? MemoryManagement.apply(
+    .update(id: busyStatus.id, content: "最近工作经常加班（改过）", category: .recentStatus, importance: 5),
+    personID: manageProfile.id,
+    from: manageSuite
+)
+expectEqual(editedMemory?.content ?? "", "最近工作经常加班（改过）", "内容改了")
+expectEqual(editedMemory?.importance ?? 0, 5, "重要度改了")
+expect(editedMemory?.id == busyStatus.id, "UUID 没变")
+expect(editedMemory?.personID == manageProfile.id, "归属没变")
+expect(editedMemory?.createdAt == busyStatus.createdAt, "createdAt 没被覆盖")
+
+// 空内容拒绝；content 传 nil 表示只改别的字段
+do {
+    _ = try MemoryManagement.apply(.update(id: busyStatus.id, content: "   ", category: .recentStatus, importance: 3), personID: manageProfile.id, from: manageSuite)
+    expect(false, "空内容应该抛错")
+} catch {
+    expect(true, "空内容被拒绝")
+}
+let keptContent = try? MemoryManagement.apply(
+    .update(id: busyStatus.id, content: nil, category: .recentStatus, importance: 4),
+    personID: manageProfile.id,
+    from: manageSuite
+)
+expectEqual(keptContent?.content ?? "", "最近工作经常加班（改过）", "content 传 nil 时内容不动")
+expectEqual(keptContent?.importance ?? 0, 4, "只改了重要度")
+
+// 测试 8：手动归档
+let archivedByUser = try? MemoryManagement.apply(.archive(bananaPref.id), personID: manageProfile.id, from: manageSuite)
+expect(archivedByUser?.archived == true, "手动归档 → archived = true")
+expectEqual(archivedByUser?.content ?? "", bananaPref.content, "归档不改内容")
+
+// 测试 15：归档之后仍然在数据库里
+let afterArchiveAll = GoutouMemoryRepository.getMemories(personID: manageProfile.id, includeArchived: true, from: manageSuite)
+expect(afterArchiveAll.contains { $0.id == bananaPref.id }, "归档不删数据")
+expectEqual(GoutouMemoryRepository.getMemories(personID: manageProfile.id, from: manageSuite).count, afterArchiveAll.count - 1, "默认查询少一条（归档的不算）")
+expectEqual(
+    MemoryManagement.items(personID: manageProfile.id, memories: afterArchiveAll, filter: .archived, now: manageNow).count,
+    2,
+    "已归档筛选里现在有两条"
+)
+
+// 测试 9：恢复归档
+let restoredByUser = try? MemoryManagement.apply(.unarchive(bananaPref.id), personID: manageProfile.id, from: manageSuite)
+expect(restoredByUser?.archived == false, "恢复 → archived = false")
+expectEqual(
+    MemoryManagement.items(personID: manageProfile.id, memories: GoutouMemoryRepository.getMemories(personID: manageProfile.id, includeArchived: true, from: manageSuite), filter: .archived, now: manageNow).count,
+    1,
+    "恢复之后已归档又只剩原来那条"
+)
+
+// 测试 10 / 11 / 12：stale 记忆「确认仍然有效」
+expect(MemoryDecay.isStale(examStatus, at: manageNow), "先确认它本来是 stale")
+let confirmedByUser = try? MemoryManagement.apply(.confirm(examStatus.id), personID: manageProfile.id, from: manageSuite)
+expect(confirmedByUser?.lastConfirmedAt != nil, "确认之后 lastConfirmedAt 有值")
+expect(confirmedByUser.map { !MemoryDecay.isStale($0, at: manageNow) } ?? false, "确认之后不再 stale")
+expectEqual(confirmedByUser.map { MemoryDecay.multiplier(for: $0, at: manageNow) } ?? 0, 1.0, "确认之后排序权重恢复")
+expectEqual(
+    MemoryManagement.items(personID: manageProfile.id, memories: [confirmedByUser ?? examStatus], filter: .stale, now: manageNow).count,
+    0,
+    "「可能过期」筛选里也没了"
+)
+expectEqual(
+    MemoryManagement.items(personID: manageProfile.id, memories: [confirmedByUser ?? examStatus], filter: .all, now: manageNow).count,
+    1,
+    "它还在「全部」里"
+)
+
+// 详情页字段（给用户看的那些，够用且不塞调试信息）
+let manageDetail = MemoryManagement.detail(
+    id: xianEvent.id,
+    personID: manageProfile.id,
+    memories: GoutouMemoryRepository.getMemories(personID: manageProfile.id, includeArchived: true, from: manageSuite),
+    now: manageNow
+)
+expect(manageDetail != nil, "详情拿得到")
+let detailNames = (manageDetail?.fields ?? []).map(\.name).joined(separator: ",")
+for name in ["内容", "分类", "重要度", "置信度", "创建时间", "更新时间", "最近确认", "来源", "状态"] {
+    expect(detailNames.contains(name), "详情里有「\(name)」")
+}
+expectEqual(manageDetail?.content ?? "", xianEvent.content, "详情内容对得上")
+
+// 编辑草稿：点一下换下一个 / 重要度循环
+var manageDraft = MemoryEditDraft(memory: busyStatus)
+let draftCategoryBefore = manageDraft.category
+manageDraft.nextCategory()
+expect(manageDraft.category != draftCategoryBefore, "点一下换下一个分类")
+manageDraft.importance = 5
+manageDraft.nextImportance()
+expectEqual(manageDraft.importance, 1, "重要度 5 之后再点回到 1")
+
+// 测试 16：UI 改过之后 Top-K 照常工作，归档的不进 Top-K
+let manageChat = [GoutouSegment(speaker: .opponent, text: "最近工作太忙了，天天加班")]
+let memoriesAfterUI = GoutouMemoryRepository.getMemories(personID: manageProfile.id, includeArchived: true, from: manageSuite)
+let selectionAfterUI = MemorySelector.select(personID: manageProfile.id, chat: manageChat, memories: memoriesAfterUI, now: manageNow)
+expect(!selectionAfterUI.items.isEmpty, "UI 改过之后 Top-K 照样能选")
+expect(!selectionAfterUI.items.contains { $0.archived }, "归档的记忆不进 Top-K")
+
+// 测试 17 / 18：自动归纳和军师分析 prompt 不受 UI 影响
+let applyAfterUI = GoutouMemoryApplier.apply(
+    [GoutouMemoryCandidate(operation: .add, targetID: nil, content: "她最近换了工作", category: .recentStatus, importance: 3, confidence: 0.9)],
+    to: memoriesAfterUI,
+    personID: manageProfile.id,
+    now: manageNow
+)
+expect(applyAfterUI.changed >= 1, "自动归纳仍然能写记忆")
+expect(applyAfterUI.items.allSatisfy { $0.personID == manageProfile.id }, "自动归纳不会写到别人名下")
+let promptAfterUI = GoutouPrompt.userMessage(segments: manageChat, memory: selectionAfterUI.items.map { $0.content })
+expect(promptAfterUI.contains("【与当前聊天最相关的长期记忆】"), "分析 prompt 结构没变")
 
 print("")
 if failures == 0 {

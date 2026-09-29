@@ -58,6 +58,12 @@ final class KeyboardViewController: UIInputViewController {
     private var memoryNote: String?
     /// 上一次分析的记忆筛选结果（调试用，不进主界面）
     private var lastMemorySelection: MemorySelectionResult?
+    /// 6.9 记忆管理页：筛选 / 搜索词 / 正在看的那条 / 编辑草稿。
+    /// 全部按 `activeProfileID` 来算——换人物就重置，绝不跨人物复用。
+    private var memoryFilter: MemoryListFilter = .all
+    private var memoryQuery = ""
+    private var memoryDetailID: UUID?
+    private var memoryEditDraft: MemoryEditDraft?
     /// 全部人物档案 + 当前是谁（第六阶段：一人一份上下文/记忆/总结）
     private var profiles: [GoutouPersonProfile] = []
     private var activeProfileID: UUID = GoutouProfileStore.activeProfile().id
@@ -457,7 +463,18 @@ final class KeyboardViewController: UIInputViewController {
         refreshNineKeyView()
     }
 
+    /// 换人物时把记忆管理页的状态清干净，免得看到上一个人的筛选结果
+    private func resetMemoryBrowser() {
+        memoryFilter = .all
+        memoryQuery = ""
+        memoryDetailID = nil
+        memoryEditDraft = nil
+    }
+
     private func refreshPanel() {
+        // 记忆管理页要连归档的一起看，所以这里单独从 Repository 读一份完整的（很便宜）
+        let now = Date()
+        let allMemories = GoutouMemoryRepository.getMemories(personID: activeProfileID, includeArchived: true)
         mentorPanel?.render(GoutouPanelSnapshot(
             state: panelState,
             segments: segments,
@@ -466,7 +483,22 @@ final class KeyboardViewController: UIInputViewController {
             activeProfileID: activeProfileID,
             lastResult: lastResult,
             configSummary: config?.summary ?? "",
-            memoryNote: memoryNote
+            memoryNote: memoryNote,
+            memoryItems: MemoryManagement.items(
+                personID: activeProfileID,
+                memories: allMemories,
+                filter: memoryFilter,
+                query: memoryQuery,
+                now: now
+            ),
+            memoryCounts: MemoryManagement.counts(personID: activeProfileID, memories: allMemories, now: now),
+            memoryFilter: memoryFilter,
+            memoryQuery: memoryQuery,
+            memoryKeywords: MemoryManagement.quickKeywords(personID: activeProfileID, memories: allMemories),
+            memoryDetail: memoryDetailID.flatMap {
+                MemoryManagement.detail(id: $0, personID: activeProfileID, memories: allMemories, now: now)
+            },
+            memoryEditDraft: memoryEditDraft
         ))
     }
 
@@ -505,6 +537,7 @@ final class KeyboardViewController: UIInputViewController {
         refreshProfiles()
         segments = GoutouSegmentStore.load()
         memory = GoutouMemoryRepository.getMemories(personID: activeProfileID)
+        resetMemoryBrowser()
         panelTask?.cancel()
         panelTask = nil
         if let summary = GoutouProfileStore.activeProfile().summary {
@@ -523,6 +556,7 @@ final class KeyboardViewController: UIInputViewController {
         refreshProfiles()
         segments = []
         memory = []
+        resetMemoryBrowser()
         lastResult = nil
         panelState = .empty(banner: "已新建「\(profile.name)」——把名字复制过来点「✏️ 改名」")
         refreshPanel()
@@ -533,6 +567,7 @@ final class KeyboardViewController: UIInputViewController {
         refreshProfiles()
         segments = GoutouSegmentStore.load()
         memory = GoutouMemoryRepository.getMemories(personID: activeProfileID)
+        resetMemoryBrowser()
         if let summary = GoutouProfileStore.activeProfile().summary {
             let restored = GoutouResult(headline: summary.headline, replies: summary.replies)
             lastResult = restored
@@ -575,6 +610,14 @@ final class KeyboardViewController: UIInputViewController {
     private func clipboardText() -> String? {
         let text = UIPasteboard.general.string?.trimmed
         return (text?.isEmpty ?? true) ? nil : text
+    }
+
+    /// 剪贴板第一行（记忆管理的搜索词 / 替换内容都只用第一行）
+    private func clipboardFirstLine() -> String? {
+        guard let text = clipboardText() else { return nil }
+        let first = text.split(separator: "\n").first.map(String.init) ?? text
+        let value = first.trimmed
+        return value.isEmpty ? nil : value
     }
 
     /// 背景优先读草稿（你在聊天框里打的那句），读不到再退到剪贴板。
@@ -917,16 +960,80 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
         case .importMemory:
             importMemoryFromClipboard()
 
-        case .deleteMemory(let id):
-            try? GoutouMemoryRepository.deleteMemory(id: id, personID: activeProfileID)
-            memory = GoutouMemoryRepository.getMemories(personID: activeProfileID)
+        case .setMemoryFilter(let filter):
+            memoryFilter = filter
             refreshPanel()
 
-        case .clearMemory:
-            memory = []
-            memoryNote = nil
-            try? GoutouMemoryRepository.deleteAllMemories(personID: activeProfileID)
+        case .setMemoryQuery(let query):
+            memoryQuery = query.trimmed
             refreshPanel()
+
+        case .searchMemoryFromClipboard:
+            guard let word = clipboardFirstLine() else {
+                panelState = .needsFullAccess("剪贴板里没读到内容。先把要搜的词复制好再点「📋 取词」（没开「允许完全访问」时读剪贴板会失败）。")
+                refreshPanel()
+                break
+            }
+            memoryQuery = word
+            memoryDetailID = nil
+            memoryEditDraft = nil
+            refreshPanel()
+
+        case .openMemory(let id):
+            memoryDetailID = id
+            memoryEditDraft = nil
+            refreshPanel()
+
+        case .closeMemoryDetail:
+            memoryDetailID = nil
+            memoryEditDraft = nil
+            refreshPanel()
+
+        case .archiveMemory(let id):
+            performMemoryAction(.archive(id), successNote: "已归档（不参与分析，随时可以恢复）")
+
+        case .unarchiveMemory(let id):
+            performMemoryAction(.unarchive(id), successNote: "已恢复，重新参与分析")
+
+        case .confirmMemory(let id):
+            performMemoryAction(.confirm(id), successNote: "已确认仍然有效，权重恢复")
+
+        case .beginMemoryEdit(let id):
+            guard let target = GoutouMemoryRepository.getMemory(id: id, personID: activeProfileID) else { break }
+            memoryDetailID = id
+            memoryEditDraft = MemoryEditDraft(memory: target)
+            refreshPanel()
+
+        case .cancelMemoryEdit:
+            memoryEditDraft = nil
+            refreshPanel()
+
+        case .cycleMemoryCategory:
+            memoryEditDraft?.nextCategory()
+            refreshPanel()
+
+        case .cycleMemoryImportance:
+            memoryEditDraft?.nextImportance()
+            refreshPanel()
+
+        case .useClipboardForMemoryContent:
+            guard var draft = memoryEditDraft else { break }
+            guard let word = clipboardFirstLine() else {
+                panelState = .needsFullAccess("剪贴板里没读到内容。先把新内容复制好再点「用剪贴板第一行替换内容」（没开「允许完全访问」时读剪贴板会失败）。")
+                refreshPanel()
+                break
+            }
+            draft.content = word
+            memoryEditDraft = draft
+            refreshPanel()
+
+        case .saveMemoryEdit(let id):
+            guard let draft = memoryEditDraft else { break }
+            memoryEditDraft = nil
+            performMemoryAction(
+                .update(id: id, content: draft.content, category: draft.category, importance: draft.importance),
+                successNote: "已保存这条记忆"
+            )
 
         case .selectProfile(let id):
             selectProfile(id: id)
@@ -964,5 +1071,24 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
             textDocumentProxy.insertText(text)
             hideMentorPanel()
         }
+    }
+
+    /// 记忆管理的写操作：一律走 Repository（personID 校验在那一层），
+    /// 失败就一个字都不改，并且提示用的是人话。
+    private func performMemoryAction(_ action: MemoryManagement.Action, successNote: String) {
+        do {
+            _ = try MemoryManagement.apply(action, personID: activeProfileID)
+            memory = GoutouMemoryRepository.getMemories(personID: activeProfileID)
+            memoryNote = successNote
+        } catch MemoryRepositoryError.personMismatch {
+            memoryNote = "这条记忆不属于当前人物，已拒绝"
+        } catch MemoryRepositoryError.emptyContent {
+            memoryNote = "内容不能为空"
+        } catch {
+            memoryNote = "这次没改成（记忆可能已经不在了）"
+        }
+        // 记忆变了：上一轮的筛选结果和缓存都不能再复用
+        lastMemorySelection = nil
+        refreshPanel()
     }
 }

@@ -25,6 +25,19 @@ struct GoutouPanelSnapshot {
     var configSummary: String
     /// 自动归纳完给一句提示（「已从本次聊天更新 X 条记忆」）
     var memoryNote: String?
+    /// 记忆管理页要的数据（控制器算好，视图只画）
+    var memoryItems: [MemoryListItem] = []
+    /// 每个筛选各多少条
+    var memoryCounts: [MemoryListFilter: Int] = [:]
+    var memoryFilter: MemoryListFilter = .all
+    /// 当前搜索词（空 = 不搜）
+    var memoryQuery: String = ""
+    /// 快捷搜索词（点一下就等于输入）
+    var memoryKeywords: [String] = []
+    /// 打开某条记忆的详情；nil = 停在列表
+    var memoryDetail: MemoryDetailModel? = nil
+    /// 正在编辑的草稿；nil = 不在编辑态
+    var memoryEditDraft: MemoryEditDraft? = nil
 }
 
 enum GoutouPanelAction {
@@ -34,8 +47,23 @@ enum GoutouPanelAction {
     case addSegment(GoutouSpeaker)
     case deleteSegment(Int)
     case importMemory
-    case deleteMemory(UUID)
-    case clearMemory
+    /// 记忆管理：筛选 / 搜索 / 打开详情
+    case setMemoryFilter(MemoryListFilter)
+    case setMemoryQuery(String)
+    case searchMemoryFromClipboard
+    case openMemory(UUID)
+    case closeMemoryDetail
+    /// 记忆管理：归档 / 恢复 / 确认仍然有效
+    case archiveMemory(UUID)
+    case unarchiveMemory(UUID)
+    case confirmMemory(UUID)
+    /// 记忆管理：编辑（内容从剪贴板取，键盘里没法弹软键盘）
+    case beginMemoryEdit(UUID)
+    case cancelMemoryEdit
+    case useClipboardForMemoryContent
+    case cycleMemoryCategory
+    case cycleMemoryImportance
+    case saveMemoryEdit(UUID)
     case selectProfile(UUID)
     case createProfile
     case deleteProfile(UUID)
@@ -91,6 +119,13 @@ final class GoutouPanelView: UIView {
     private var activeProfileID: UUID? = nil
     private var lastResult: GoutouResult?
     private var memoryNote: String?
+    private var memoryItems: [MemoryListItem] = []
+    private var memoryCounts: [MemoryListFilter: Int] = [:]
+    private var memoryFilter: MemoryListFilter = .all
+    private var memoryQuery = ""
+    private var memoryKeywords: [String] = []
+    private var memoryDetail: MemoryDetailModel?
+    private var memoryEditDraft: MemoryEditDraft?
     private var configSummary = ""
     /// 状态行点开＝看上下文明细；结果区默认只给结论 + 推荐回复，布局稳定
     private var showsContextDetail = false
@@ -283,6 +318,13 @@ final class GoutouPanelView: UIView {
         self.activeProfileID = snapshot.activeProfileID
         self.lastResult = snapshot.lastResult
         self.memoryNote = snapshot.memoryNote
+        self.memoryItems = snapshot.memoryItems
+        self.memoryCounts = snapshot.memoryCounts
+        self.memoryFilter = snapshot.memoryFilter
+        self.memoryQuery = snapshot.memoryQuery
+        self.memoryKeywords = snapshot.memoryKeywords
+        self.memoryDetail = snapshot.memoryDetail
+        self.memoryEditDraft = snapshot.memoryEditDraft
         self.configSummary = snapshot.configSummary
         renderStatus()
         rebuildBody()
@@ -346,7 +388,14 @@ final class GoutouPanelView: UIView {
             subview.removeFromSuperview()
         }
         if screen == .settings { buildSettingsBody(); return }
-        if screen == .memory { buildMemoryBody(); return }
+        if screen == .memory {
+            if memoryDetail != nil {
+                buildMemoryDetailBody()
+            } else {
+                buildMemoryBody()
+            }
+            return
+        }
         if screen == .profiles { buildProfilesBody(); return }
         if showsContextDetail {
             buildContextDetailBody()
@@ -609,58 +658,210 @@ final class GoutouPanelView: UIView {
         rebuildBody()
     }
 
-    /// 长期档案：每次分析都会带上，用来养这个军师。
+    /// 记忆管理（列表）：顶部条 + 筛选 + 搜索 + 快捷词 + 记忆行。
+    /// 全部数据由控制器算好（`MemoryManagement`），这里只负责画。
     private func buildMemoryBody() {
-        bodyStack.addArrangedSubview(makeNoticeLabel(
-            memory.isEmpty
-                ? "还没有长期档案。分析一次聊天会自动归纳；也可以把「她生日 3 月 5 日」这类事实复制过来手工导入。"
-                : "长期档案 \(memory.count) 条（每次分析都会带上；自动归纳的会自己合并去重）：",
-            color: memory.isEmpty ? GoutouTheme.secondary : GoutouTheme.text
-        ))
+        let name = profiles.first { $0.id == activeProfileID }?.name ?? "当前人物"
+        let archivedCount = memoryCounts[.archived] ?? 0
+        let header = archivedCount > 0
+            ? "🧠 \(name) · \(memory.count) 条记忆（已归档 \(archivedCount)）"
+            : "🧠 \(name) · \(memory.count) 条记忆"
+        bodyStack.addArrangedSubview(makeHeadlineLabel(header))
 
-        let stable = memory.filter { $0.category.isStable }
-        let recent = memory.filter { !$0.category.isStable }
-        if !stable.isEmpty {
-            bodyStack.addArrangedSubview(makeSectionHeader("稳定事实 \(stable.count)"))
-            for item in stable { bodyStack.addArrangedSubview(makeMemoryRow(item)) }
+        if let note = memoryNote, !note.isEmpty {
+            bodyStack.addArrangedSubview(makeNoticeLabel(note, color: GoutouTheme.secondary))
         }
-        if !recent.isEmpty {
-            bodyStack.addArrangedSubview(makeSectionHeader("近期状态 \(recent.count)"))
-            for item in recent { bodyStack.addArrangedSubview(makeMemoryRow(item)) }
+
+        // 筛选条：全部 / 近期 / 可能过期 / 已归档（带条数）
+        let chips = UIStackView()
+        chips.axis = .horizontal
+        chips.spacing = 4
+        chips.distribution = .fillEqually
+        for filter in MemoryListFilter.allCases {
+            let count = memoryCounts[filter] ?? 0
+            let chip = makeClosureKey(
+                title: "\(filter.label) \(count)",
+                background: memoryFilter == filter ? GoutouTheme.candidatePrimary : GoutouTheme.key,
+                fontSize: 12
+            ) {
+                self.delegate?.goutouPanel(self, didTrigger: .setMemoryFilter(filter))
+            }
+            chip.titleLabel?.adjustsFontSizeToFitWidth = true
+            chip.titleLabel?.minimumScaleFactor = 0.7
+            chip.accessibilityLabel = "筛选：\(filter.label)"
+            chip.heightAnchor.constraint(equalToConstant: 30).isActive = true
+            chips.addArrangedSubview(chip)
+        }
+        bodyStack.addArrangedSubview(chips)
+
+        // 搜索：键盘扩展里没法弹软键盘，所以搜索词来自剪贴板或下面的快捷词
+        let searchRow = UIStackView()
+        searchRow.axis = .horizontal
+        searchRow.spacing = 5
+        let queryText = memoryQuery.isEmpty ? "🔍 搜索记忆（点右边取词）" : "🔍 搜索：\(memoryQuery)"
+        let queryLabel = makeNoticeLabel(queryText, color: memoryQuery.isEmpty ? GoutouTheme.secondary : GoutouTheme.text)
+        queryLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        searchRow.addArrangedSubview(queryLabel)
+        let clearButton = makeClosureKey(title: "✕", background: GoutouTheme.function, fontSize: 13) {
+            self.delegate?.goutouPanel(self, didTrigger: .setMemoryQuery(""))
+        }
+        clearButton.widthAnchor.constraint(equalToConstant: 34).isActive = true
+        clearButton.accessibilityLabel = "清除搜索"
+        searchRow.addArrangedSubview(clearButton)
+        let clipboardButton = makeClosureKey(title: "📋 取词", background: GoutouTheme.function, fontSize: 13) {
+            self.delegate?.goutouPanel(self, didTrigger: .searchMemoryFromClipboard)
+        }
+        clipboardButton.widthAnchor.constraint(equalToConstant: 74).isActive = true
+        clipboardButton.accessibilityLabel = "用剪贴板第一行当搜索词"
+        searchRow.addArrangedSubview(clipboardButton)
+        bodyStack.addArrangedSubview(searchRow)
+
+        // 快捷词：这两条以上记忆里都出现过的词，点一下等于输入它
+        if !memoryKeywords.isEmpty {
+            let keywordRow = UIStackView()
+            keywordRow.axis = .horizontal
+            keywordRow.spacing = 4
+            keywordRow.distribution = .fillEqually
+            for keyword in memoryKeywords.prefix(6) {
+                let chip = makeClosureKey(
+                    title: keyword,
+                    background: memoryQuery == keyword ? GoutouTheme.candidatePrimary : GoutouTheme.key,
+                    fontSize: 12
+                ) {
+                    self.delegate?.goutouPanel(self, didTrigger: .setMemoryQuery(keyword))
+                }
+                chip.heightAnchor.constraint(equalToConstant: 28).isActive = true
+                chip.accessibilityLabel = "搜索词：\(keyword)"
+                keywordRow.addArrangedSubview(chip)
+            }
+            bodyStack.addArrangedSubview(keywordRow)
+        }
+
+        // 列表
+        if memoryItems.isEmpty {
+            bodyStack.addArrangedSubview(makeNoticeLabel(
+                memory.isEmpty
+                    ? "还没有记忆。分析一次聊天会自动归纳；也可以把「她生日 3 月 5 日」这类事实复制过来手工导入。"
+                    : "这个筛选／搜索词下没有记忆。",
+                color: GoutouTheme.secondary
+            ))
+        } else {
+            bodyStack.addArrangedSubview(makeSectionHeader("\(memoryFilter.label) · \(memoryItems.count) 条"))
+            for item in memoryItems { bodyStack.addArrangedSubview(makeMemoryRow(item)) }
         }
 
         bodyStack.addArrangedSubview(makeActionButton(title: "⬇️ 从剪贴板导入一条", background: GoutouTheme.blue, fontSize: 14) {
             self.delegate?.goutouPanel(self, didTrigger: .importMemory)
         })
-        if !memory.isEmpty {
-            bodyStack.addArrangedSubview(makeActionButton(title: "🗑 全部清空", background: GoutouTheme.function, fontSize: 13) {
-                self.delegate?.goutouPanel(self, didTrigger: .clearMemory)
-            })
-        }
     }
 
-    private func makeMemoryRow(_ item: PersonMemory) -> UIView {
-        let row = UIStackView()
-        row.axis = .horizontal
-        row.spacing = 6
-        row.alignment = .fill
+    /// 记忆详情：字段 + 操作（编辑 / 归档 / 恢复 / 确认仍然有效）
+    private func buildMemoryDetailBody() {
+        guard let detail = memoryDetail else {
+            buildMemoryBody()
+            return
+        }
+        bodyStack.addArrangedSubview(makeActionButton(title: "⬅ 返回列表", background: GoutouTheme.function, fontSize: 13) {
+            self.delegate?.goutouPanel(self, didTrigger: .closeMemoryDetail)
+        })
 
-        let label = makeNoticeLabel("[\(item.category.label)] \(item.content)", color: GoutouTheme.text)
-        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        row.addArrangedSubview(label)
+        if let draft = memoryEditDraft {
+            bodyStack.addArrangedSubview(makeSectionHeader("编辑记忆"))
+            bodyStack.addArrangedSubview(makeNoticeLabel("内容：\(draft.content)", color: GoutouTheme.text))
+            bodyStack.addArrangedSubview(makeNoticeLabel(
+                "id / 归属 / 创建时间都不会变；保存只更新内容和时间戳。",
+                color: GoutouTheme.secondary
+            ))
+            bodyStack.addArrangedSubview(makeActionButton(title: "📋 用剪贴板第一行替换内容", background: GoutouTheme.function, fontSize: 13) {
+                self.delegate?.goutouPanel(self, didTrigger: .useClipboardForMemoryContent)
+            })
+            bodyStack.addArrangedSubview(makeActionButton(
+                title: "分类：\(MemoryManagement.categoryTitle(draft.category)) ›",
+                background: GoutouTheme.function,
+                fontSize: 13
+            ) {
+                self.delegate?.goutouPanel(self, didTrigger: .cycleMemoryCategory)
+            })
+            bodyStack.addArrangedSubview(makeActionButton(
+                title: "重要度：\(draft.importance)/5 ›",
+                background: GoutouTheme.function,
+                fontSize: 13
+            ) {
+                self.delegate?.goutouPanel(self, didTrigger: .cycleMemoryImportance)
+            })
+            let saveRow = UIStackView()
+            saveRow.axis = .horizontal
+            saveRow.spacing = 5
+            saveRow.distribution = .fillEqually
+            let save = makeClosureKey(title: "✅ 保存", background: GoutouTheme.blue, fontSize: 14) {
+                self.delegate?.goutouPanel(self, didTrigger: .saveMemoryEdit(detail.id))
+            }
+            save.accessibilityLabel = "保存这条记忆"
+            saveRow.addArrangedSubview(save)
+            let cancel = makeClosureKey(title: "取消", background: GoutouTheme.function, fontSize: 14) {
+                self.delegate?.goutouPanel(self, didTrigger: .cancelMemoryEdit)
+            }
+            cancel.accessibilityLabel = "取消编辑"
+            saveRow.addArrangedSubview(cancel)
+            bodyStack.addArrangedSubview(saveRow)
+            return
+        }
 
-        let delete = NineKeyButton(type: .system)
-        delete.setTitle("✕", for: .normal)
-        delete.titleLabel?.font = .systemFont(ofSize: 14)
-        delete.applyStyle(background: GoutouTheme.function)
-        delete.accessibilityLabel = "删掉这条记忆"
-        delete.addAction(UIAction { [weak self] _ in
+        for field in detail.fields {
+            bodyStack.addArrangedSubview(makeNoticeLabel("\(field.name)：\(field.value)", color: GoutouTheme.text))
+        }
+        if !detail.badges.isEmpty {
+            bodyStack.addArrangedSubview(makeNoticeLabel(detail.badges.map { "[\($0)]" }.joined(separator: " "), color: GoutouTheme.warning))
+        }
+
+        if detail.isStale {
+            bodyStack.addArrangedSubview(makeActionButton(title: "✅ 确认仍然有效", background: GoutouTheme.blue, fontSize: 14) {
+                self.delegate?.goutouPanel(self, didTrigger: .confirmMemory(detail.id))
+            })
+        }
+
+        let actions = UIStackView()
+        actions.axis = .horizontal
+        actions.spacing = 5
+        actions.distribution = .fillEqually
+        if detail.archived {
+            let restore = makeClosureKey(title: "↩️ 恢复", background: GoutouTheme.blue, fontSize: 14) {
+                self.delegate?.goutouPanel(self, didTrigger: .unarchiveMemory(detail.id))
+            }
+            restore.accessibilityLabel = "恢复这条记忆"
+            actions.addArrangedSubview(restore)
+        } else {
+            let edit = makeClosureKey(title: "✏️ 编辑", background: GoutouTheme.key, fontSize: 14) {
+                self.delegate?.goutouPanel(self, didTrigger: .beginMemoryEdit(detail.id))
+            }
+            edit.accessibilityLabel = "编辑这条记忆"
+            actions.addArrangedSubview(edit)
+            let archive = makeClosureKey(title: "📥 手动归档", background: GoutouTheme.function, fontSize: 14) {
+                self.delegate?.goutouPanel(self, didTrigger: .archiveMemory(detail.id))
+            }
+            archive.accessibilityLabel = "手动归档这条记忆"
+            actions.addArrangedSubview(archive)
+        }
+        bodyStack.addArrangedSubview(actions)
+    }
+
+    /// 一条记忆：整行可点，进详情。按 6.9 要求**这里没有删除键**（要清理就归档）。
+    private func makeMemoryRow(_ item: MemoryListItem) -> UIView {
+        let button = NineKeyButton(type: .system)
+        let badges = item.badges.isEmpty ? "" : "  " + item.badges.map { "[\($0)]" }.joined()
+        button.setTitle("\(item.content)\n\(item.subtitle)\(badges)", for: .normal)
+        button.titleLabel?.font = .systemFont(ofSize: 13)
+        button.titleLabel?.numberOfLines = 3
+        button.titleLabel?.lineBreakMode = .byTruncatingTail
+        button.contentHorizontalAlignment = .left
+        button.titleEdgeInsets = UIEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
+        button.applyStyle(background: item.archived ? GoutouTheme.function : GoutouTheme.key)
+        button.accessibilityLabel = "记忆：\(item.content)"
+        button.addAction(UIAction { [weak self] _ in
             guard let self = self else { return }
-            self.delegate?.goutouPanel(self, didTrigger: .deleteMemory(item.id))
+            self.delegate?.goutouPanel(self, didTrigger: .openMemory(item.id))
         }, for: .touchUpInside)
-        delete.widthAnchor.constraint(equalToConstant: 36).isActive = true
-        row.addArrangedSubview(delete)
-        return row
+        return button
     }
 
     private func makeLoadingRow() -> UIView {
@@ -758,7 +959,12 @@ final class GoutouPanelView: UIView {
     }
 
     @objc private func didTapMemory() {
+        let leaving = screen == .memory
         setScreen(.memory)
+        if leaving {
+            // 离开记忆页：把详情和草稿收起来，下次进来是干净的列表
+            delegate?.goutouPanel(self, didTrigger: .closeMemoryDetail)
+        }
     }
 
     @objc private func didTapProfiles() {
