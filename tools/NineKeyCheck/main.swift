@@ -1428,7 +1428,11 @@ expectEqual(archivedByUser?.content ?? "", bananaPref.content, "归档不改内�
 // 测试 15：归档之后仍然在数据库里
 let afterArchiveAll = GoutouMemoryRepository.getMemories(personID: manageProfile.id, includeArchived: true, from: manageSuite)
 expect(afterArchiveAll.contains { $0.id == bananaPref.id }, "归档不删数据")
-expectEqual(GoutouMemoryRepository.getMemories(personID: manageProfile.id, from: manageSuite).count, afterArchiveAll.count - 1, "默认查询少一条（归档的不算）")
+expectEqual(
+    GoutouMemoryRepository.getMemories(personID: manageProfile.id, from: manageSuite).count,
+    afterArchiveAll.filter { !$0.archived }.count,
+    "默认查询只返回未归档的"
+)
 expectEqual(
     MemoryManagement.items(personID: manageProfile.id, memories: afterArchiveAll, filter: .archived, now: manageNow).count,
     2,
