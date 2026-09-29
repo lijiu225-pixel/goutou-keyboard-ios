@@ -39,6 +39,10 @@ func expectEqual(_ actual: Int, _ expected: Int, _ label: String) {
     expect(actual == expected, "\(label) → 期望 \(expected)，实际 \(actual)")
 }
 
+func expectEqual(_ actual: Double, _ expected: Double, _ label: String) {
+    expect(abs(actual - expected) < 0.000_001, "\(label) → 期望 \(expected)，实际 \(actual)")
+}
+
 /// 依次按下一串数字键。
 func press(_ engine: NineKeyInputEngine, _ keys: String) {
     for key in keys {
@@ -1014,13 +1018,13 @@ expectEqual(GoutouMemoryRepository.getStaleMemories(personID: decayOther.id, at:
 expectEqual(GoutouMemoryRepository.refreshStaleState(personID: decayProfile.id, at: decayNow, from: decaySuite), 0, "重算只算自己那份")
 
 // 测试 19：重启（重新从 UserDefaults 读）后一切正常
-let reloadedBook = GoutouProfileStore.loadBook(from: decaySuite)
-let reloadedA = reloadedBook.profiles.first { $0.id == decayProfile.id }
+let decayReloadedBook = GoutouProfileStore.loadBook(from: decaySuite)
+let reloadedA = decayReloadedBook.profiles.first { $0.id == decayProfile.id }
 expectEqual(reloadedA?.memory.count ?? 0, 4, "重启后条数不变")
 expect(reloadedA?.memory.first { $0.id == weather45.id }?.confidence == 0.92, "重启后原始 confidence 不变")
 expect(reloadedA?.memory.first { $0.id == weather90.id }?.lastConfirmedAt == decayNow, "重启后 lastConfirmedAt 还在")
 expect(
-    MemoryDecay.isStale(reloadedBook.profiles.first { $0.id == decayOther.id }?.memory.first ?? otherStale, at: decayNow),
+    MemoryDecay.isStale(decayReloadedBook.profiles.first { $0.id == decayOther.id }?.memory.first ?? otherStale, at: decayNow),
     "重启后 stale 照样算得出来（本来就是算的，不靠库里存 Bool）"
 )
 
