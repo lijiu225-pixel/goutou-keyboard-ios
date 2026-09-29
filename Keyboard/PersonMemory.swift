@@ -136,7 +136,11 @@ struct PersonMemory: Codable, Equatable, Identifiable {
         case id, personID, content, category, importance, confidence
         case createdAt, updatedAt, lastConfirmedAt
         case sourceType, sourceSessionID, sourceMessageStart, sourceMessageEnd, archived
-        /// v1 的老字段：字符串 "manual" / "extract"
+    }
+
+    /// v1 的老字段（字符串 "manual" / "extract"）：单开一个 key 集合去读，
+    /// 不塞进主 CodingKeys——否则合成的 `encode(to:)` 会因为多出一个没有对应属性的 key 而失败。
+    private enum LegacyKeys: String, CodingKey {
         case source
     }
 
@@ -156,7 +160,8 @@ struct PersonMemory: Codable, Equatable, Identifiable {
 
         if let type = try container.decodeIfPresent(MemorySourceType.self, forKey: .sourceType) {
             sourceType = type
-        } else if let legacy = try container.decodeIfPresent(String.self, forKey: .source) {
+        } else if let legacy = try? decoder.container(keyedBy: LegacyKeys.self)
+            .decodeIfPresent(String.self, forKey: .source), let legacy = legacy {
             sourceType = MemorySourceType.fromLegacy(legacy)
         } else {
             sourceType = .manual
