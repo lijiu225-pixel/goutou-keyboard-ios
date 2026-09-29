@@ -276,14 +276,14 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func addSegment(_ speaker: GoutouSpeaker) {
-        guard segments.count < 3 else {
-            panelState = .empty(banner: "上下文最多 3 段，先点下面的「清空上下文」")
+        guard segments.count < GoutouPanelView.maxSegments else {
+            panelState = .empty(banner: "上下文最多 \(GoutouPanelView.maxSegments) 段，先点下面的「清空上下文」")
             refreshPanel()
             return
         }
         let content = speaker == .background ? (draftText() ?? clipboardText()) : clipboardText()
         guard let text = content, !text.isEmpty else {
-            panelState = .empty(banner: speaker == .background
+            panelState = .needsFullAccess(speaker == .background
                 ? "草稿和剪贴板都没读到内容。要么先打一句背景，要么复制一段再点。没开「允许完全访问」时读剪贴板会失败。"
                 : "剪贴板里没读到内容。要么剪贴板是空的，要么没开「允许完全访问」。")
             refreshPanel()
@@ -296,7 +296,7 @@ final class KeyboardViewController: UIInputViewController {
 
     private func importConfigFromClipboard() {
         guard let text = UIPasteboard.general.string else {
-            panelState = .empty(banner: "剪贴板是空的：先在 App 里点「复制配置」")
+            panelState = .needsFullAccess("剪贴板里没读到内容。要么先在 App 里点「复制配置」，要么没开「允许完全访问」。")
             refreshPanel()
             return
         }

@@ -4,6 +4,8 @@ import UIKit
 enum GoutouPanelState {
     /// 还没有结果；可选带一条顶部提示（读不到剪贴板 / 没开完全访问…）。
     case empty(banner: String?)
+    /// 读不到剪贴板时的提示：额外给一个「复制开启完全访问的步骤」按钮。
+    case needsFullAccess(String)
     case loading
     case failed(String)
     case ready(GoutouResult)
@@ -41,6 +43,8 @@ final class GoutouPanelView: UIView {
 
     /// 没开「允许完全访问」时，一键复制这句给用户照着走。
     static let fullAccessSteps = "设置 → 通用 → 键盘 → 狗头军师 → 允许完全访问"
+    /// 上下文最多叠几段（和控制器里的判断共用这一个数）。
+    static let maxSegments = 6
 
     private let topBarHeight: CGFloat = 30
     private let statusHeight: CGFloat = 26
@@ -214,10 +218,19 @@ final class GoutouPanelView: UIView {
             statusLabel.textColor = GoutouTheme.secondary
             return
         }
-        if case .empty(let banner) = state, let banner = banner, !banner.isEmpty {
+        switch state {
+        case .empty(let banner):
+            if let banner = banner, !banner.isEmpty {
+                statusLabel.text = banner
+                statusLabel.textColor = GoutouTheme.warning
+                return
+            }
+        case .needsFullAccess(let banner):
             statusLabel.text = banner
             statusLabel.textColor = GoutouTheme.warning
             return
+        default:
+            break
         }
         statusLabel.text = "上下文 0 段 · 复制对方的话，点 👤对方 加进来"
         statusLabel.textColor = GoutouTheme.secondary
@@ -236,26 +249,14 @@ final class GoutouPanelView: UIView {
         case .empty(let banner):
             if let banner = banner, !banner.isEmpty {
                 bodyStack.addArrangedSubview(makeNoticeLabel(banner, color: GoutouTheme.warning))
-                bodyStack.addArrangedSubview(makeActionButton(title: "复制开启完全访问的步骤", background: GoutouTheme.function, fontSize: 13) {
-                    self.delegate?.goutouPanel(self, didTrigger: .copyFullAccessSteps)
-                })
             }
-            if segments.isEmpty {
-                bodyStack.addArrangedSubview(makeNoticeLabel(
-                    "1. 长按对方的消息 → 复制\n2. 点上面 👤对方 / 🙋我 把内容加进来（最多 3 段）\n3. 点 ⟳ 分析，选一条话术上屏",
-                    color: GoutouTheme.secondary
-                ))
-            } else {
-                for (index, segment) in segments.enumerated() {
-                    bodyStack.addArrangedSubview(makeNoticeLabel(
-                        "\(index + 1). \(segment.speaker.promptLabel)：\(segment.text)",
-                        color: GoutouTheme.text
-                    ))
-                }
-                bodyStack.addArrangedSubview(makeActionButton(title: "✕ 清空上下文", background: GoutouTheme.function, fontSize: 13) {
-                    self.delegate?.goutouPanel(self, didTrigger: .clearSegments)
-                })
-            }
+            appendSegmentList()
+        case .needsFullAccess(let banner):
+            bodyStack.addArrangedSubview(makeNoticeLabel(banner, color: GoutouTheme.warning))
+            bodyStack.addArrangedSubview(makeActionButton(title: "复制开启完全访问的步骤", background: GoutouTheme.function, fontSize: 13) {
+                self.delegate?.goutouPanel(self, didTrigger: .copyFullAccessSteps)
+            })
+            appendSegmentList()
         case .loading:
             bodyStack.addArrangedSubview(makeLoadingRow())
         case .failed(let message):
@@ -276,6 +277,26 @@ final class GoutouPanelView: UIView {
                 self.delegate?.goutouPanel(self, didTrigger: .toggleSettings)
             })
         }
+    }
+
+    /// 上下文列表 + 清空按钮；没有上下文时给三步说明。
+    private func appendSegmentList() {
+        if segments.isEmpty {
+            bodyStack.addArrangedSubview(makeNoticeLabel(
+                "1. 长按对方的消息 → 复制\n2. 点上面 👤对方 / 🙋我 把内容加进来（最多 \(GoutouPanelView.maxSegments) 段）\n3. 点 ⟳ 分析，选一条话术上屏",
+                color: GoutouTheme.secondary
+            ))
+            return
+        }
+        for (index, segment) in segments.enumerated() {
+            bodyStack.addArrangedSubview(makeNoticeLabel(
+                "\(index + 1). \(segment.speaker.promptLabel)：\(segment.text)",
+                color: GoutouTheme.text
+            ))
+        }
+        bodyStack.addArrangedSubview(makeActionButton(title: "✕ 清空上下文", background: GoutouTheme.function, fontSize: 13) {
+            self.delegate?.goutouPanel(self, didTrigger: .clearSegments)
+        })
     }
 
     private func buildSettingsBody() {
