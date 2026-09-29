@@ -58,6 +58,8 @@ final class KeyboardViewController: UIInputViewController {
     private var profiles: [GoutouPersonProfile] = []
     private var activeProfileID: String = ""
     private var panelState: GoutouPanelState = .empty(banner: nil)
+    /// 上一次成功的结果（失败时也留着，结果区不会空掉）
+    private var lastResult: GoutouResult?
     private var panelTask: URLSessionTask?
     private var isPanelVisible = false
     private var config: GoutouConfig? = GoutouConfig.load()
@@ -452,14 +454,35 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func refreshPanel() {
-        mentorPanel?.render(
+        mentorPanel?.render(GoutouPanelSnapshot(
             state: panelState,
             segments: segments,
             memory: memory,
             profiles: profiles,
             activeProfileID: activeProfileID,
+            lastResult: lastResult,
             configSummary: config?.summary ?? ""
-        )
+        ))
+    }
+
+    /// 给用户看的一句话；技术原文留给「查看详情」。
+    private static func friendlyFailureSummary(_ error: GoutouAIError) -> String {
+        switch error {
+        case .badJSON, .badURL:
+            return "分析失败，返回格式异常"
+        case .reasoningOnly:
+            return "分析失败：模型只回了思考，没有正文"
+        case .timeout:
+            return "分析失败：等太久了（超时）"
+        case .network:
+            return "分析失败：网络没通"
+        case .http:
+            return "分析失败：接口返回了错误"
+        case .empty:
+            return "分析失败：接口没给内容"
+        case .notConfigured:
+            return "还没配置 AI 接口"
+        }
     }
 
     /// 重新读一遍档案总表（改过档案之后调一次）。
@@ -478,8 +501,11 @@ final class KeyboardViewController: UIInputViewController {
         panelTask?.cancel()
         panelTask = nil
         if let summary = GoutouProfileStore.activeProfile().summary {
-            panelState = .ready(GoutouResult(headline: summary.headline, replies: summary.replies))
+            let restored = GoutouResult(headline: summary.headline, replies: summary.replies)
+            lastResult = restored
+            panelState = .ready(restored)
         } else {
+            lastResult = nil
             panelState = .empty(banner: nil)
         }
         refreshPanel()
@@ -490,6 +516,7 @@ final class KeyboardViewController: UIInputViewController {
         refreshProfiles()
         segments = []
         memory = []
+        lastResult = nil
         panelState = .empty(banner: "已新建「\(profile.name)」——把名字复制过来点「✏️ 改名」")
         refreshPanel()
     }
@@ -499,12 +526,19 @@ final class KeyboardViewController: UIInputViewController {
         refreshProfiles()
         segments = GoutouSegmentStore.load()
         memory = GoutouMemoryStore.load()
-        panelState = .empty(banner: nil)
+        if let summary = GoutouProfileStore.activeProfile().summary {
+            let restored = GoutouResult(headline: summary.headline, replies: summary.replies)
+            lastResult = restored
+            panelState = .ready(restored)
+        } else {
+            lastResult = nil
+            panelState = .empty(banner: nil)
+        }
         refreshPanel()
     }
 
     /// 没有 App Group，没法在键盘里打字输入名字：拿剪贴板第一行当名字。
-    private func renameActiveProfile() {
+    private func renameProfile(id: String) {
         guard let text = clipboardText() else {
             panelState = .needsFullAccess("剪贴板里没读到内容。先把名字复制好再来改名（没开「允许完全访问」时读剪贴板会失败）。")
             refreshPanel()
@@ -517,7 +551,7 @@ final class KeyboardViewController: UIInputViewController {
             refreshPanel()
             return
         }
-        GoutouProfileStore.rename(id: activeProfileID, to: name)
+        GoutouProfileStore.rename(id: id, to: name)
         refreshProfiles()
         panelState = .empty(banner: "已改名为「\(name)」")
         refreshPanel()
@@ -599,7 +633,10 @@ final class KeyboardViewController: UIInputViewController {
             return
         }
         guard !skillText.isEmpty else {
-            panelState = .failed("军师人格文件（GoutouSkill.md）没打进包，需要重新构建")
+            panelState = .failed(
+                summary: "分析失败：军师人格没打进包",
+                detail: "GoutouSkill.md 不在 Keyboard Extension 的 bundle 里，需要重新构建一次。"
+            )
             refreshPanel()
             return
         }
@@ -620,10 +657,14 @@ final class KeyboardViewController: UIInputViewController {
                 self.panelTask = nil
                 switch result {
                 case .success(let value):
+                    self.lastResult = value
                     self.panelState = .ready(value)
                     self.saveSummary(value)
                 case .failure(let error):
-                    self.panelState = .failed(error.message)
+                    self.panelState = .failed(
+                        summary: KeyboardViewController.friendlyFailureSummary(error),
+                        detail: error.message
+                    )
                 }
                 self.refreshPanel()
             }
@@ -778,8 +819,8 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
         case .deleteProfile(let id):
             deleteProfile(id: id)
 
-        case .renameActiveProfile:
-            renameActiveProfile()
+        case .renameProfile(let id):
+            renameProfile(id: id)
 
         case .analyze:
             startAnalysis()

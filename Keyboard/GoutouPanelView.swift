@@ -7,9 +7,22 @@ enum GoutouPanelState {
     /// 读不到剪贴板时的提示：额外给一个「复制开启完全访问的步骤」按钮。
     case needsFullAccess(String)
     case loading
-    case failed(String)
+    /// 失败：`summary` 给人看（「分析失败，返回格式异常」），`detail` 是技术原文（放「查看详情」里）
+    case failed(summary: String, detail: String)
     case ready(GoutouResult)
     case needsConfig
+}
+
+/// 面板一次渲染需要的全部数据（控制器组装好丢进来）。
+struct GoutouPanelSnapshot {
+    var state: GoutouPanelState
+    var segments: [GoutouSegment]
+    var memory: [String]
+    var profiles: [GoutouPersonProfile]
+    var activeProfileID: String
+    /// 上一次成功的结果——失败时也保留，结果区高度不会忽上忽下
+    var lastResult: GoutouResult?
+    var configSummary: String
 }
 
 enum GoutouPanelAction {
@@ -24,7 +37,7 @@ enum GoutouPanelAction {
     case selectProfile(String)
     case createProfile
     case deleteProfile(String)
-    case renameActiveProfile
+    case renameProfile(String)
     case analyze
     case cancel
     case clearSegments
@@ -59,19 +72,31 @@ final class GoutouPanelView: UIView {
     private let spacing: CGFloat = 5
     private let padding: CGFloat = 6
 
-    private let statusLabel = UILabel()
     private let bodyScroll = UIScrollView()
     private let bodyStack = UIStackView()
     private let settingsButton = NineKeyButton(type: .system)
     private let memoryButton = NineKeyButton(type: .system)
     private let profileButton = NineKeyButton(type: .system)
+    private let analyzeButton = NineKeyButton(type: .system)
+    private let analyzeSpinner = UIActivityIndicatorView(style: .medium)
+    private let statusButton = NineKeyButton(type: .system)
+    private var speakerButtons: [GoutouSpeaker: NineKeyButton] = [:]
 
     private var state: GoutouPanelState = .empty(banner: nil)
     private var segments: [GoutouSegment] = []
     private var memory: [String] = []
     private var profiles: [GoutouPersonProfile] = []
     private var activeProfileID = ""
+    private var lastResult: GoutouResult?
     private var configSummary = ""
+    /// 状态行点开＝看上下文明细；结果区默认只给结论 + 推荐回复，布局稳定
+    private var showsContextDetail = false
+    /// 失败时是否展开了技术详情
+    private var showsFailureDetail = false
+    /// 正在管理哪个人物（重命名 / 删除都放这儿，主界面不放）
+    private var managingProfileID: String?
+    /// 删除要二次确认
+    private var confirmingDelete = false
     private enum Screen { case main, settings, memory, profiles }
     private var screen: Screen = .main
 
@@ -149,15 +174,25 @@ final class GoutouPanelView: UIView {
     private func makeStatusRow() -> UIView {
         let container = UIView()
         container.heightAnchor.constraint(equalToConstant: statusHeight).isActive = true
-        statusLabel.font = .systemFont(ofSize: 12)
-        statusLabel.textColor = GoutouTheme.secondary
-        statusLabel.lineBreakMode = .byTruncatingTail
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(statusLabel)
+        // 状态行只写「上下文 N 段 · M 字」；点一下才展开说话人明细（后者的旧写法太挤）
+        statusButton.titleLabel?.font = .systemFont(ofSize: 12)
+        statusButton.titleLabel?.lineBreakMode = .byTruncatingTail
+        statusButton.contentHorizontalAlignment = .leading
+        statusButton.titleEdgeInsets = UIEdgeInsets(top: 0, left: 6, bottom: 0, right: 6)
+        statusButton.normalColor = .clear
+        statusButton.pressedColor = GoutouTheme.pressed
+        statusButton.layer.cornerRadius = 5
+        statusButton.layer.masksToBounds = true
+        statusButton.layer.borderWidth = 0
+        statusButton.accessibilityLabel = "上下文明细"
+        statusButton.addTarget(self, action: #selector(didTapStatus), for: .touchUpInside)
+        statusButton.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(statusButton)
         NSLayoutConstraint.activate([
-            statusLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 4),
-            statusLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -4),
-            statusLabel.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            statusButton.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            statusButton.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            statusButton.topAnchor.constraint(equalTo: container.topAnchor),
+            statusButton.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
         return container
     }
@@ -169,29 +204,42 @@ final class GoutouPanelView: UIView {
         row.distribution = .fillEqually
         row.heightAnchor.constraint(equalToConstant: speakerHeight).isActive = true
 
-        row.addArrangedSubview(makeClosureKey(title: GoutouSpeaker.opponent.buttonTitle, background: GoutouTheme.function, fontSize: 13) {
-            self.delegate?.goutouPanel(self, didTrigger: .addSegment(.opponent))
-        })
-        row.addArrangedSubview(makeClosureKey(title: GoutouSpeaker.me.buttonTitle, background: GoutouTheme.function, fontSize: 13) {
-            self.delegate?.goutouPanel(self, didTrigger: .addSegment(.me))
-        })
-        row.addArrangedSubview(makeClosureKey(title: GoutouSpeaker.background.buttonTitle, background: GoutouTheme.function, fontSize: 13) {
-            self.delegate?.goutouPanel(self, didTrigger: .addSegment(.background))
-        })
-        memoryButton.setTitle(memoryButtonTitle, for: .normal)
+        for speaker in [GoutouSpeaker.opponent, .me, .background] {
+            let button = makeClosureKey(title: speaker.buttonTitle, background: GoutouTheme.function, fontSize: 13) {
+                self.delegate?.goutouPanel(self, didTrigger: .addSegment(speaker))
+            }
+            button.titleLabel?.adjustsFontSizeToFitWidth = true
+            button.titleLabel?.minimumScaleFactor = 0.75
+            speakerButtons[speaker] = button
+            row.addArrangedSubview(button)
+        }
+
         memoryButton.titleLabel?.font = .systemFont(ofSize: 13)
+        memoryButton.titleLabel?.adjustsFontSizeToFitWidth = true
+        memoryButton.titleLabel?.minimumScaleFactor = 0.75
         memoryButton.applyStyle(background: GoutouTheme.function)
         memoryButton.accessibilityLabel = "长期档案（记忆）"
         memoryButton.addTarget(self, action: #selector(didTapMemory), for: .touchUpInside)
         row.addArrangedSubview(memoryButton)
-        row.addArrangedSubview(makeClosureKey(title: "⟳分析", background: GoutouTheme.blue, fontSize: 13) {
-            self.delegate?.goutouPanel(self, didTrigger: .analyze)
-        })
+
+        analyzeButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+        analyzeButton.applyStyle(background: GoutouTheme.blue)
+        analyzeButton.accessibilityLabel = "开始分析"
+        analyzeButton.addTarget(self, action: #selector(didTapAnalyze), for: .touchUpInside)
+        analyzeSpinner.color = .white
+        analyzeSpinner.hidesWhenStopped = true
+        analyzeSpinner.translatesAutoresizingMaskIntoConstraints = false
+        analyzeButton.addSubview(analyzeSpinner)
+        NSLayoutConstraint.activate([
+            analyzeSpinner.centerXAnchor.constraint(equalTo: analyzeButton.centerXAnchor),
+            analyzeSpinner.centerYAnchor.constraint(equalTo: analyzeButton.centerYAnchor),
+        ])
+        row.addArrangedSubview(analyzeButton)
         return row
     }
 
     private var memoryButtonTitle: String {
-        memory.isEmpty ? "🧠 记忆" : "🧠 记忆\(memory.count)"
+        memory.isEmpty ? "🧠 记忆" : "🧠 记忆（\(memory.count)）"
     }
 
     private func makeBodyArea() -> UIView {
@@ -224,60 +272,68 @@ final class GoutouPanelView: UIView {
 
     // MARK: - 渲染
 
-    func render(
-        state: GoutouPanelState,
-        segments: [GoutouSegment],
-        memory: [String],
-        profiles: [GoutouPersonProfile],
-        activeProfileID: String,
-        configSummary: String
-    ) {
-        self.state = state
-        self.segments = segments
-        self.memory = memory
-        self.profiles = profiles
-        self.activeProfileID = activeProfileID
-        self.configSummary = configSummary
+    func render(_ snapshot: GoutouPanelSnapshot) {
+        self.state = snapshot.state
+        self.segments = snapshot.segments
+        self.memory = snapshot.memory
+        self.profiles = snapshot.profiles
+        self.activeProfileID = snapshot.activeProfileID
+        self.lastResult = snapshot.lastResult
+        self.configSummary = snapshot.configSummary
         renderStatus()
         rebuildBody()
-        updateTopTitles()
+        updateButtons()
     }
 
-    /// 面板顶部几个入口的标题：停在那一屏时显示「返回」。
-    private func updateTopTitles() {
+    /// 顶部入口 + 归属键的状态：停在那一屏显示「返回」、已有内容的键打勾、没内容的淡一点。
+    private func updateButtons() {
         settingsButton.setTitle(screen == .settings ? "⬅ 返回" : "⚙ 设置", for: .normal)
         memoryButton.setTitle(screen == .memory ? "⬅ 返回" : memoryButtonTitle, for: .normal)
-        let name = profiles.first { $0.id == activeProfileID }?.name ?? "人物"
-        profileButton.setTitle(screen == .profiles ? "⬅ 返回" : "👤 \(name)", for: .normal)
+        let name = profiles.first { $0.id == activeProfileID }?.name ?? "当前人物"
+        profileButton.setTitle(screen == .profiles ? "⬅ 返回" : "狗头军师 · \(name)", for: .normal)
+
+        // 归属键：加了就打勾，没加就淡一点
+        for (speaker, button) in speakerButtons {
+            let filled = segments.contains { $0.speaker == speaker }
+            button.setTitle("\(speaker.buttonTitle)\(filled ? " ✓" : "")", for: .normal)
+            button.alpha = filled ? 1 : 0.6
+        }
+        memoryButton.alpha = memory.isEmpty ? 0.6 : 1
+
+        // 分析键三态：分析 → 分析中…（转圈 + 禁用）→ 重新分析
+        if case .loading = state {
+            analyzeButton.setTitle("", for: .normal)
+            analyzeButton.isEnabled = false
+            analyzeButton.alpha = 1
+            analyzeSpinner.startAnimating()
+        } else {
+            analyzeSpinner.stopAnimating()
+            analyzeButton.isEnabled = true
+            analyzeButton.setTitle(lastResult == nil ? "⟳分析" : "重新分析", for: .normal)
+        }
     }
 
     private func renderStatus() {
-        if !segments.isEmpty {
-            let listed = segments.enumerated()
-                .map { "\($0.offset + 1).\($0.element.speaker.promptLabel)" }
-                .joined(separator: " ")
-            let total = segments.reduce(0) { $0 + $1.text.count }
-            let tooLong = total > GoutouPanelView.contextWarningLength
-            statusLabel.text = "上下文 \(segments.count) 段 · 约 \(total) 字\(tooLong ? "（偏长，可能要等更久）" : "") · \(listed)"
-            statusLabel.textColor = tooLong ? GoutouTheme.warning : GoutouTheme.secondary
-            return
-        }
+        // 有需要提醒的事情（读不到剪贴板等）优先显示提示，否则只写「上下文 N 段 · M 字」
+        var banner: String?
         switch state {
-        case .empty(let banner):
-            if let banner = banner, !banner.isEmpty {
-                statusLabel.text = banner
-                statusLabel.textColor = GoutouTheme.warning
-                return
-            }
-        case .needsFullAccess(let banner):
-            statusLabel.text = banner
-            statusLabel.textColor = GoutouTheme.warning
-            return
+        case .empty(let text):
+            if let text = text, !text.isEmpty { banner = text }
+        case .needsFullAccess(let text):
+            banner = text
         default:
             break
         }
-        statusLabel.text = "上下文 0 段 · 复制对方的话，点 👤对方 加进来"
-        statusLabel.textColor = GoutouTheme.secondary
+        if let banner = banner {
+            statusButton.setTitle(banner, for: .normal)
+            statusButton.setTitleColor(GoutouTheme.warning, for: .normal)
+            return
+        }
+        let total = segments.reduce(0) { $0 + $1.text.count }
+        let tooLong = total > GoutouPanelView.contextWarningLength
+        let suffix = showsContextDetail ? "（点一下收起明细）" : ""
+        statusButton.setTitle("上下文 \(segments.count) 段 · \(total) 字\(tooLong ? "（偏长）" : "")\(suffix)", for: .normal)
+        statusButton.setTitleColor(tooLong ? GoutouTheme.warning : GoutouTheme.secondary, for: .normal)
     }
 
     private func rebuildBody() {
@@ -288,42 +344,110 @@ final class GoutouPanelView: UIView {
         if screen == .settings { buildSettingsBody(); return }
         if screen == .memory { buildMemoryBody(); return }
         if screen == .profiles { buildProfilesBody(); return }
+        if showsContextDetail {
+            buildContextDetailBody()
+        } else {
+            buildResultBody()
+        }
+    }
+
+    /// 主屏：状态块（加载/失败/缺配置）+ 固定结构的「分析结论 / 推荐回复」。
+    /// 结构固定是有意的——有没有结果都长一样，高度不会忽上忽下。
+    private func buildResultBody() {
         switch state {
-        case .empty(let banner):
-            if let banner = banner, !banner.isEmpty {
-                bodyStack.addArrangedSubview(makeNoticeLabel(banner, color: GoutouTheme.warning))
-            }
-            appendSegmentList()
-        case .needsFullAccess(let banner):
-            bodyStack.addArrangedSubview(makeNoticeLabel(banner, color: GoutouTheme.warning))
-            bodyStack.addArrangedSubview(makeActionButton(title: "复制开启完全访问的步骤", background: GoutouTheme.function, fontSize: 13) {
-                self.delegate?.goutouPanel(self, didTrigger: .copyFullAccessSteps)
-            })
-            appendSegmentList()
         case .loading:
             bodyStack.addArrangedSubview(makeLoadingRow())
-        case .failed(let message):
-            bodyStack.addArrangedSubview(makeNoticeLabel(message, color: GoutouTheme.warning))
-            bodyStack.addArrangedSubview(makeActionButton(title: "重试", background: GoutouTheme.blue, fontSize: 14) {
+        case .failed(let summary, let detail):
+            bodyStack.addArrangedSubview(makeNoticeLabel(summary, color: GoutouTheme.warning))
+            let actions = UIStackView()
+            actions.axis = .horizontal
+            actions.spacing = 6
+            actions.distribution = .fillEqually
+            actions.addArrangedSubview(makeActionButton(title: "重试", background: GoutouTheme.blue, fontSize: 14) {
                 self.delegate?.goutouPanel(self, didTrigger: .analyze)
             })
-        case .ready(let result):
-            if !result.headline.isEmpty {
-                bodyStack.addArrangedSubview(makeHeadlineLabel(result.headline))
-            }
-            for reply in result.replies {
-                bodyStack.addArrangedSubview(makeReplyButton(reply))
+            actions.addArrangedSubview(makeActionButton(
+                title: showsFailureDetail ? "收起详情" : "查看详情",
+                background: GoutouTheme.function,
+                fontSize: 14
+            ) {
+                self.showsFailureDetail.toggle()
+                self.rebuildBody()
+            })
+            bodyStack.addArrangedSubview(actions)
+            if showsFailureDetail {
+                bodyStack.addArrangedSubview(makeNoticeLabel(detail, color: GoutouTheme.secondary))
             }
         case .needsConfig:
             bodyStack.addArrangedSubview(makeNoticeLabel("还没配置 AI 接口（Base URL / Model / Key）。", color: GoutouTheme.warning))
             bodyStack.addArrangedSubview(makeActionButton(title: "去配置", background: GoutouTheme.blue, fontSize: 14) {
                 self.setScreen(.settings)
             })
+        case .needsFullAccess:
+            bodyStack.addArrangedSubview(makeActionButton(title: "复制开启完全访问的步骤", background: GoutouTheme.function, fontSize: 13) {
+                self.delegate?.goutouPanel(self, didTrigger: .copyFullAccessSteps)
+            })
+        case .empty(let banner):
+            if let banner = banner, !banner.isEmpty {
+                bodyStack.addArrangedSubview(makeNoticeLabel(banner, color: GoutouTheme.warning))
+            }
+        case .ready:
+            break
+        }
+
+        bodyStack.addArrangedSubview(makeSectionHeader("分析结论"))
+        if let headline = lastResult?.headline, !headline.isEmpty {
+            bodyStack.addArrangedSubview(makeHeadlineLabel(headline))
+        } else {
+            bodyStack.addArrangedSubview(makeNoticeLabel(
+                "还没有结论。复制对方的对话 → 点 👤对方 → 点 ⟳分析。",
+                color: GoutouTheme.secondary
+            ))
+        }
+
+        bodyStack.addArrangedSubview(makeSectionHeader("推荐回复"))
+        let replies = lastResult?.replies ?? []
+        if replies.isEmpty {
+            bodyStack.addArrangedSubview(makeNoticeLabel("还没有候选。", color: GoutouTheme.secondary))
+        } else {
+            for (index, reply) in replies.enumerated() {
+                bodyStack.addArrangedSubview(makeReplyRow(index: index, text: reply))
+            }
         }
     }
 
-    /// 上下文列表 + 清空按钮；没有上下文时给三步说明。
-    private func appendSegmentList() {
+    private func makeSectionHeader(_ title: String) -> UILabel {
+        let label = makeNoticeLabel(title, color: GoutouTheme.secondary)
+        label.font = .systemFont(ofSize: 12, weight: .semibold)
+        return label
+    }
+
+    /// 一条推荐回复：文字（点一下也能插入）+ 右侧「插入」按钮。
+    private func makeReplyRow(index: Int, text: String) -> UIView {
+        let row = UIStackView()
+        row.axis = .horizontal
+        row.spacing = 6
+        row.alignment = .fill
+
+        let body = makeReplyButton("\(index + 1). \(text)")
+        row.addArrangedSubview(body)
+
+        let insert = NineKeyButton(type: .system)
+        insert.setTitle("插入", for: .normal)
+        insert.titleLabel?.font = .systemFont(ofSize: 13)
+        insert.applyStyle(background: GoutouTheme.blue)
+        insert.accessibilityLabel = "插入第 \(index + 1) 条"
+        insert.addAction(UIAction { [weak self] _ in
+            guard let self = self else { return }
+            self.delegate?.goutouPanel(self, didTrigger: .insertReply(text))
+        }, for: .touchUpInside)
+        insert.widthAnchor.constraint(equalToConstant: 52).isActive = true
+        row.addArrangedSubview(insert)
+        return row
+    }
+
+    /// 点状态行展开的上下文明细：逐段列出 + 单段删除 + 清空。
+    private func buildContextDetailBody() {
         if segments.isEmpty {
             bodyStack.addArrangedSubview(makeNoticeLabel(
                 "1. 长按对方的消息 → 复制\n2. 点上面 👤对方 / 🙋我 把内容加进来（段数不限，越多等得越久）\n3. 点 ⟳ 分析，选一条话术上屏",
@@ -386,18 +510,53 @@ final class GoutouPanelView: UIView {
 
     /// 人物档案列表：一人一份上下文 / 记忆 / 总结，切谁用谁。
     private func buildProfilesBody() {
+        if let managingID = managingProfileID, let profile = profiles.first(where: { $0.id == managingID }) {
+            buildProfileManageBody(profile)
+            return
+        }
         bodyStack.addArrangedSubview(makeNoticeLabel(
-            "每个档案的上下文、记忆、上次总结都是分开的；人格（分析风格）是共用的。",
+            "每个档案的上下文、记忆、上次总结都是分开的；人格（分析风格）共用一份。点一下切换，长按进管理。",
             color: GoutouTheme.secondary
         ))
         for profile in profiles {
             bodyStack.addArrangedSubview(makeProfileRow(profile))
         }
-        bodyStack.addArrangedSubview(makeActionButton(title: "➕ 新建人物档案", background: GoutouTheme.blue, fontSize: 14) {
+        bodyStack.addArrangedSubview(makeActionButton(title: "➕ 新建人物", background: GoutouTheme.blue, fontSize: 14) {
             self.delegate?.goutouPanel(self, didTrigger: .createProfile)
         })
-        bodyStack.addArrangedSubview(makeActionButton(title: "✏️ 用剪贴板第一行给当前人物改名", background: GoutouTheme.function, fontSize: 13) {
-            self.delegate?.goutouPanel(self, didTrigger: .renameActiveProfile)
+    }
+
+    /// 长按人物进来的管理页：改名和删除都收在这儿，列表页不放 ✕。
+    private func buildProfileManageBody(_ profile: GoutouPersonProfile) {
+        bodyStack.addArrangedSubview(makeNoticeLabel("管理「\(profile.name)」", color: GoutouTheme.text))
+        let detail = "\(profile.segments.count) 段上下文 · \(profile.memory.count) 条记忆"
+            + (profile.summary == nil ? "" : " · 有上次总结")
+        bodyStack.addArrangedSubview(makeNoticeLabel(detail, color: GoutouTheme.secondary))
+        bodyStack.addArrangedSubview(makeActionButton(
+            title: "✏️ 用剪贴板第一行改名",
+            background: GoutouTheme.function,
+            fontSize: 14
+        ) {
+            self.delegate?.goutouPanel(self, didTrigger: .renameProfile(profile.id))
+        })
+        bodyStack.addArrangedSubview(makeActionButton(
+            title: confirmingDelete ? "⚠️ 再点一次确认删除" : "🗑 删除这个人",
+            background: confirmingDelete ? GoutouTheme.warning : GoutouTheme.function,
+            fontSize: 14
+        ) {
+            if self.confirmingDelete {
+                self.confirmingDelete = false
+                self.managingProfileID = nil
+                self.delegate?.goutouPanel(self, didTrigger: .deleteProfile(profile.id))
+            } else {
+                self.confirmingDelete = true
+                self.rebuildBody()
+            }
+        })
+        bodyStack.addArrangedSubview(makeActionButton(title: "⬅ 返回人物列表", background: GoutouTheme.key, fontSize: 13) {
+            self.managingProfileID = nil
+            self.confirmingDelete = false
+            self.rebuildBody()
         })
     }
 
@@ -420,26 +579,23 @@ final class GoutouPanelView: UIView {
         title.titleEdgeInsets = UIEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
         title.applyStyle(background: isActive ? GoutouTheme.candidatePrimary : GoutouTheme.key)
         title.accessibilityLabel = "切到 \(profile.name)"
+        title.accessibilityIdentifier = profile.id
         title.addAction(UIAction { [weak self] _ in
             guard let self = self else { return }
             self.delegate?.goutouPanel(self, didTrigger: .selectProfile(profile.id))
         }, for: .touchUpInside)
+        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(didLongPressProfile(_:)))
+        longPress.minimumPressDuration = 0.4
+        title.addGestureRecognizer(longPress)
         row.addArrangedSubview(title)
-
-        if profiles.count > 1 {
-            let delete = NineKeyButton(type: .system)
-            delete.setTitle("✕", for: .normal)
-            delete.titleLabel?.font = .systemFont(ofSize: 14)
-            delete.applyStyle(background: GoutouTheme.function)
-            delete.accessibilityLabel = "删掉 \(profile.name)"
-            delete.addAction(UIAction { [weak self] _ in
-                guard let self = self else { return }
-                self.delegate?.goutouPanel(self, didTrigger: .deleteProfile(profile.id))
-            }, for: .touchUpInside)
-            delete.widthAnchor.constraint(equalToConstant: 36).isActive = true
-            row.addArrangedSubview(delete)
-        }
         return row
+    }
+
+    @objc private func didLongPressProfile(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began, let id = gesture.view?.accessibilityIdentifier else { return }
+        managingProfileID = id
+        confirmingDelete = false
+        rebuildBody()
     }
 
     /// 长期档案：每次分析都会带上，用来养这个军师。
@@ -589,6 +745,16 @@ final class GoutouPanelView: UIView {
         setScreen(.profiles)
     }
 
+    @objc private func didTapStatus() {
+        showsContextDetail.toggle()
+        renderStatus()
+        rebuildBody()
+    }
+
+    @objc private func didTapAnalyze() {
+        delegate?.goutouPanel(self, didTrigger: .analyze)
+    }
+
     @objc private func didTapCancel() {
         delegate?.goutouPanel(self, didTrigger: .cancel)
     }
@@ -601,14 +767,18 @@ final class GoutouPanelView: UIView {
     /// 切到某一屏；再点同一次标题就回到主屏。
     private func setScreen(_ target: Screen) {
         screen = (screen == target) ? .main : target
-        updateTopTitles()
+        managingProfileID = nil
+        confirmingDelete = false
+        updateButtons()
         rebuildBody()
     }
 
     /// 回到主屏（控制器在每次打开面板时调用）。
     func resetScreen() {
         screen = .main
-        updateTopTitles()
+        managingProfileID = nil
+        confirmingDelete = false
+        updateButtons()
         rebuildBody()
     }
 }
