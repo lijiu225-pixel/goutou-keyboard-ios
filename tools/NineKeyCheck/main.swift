@@ -367,6 +367,52 @@ do {
     expect(true, "模型没返回 JSON 时抛错")
 }
 
+print("== 宽容解析：接口返回的 JSON 各种走样都要能认（这次修的就是这条）==")
+func summary(_ content: String) -> GoutouResult? {
+    try? GoutouAIClient.parseResponse(data: responseData(content))
+}
+// 1) 前后有废话
+let withProse = summary("好的，这是分析结果：{\"relationship\":\"对方在试探你会不会主动。依据……\",\"replies\":[\"在啊\",\"刚忙完\"]} 希望有帮助～")
+expectEqual(withProse?.headline ?? "", "对方在试探你会不会主动。", "JSON 前后有废话也能抠出来")
+expectEqual(withProse?.replies.count ?? 0, 2, "话术也认出来了")
+// 2) 尾逗号
+let trailingComma = summary("{\"relationship\":\"他还在观望。\",\"replies\":[\"在\",\"嗯\",],}")
+expectEqual(trailingComma?.headline ?? "", "他还在观望。", "尾逗号能修")
+expectEqual(trailingComma?.replies.count ?? 0, 2, "尾逗号数组里的条目也在")
+// 3) 外面又套了一层
+let wrapped = summary("{\"data\":{\"relationship\":\"她想见你。\",\"replies\":[\"走啊\"]}}")
+expectEqual(wrapped?.headline ?? "", "她想见你。", "包了一层 data 也认")
+// 4) 中文键名
+let chineseKeys = summary("{\"关系\":\"她在等你先开口。\",\"回复\":[\"在忙吗\",\"睡了吗\"]}")
+expectEqual(chineseKeys?.headline ?? "", "她在等你先开口。", "中文键名也认")
+expectEqual(chineseKeys?.replies.first ?? "", "在忙吗", "中文键名的话术也在")
+// 5) replies 是一整段字符串
+let singleStringReplies = summary("{\"relationship\":\"还行。\",\"replies\":\"在啊\\n刚忙完\\n怎么了\"}")
+expectEqual(singleStringReplies?.replies.count ?? 0, 3, "整段字符串按行拆成 3 条")
+// 6) content 是分片数组
+let partsPayload: [String: Any] = ["choices": [["message": ["content": [["type": "text", "text": "{\"relationship\":\"他在等你。\",\"replies\":[\"在\"]}"]]]]]]
+let partsResult = try? GoutouAIClient.parseResponse(data: (try? JSONSerialization.data(withJSONObject: partsPayload)) ?? Data())
+expectEqual(partsResult?.headline ?? "", "他在等你。", "content 是分片数组也能拼出来")
+// 7) 只回了思考、正文是空的 → 报明确原因，不要含糊的 badJSON
+let reasoningOnly: [String: Any] = ["choices": [["finish_reason": "length", "message": ["content": "", "reasoning_content": "让我想想……"]]]]
+do {
+    _ = try GoutouAIClient.parseResponse(data: (try? JSONSerialization.data(withJSONObject: reasoningOnly)) ?? Data())
+    expect(false, "只回思考时应该抛错")
+} catch let error as GoutouAIError {
+    expect(error == .reasoningOnly(true), "只回思考时给出「被截断」的原因（实际：\(error.message)）")
+} catch {
+    expect(false, "抛出的应该是 GoutouAIError")
+}
+// 8) 真的不是 JSON 时，错误里要带出开头，方便定位
+do {
+    _ = try GoutouAIClient.parseResponse(data: responseData("抱歉，我不能帮你分析这段关系。"))
+    expect(false, "不是 JSON 时应该抛错")
+} catch let error as GoutouAIError {
+    expect(error.message.contains("抱歉，我不能帮你分析"), "错误信息里带出返回开头（实际：\(error.message)）")
+} catch {
+    expect(false, "抛出的应该是 GoutouAIError")
+}
+
 print("")
 if failures == 0 {
     print("全部通过：\(checks) 项检查")
