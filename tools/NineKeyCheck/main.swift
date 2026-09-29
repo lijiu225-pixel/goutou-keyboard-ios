@@ -229,7 +229,7 @@ GoutouMemoryStore.append("我们认识三个月", to: scratchMemory)
 let loadedMemory = GoutouMemoryStore.load(from: scratchMemory)
 expectEqual(loadedMemory.count, 2, "空白条目会被丢掉")
 expectEqual(loadedMemory.first?.content ?? "", "她生日 3 月 5 日", "第一条内容")
-expectEqual(loadedMemory.first?.category ?? .recentStatus, .stableFact, "手工加的都算稳定事实")
+expect((loadedMemory.first?.category ?? .recentStatus) == .stableFact, "手工加的都算稳定事实")
 expect(!(loadedMemory.first?.id.isEmpty ?? true), "每条记忆都有 id")
 
 let withMemory = GoutouPrompt.userMessage(
@@ -258,7 +258,7 @@ let migrated = GoutouProfileStore.loadBook(from: scratchProfiles)
 expectEqual(migrated.profiles.count, 1, "老数据迁移成一个档案")
 expectEqual(migrated.profiles[0].name, "默认", "默认档案的名字")
 expectEqual(migrated.profiles[0].segments.count, 1, "老的上下文搬进来了")
-expectEqual(migrated.profiles[0].memory.first ?? "", "她生日 3 月 5 日", "老的记忆搬进来了")
+expectEqual(migrated.profiles[0].memory.first?.content ?? "", "她生日 3 月 5 日", "老的记忆搬进来了")
 expect(scratchProfiles.data(forKey: GoutouProfileStore.legacySegmentsKey) == nil, "迁移完删掉旧键，不会重复读")
 
 // 新建第二个人：不能看到第一个人的任何数据
@@ -432,16 +432,15 @@ let extractorReply = """
 let parsedOps = GoutouMemoryExtractor.parse(extractorReply) ?? []
 expectEqual(parsedOps.count, 4, "只认 ADD/UPDATE/MERGE/IGNORE，UPDATE 必须带 target，DELETE 直接丢")
 expect(parsedOps.first?.operation == .add, "第一条是 ADD")
-expectEqual(parsedOps.first?.category ?? .recentStatus, .stableFact, "英文分类解析")
+expect((parsedOps.first?.category ?? .recentStatus) == .stableFact, "英文分类解析")
 expectEqual(parsedOps.count > 1 ? (parsedOps[1].targetID ?? "") : "", "abc", "UPDATE 的 targetID")
 expect(parsedOps.count > 2 ? parsedOps[2].operation == .merge : false, "MERGE 认出来")
-expectEqual(parsedOps.count > 2 ? parsedOps[2].category : .stableFact, .preference, "中文分类也认（偏好）")
+expect((parsedOps.count > 2 ? parsedOps[2].category : .stableFact) == .preference, "中文分类也认（偏好）")
 expect(parsedOps.count > 3 ? parsedOps[3].operation == .ignore : false, "IGNORE 认出来")
 expect(GoutouMemoryExtractor.parse("这不是 JSON") == nil, "解析不了 → nil（调用方一个字都不改）")
 expectEqual(GoutouMemoryExtractor.parse("{\"operations\":[]}")?.count ?? 1, 0, "空操作是合法的（记忆不动）")
-expectEqual(
-    GoutouMemoryExtractor.parse("{\"operations\":[{\"op\":\"ADD\",\"content\":\"她在加班\",\"category\":\"近况\"}]}")?.first?.category ?? .stableFact,
-    .recentStatus,
+expect(
+    (GoutouMemoryExtractor.parse("{\"operations\":[{\"op\":\"ADD\",\"content\":\"她在加班\",\"category\":\"近况\"}]}")?.first?.category ?? .stableFact) == .recentStatus,
     "近期状态能认出来（和稳定事实分开存）"
 )
 
