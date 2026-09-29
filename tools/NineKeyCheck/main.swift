@@ -739,7 +739,7 @@ expect(topTwenty.items.allSatisfy { $0.personID == selectorPerson }, "结果全�
 hundred.append(remember("B 的秘密", person: otherPerson, importance: 5))
 let crossResult = MemorySelector.select(personID: selectorPerson, memories: hundred, now: selectorNow)
 expect(crossResult.scored.allSatisfy { $0.memory.personID == selectorPerson }, "候选里根本没有 B 的记忆")
-expect(crossResult.items.allSatisfy { $0.memory.personID == selectorPerson }, "结果里也没有 B 的")
+expect(crossResult.items.allSatisfy { $0.personID == selectorPerson }, "结果里也没有 B 的")
 
 // 测试 3：关键词相关 > 高重要度但不相关
 let workChat = [GoutouSegment(speaker: .opponent, text: "最近工作太忙了，天天加班")]
@@ -779,8 +779,16 @@ var nearDuplicates: [PersonMemory] = [
     remember("最近项目赶进度，非常忙", person: selectorPerson, daysAgo: 1, category: .recentStatus, importance: 4),
     remember("这段时间工作压力大", person: selectorPerson, daysAgo: 1, category: .recentStatus, importance: 4),
 ]
-nearDuplicates.append(contentsOf: (0..<20).map {
-    remember("别的记忆 \($0)", person: selectorPerson, daysAgo: 2, category: .recentStatus, importance: 3, confidence: 0.9)
+// 其他记忆用小话题，彼此不像（「别的记忆 1 / 2」互相比对就已经很像了，测不出东西）
+let otherTopics = [
+    "她喜欢喝美式咖啡", "周末打算去爬香山", "她正在备考教师资格证", "她养了一只橘猫叫团子",
+    "她不太能吃辣", "她爸妈住在城南老小区", "她新买的耳机是索尼的", "她最近在追一部悬疑剧",
+    "她手机壳是淡蓝色的", "她不喜欢打电话只爱发消息", "她生日在三月五号", "她习惯十二点后才睡",
+    "她公司搬到高新区了", "她最近在学游泳", "她讨厌被人催", "她喜欢看展拍照",
+    "她通勤要坐四十分钟地铁", "她养的多肉长势很好", "她常去楼下那家面馆", "她周末爱睡到中午",
+]
+nearDuplicates.append(contentsOf: otherTopics.map {
+    remember($0, person: selectorPerson, daysAgo: 2, category: .preference, importance: 2, confidence: 0.9)
 })
 let dedupResult = MemorySelector.select(personID: selectorPerson, chat: workChat, memories: nearDuplicates, config: smallConfig, now: selectorNow)
 let nearDupCount = dedupResult.items.filter {

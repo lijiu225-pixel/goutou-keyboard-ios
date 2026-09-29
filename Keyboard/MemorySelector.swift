@@ -43,21 +43,22 @@ struct MemorySelectionResult {
     /// 调试用的一行行明细（不要塞进主界面）
     var debugLines: [String] {
         scored.prefix(30).map { entry in
-            let breakdown = entry.breakdown
+            let detail = entry.breakdown
             let preview = String(entry.memory.content.prefix(18))
-            return String(
-                format: "%-20@ score=%.2f  imp=%.2f conf=%.2f rec=%.2f kw=%.2f cat=%.2f x%.2f  [%@]",
-                preview as NSString,
-                entry.score,
-                breakdown.importance,
-                breakdown.confidence,
-                breakdown.recency,
-                breakdown.keyword,
-                breakdown.category,
-                breakdown.redundancyMultiplier,
-                entry.memory.category.label as NSString
-            )
+            return "「\(preview)」 score=\(Self.two(entry.score))"
+                + " imp=\(Self.two(detail.importance))"
+                + " conf=\(Self.two(detail.confidence))"
+                + " rec=\(Self.two(detail.recency))"
+                + " kw=\(Self.two(detail.keyword))"
+                + " cat=\(Self.two(detail.category))"
+                + " x\(Self.two(detail.redundancyMultiplier))"
+                + " [\(entry.memory.category.label)]"
         }
+    }
+
+    /// 调试行里统一保留两位小数
+    static func two(_ value: Double) -> String {
+        String(format: "%.2f", value)
     }
 }
 
@@ -114,48 +115,76 @@ enum MemorySelector {
         let baselineSlots = max(1, Int((Double(config.defaultTopK) * config.baselineRatio).rounded()))
         let mainSlots = max(0, config.defaultTopK - baselineSlots)
 
+        // 话题 = 「同类别 + 都命中了本次聊天的关键词」。
+        // 说明：措辞完全不同的近义（「工作很忙」vs「经常加班」）本地判不出来，
+        // 那种要靠 Embedding（下一阶段）；这里只挡住"一堆同话题记忆霸榜"。
+        var pickedTopicCount: [String: Int] = [:]
+        func topicKey(of memory: PersonMemory) -> String? {
+            matchedKeywords(memory: memory, keywords: keywords).isEmpty ? nil : memory.category.rawValue
+        }
+        func isTopicFull(_ memory: PersonMemory) -> Bool {
+            guard let key = topicKey(of: memory) else { return false }
+            return (pickedTopicCount[key] ?? 0) >= config.maxPerTopic
+        }
+        func isNearDuplicate(_ memory: PersonMemory, against chosen: [ScoredMemory]) -> Bool {
+            chosen.contains {
+                GoutouMemoryApplier.similarity(memory.content, $0.memory.content) >= config.redundancyThreshold
+            }
+        }
+        func register(_ memory: PersonMemory) {
+            guard let key = topicKey(of: memory) else { return }
+            pickedTopicCount[key, default: 0] += 1
+        }
+
         // 1) 按分数挑。两种「近义」都降权：
         //    ① 文本高度相似（同一件事换了几个字）
         //    ② 话题聚类——同类别 + 命中同一批聊天关键词（措辞完全不同也算同一话题）
-        //    被降权的先放 deferred，不占别人的名额；名额还有剩再补位。
+        // 被降权的先放 deferred，不占别人的名额；名额还有剩再补位。
         var picked: [ScoredMemory] = []
         var deferred: [ScoredMemory] = []
-        var pickedTopicCount: [String: Int] = [:]
+        var deferredIDs = Set<UUID>()
+        func deferCandidate(_ candidate: ScoredMemory) {
+            guard !deferredIDs.contains(candidate.memory.id) else { return }
+            deferredIDs.insert(candidate.memory.id)
+            deferred.append(ScoredMemory(
+                memory: candidate.memory,
+                breakdown: candidate.breakdown.penalized(by: config.redundancyPenalty)
+            ))
+        }
         for candidate in scored {
             guard picked.count < mainSlots else { break }
-            let matched = matchedKeywords(memory: candidate.memory, keywords: keywords)
-            // 话题聚类：**同一类别 + 都和本次聊天相关**就算同一话题。
-            // 说明：措辞完全不同的近义（「工作很忙」vs「经常加班」）本地判不出来，
-            // 那种要靠 Embedding（下一阶段）；这里只挡住"一堆同话题记忆霸榜"。
-            let topicKey = matched.isEmpty ? nil : candidate.memory.category.rawValue
-            let similarity = picked
-                .map { GoutouMemoryApplier.similarity(candidate.memory.content, $0.memory.content) }
-                .max() ?? 0
-            let topicFull = topicKey.map { (pickedTopicCount[$0] ?? 0) >= config.maxPerTopic } ?? false
-            if similarity >= config.redundancyThreshold || topicFull {
-                deferred.append(ScoredMemory(
-                    memory: candidate.memory,
-                    breakdown: candidate.breakdown.penalized(by: config.redundancyPenalty)
-                ))
+            if isNearDuplicate(candidate.memory, against: picked) || isTopicFull(candidate.memory) {
+                deferCandidate(candidate)
             } else {
                 picked.append(candidate)
-                if let topicKey = topicKey {
-                    pickedTopicCount[topicKey, default: 0] += 1
-                }
+                register(candidate.memory)
             }
         }
 
-        // 2) 保底：长期高重要度就算关键词没命中也要有位置
+        // 2) 保底：长期高重要度就算关键词没命中也要有位置（但同样不重复占位）
         var selectedIDs = Set(picked.map { $0.memory.id })
         var baseline: [ScoredMemory] = []
         for candidate in scored where baseline.count < baselineSlots {
             guard !selectedIDs.contains(candidate.memory.id), isBaseline(candidate.memory, config: config) else { continue }
+            if isNearDuplicate(candidate.memory, against: picked) || isTopicFull(candidate.memory) {
+                deferCandidate(candidate)
+                continue
+            }
             baseline.append(candidate)
             selectedIDs.insert(candidate.memory.id)
+            register(candidate.memory)
         }
 
-        // 3) 还有名额就用被降权的近义记忆补位
+        // 3) 名额没满：先用「没用过、也不近义」的记忆补位，
+        //    最后才轮到被降权的近义记忆（宁可少一条，也不让同话题霸榜）。
         var final = picked + baseline
+        for candidate in scored where final.count < config.defaultTopK {
+            guard !selectedIDs.contains(candidate.memory.id) else { continue }
+            guard !isNearDuplicate(candidate.memory, against: final), !isTopicFull(candidate.memory) else { continue }
+            final.append(candidate)
+            selectedIDs.insert(candidate.memory.id)
+            register(candidate.memory)
+        }
         for candidate in deferred where final.count < config.defaultTopK {
             guard !selectedIDs.contains(candidate.memory.id) else { continue }
             final.append(candidate)
