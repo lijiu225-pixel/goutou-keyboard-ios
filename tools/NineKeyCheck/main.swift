@@ -141,6 +141,7 @@ expect(prompt.hasPrefix("【人格】"), "skill 原文放在最前面")
 expect(prompt.contains("当前任务：分析她/他说什么意思。回复风格：自然。"), "写死的任务/风格与 Android 默认值一致")
 expect(prompt.contains("不超过 20 字"), "补了 relationship 第一句 ≤20 字的要求")
 expect(prompt.contains("meaning") && prompt.contains("replies"), "四字段契约仍然在")
+expect(prompt.contains("4～6 条") && prompt.contains("覆盖 skill 里写的 2～3 条"), "话术条数在 iOS 这边改成 4～6 条")
 let composed = GoutouPrompt.userMessage(segments: [
     GoutouSegment(speaker: .opponent, text: "你昨天不是说好了吗"),
     GoutouSegment(speaker: .me, text: "临时有事"),
@@ -160,12 +161,17 @@ func responseData(_ content: String) -> Data {
 }
 let goodJSON = """
 {"meaning":"...","relationship":"对方在试探你会不会主动。依据是……",\
-"replies":["在啊","刚忙完，怎么了","你找我有事？","这条应该被丢掉"],"reason":"..."}
+"replies":["在啊","刚忙完，怎么了","你找我有事？","晚点说也行"],"reason":"..."}
 """
 let parsedResult = try? GoutouAIClient.parseResponse(data: responseData("```json\n" + goodJSON + "\n```"))
 expectEqual(parsedResult?.headline ?? "", "对方在试探你会不会主动。", "带代码围栏也能解析，并取到一行判断")
-expectEqual(parsedResult?.replies.count ?? 0, 3, "话术最多留 3 条")
+expectEqual(parsedResult?.replies.count ?? 0, 4, "4 条话术全留下")
 expectEqual(parsedResult?.replies.first ?? "", "在啊", "第一条话术")
+let manyReplies = """
+{"relationship":"他还在观望。","replies":["1","2","3","4","5","6","7","8"]}
+"""
+let cappedResult = try? GoutouAIClient.parseResponse(data: responseData(manyReplies))
+expectEqual(cappedResult?.replies.count ?? 0, 6, "给多了只留 6 条")
 let errorBody = (try? JSONSerialization.data(withJSONObject: ["error": ["message": "invalid api key"]])) ?? Data()
 do {
     _ = try GoutouAIClient.parseResponse(data: errorBody)

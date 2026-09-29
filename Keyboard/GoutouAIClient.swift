@@ -119,7 +119,7 @@ enum GoutouAIClient {
 
         let headline = GoutouPrompt.headline(fromRelationship: relationship)
         guard !headline.isEmpty || !replies.isEmpty else { throw GoutouAIError.empty }
-        return GoutouResult(headline: headline, replies: Array(replies.prefix(3)))
+        return GoutouResult(headline: headline, replies: Array(replies.prefix(GoutouPrompt.maxReplies)))
     }
 
     static func stripCodeFence(_ text: String) -> String {

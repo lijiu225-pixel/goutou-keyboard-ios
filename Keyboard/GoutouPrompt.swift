@@ -40,11 +40,15 @@ enum GoutouPrompt {
     static let task = "分析她/他说什么意思"
     static let tone = "自然"
     static let headlineLimit = 20
+    /// 面板里一次给多少条话术。skill 里写的是 2～3 条，iOS 面板嫌少，这里按 4～6 条要。
+    static let minReplies = 4
+    static let maxReplies = 6
 
     static func systemPrompt(skill: String) -> String {
         let contract = """
         仅返回 JSON 对象，不要 Markdown 或代码围栏。字段：meaning（对方可能的意思）、\
-        relationship（关系/氛围分析）、replies（2～3 条简短自然的回复字符串数组）、reason（回复理由）。\
+        relationship（关系/氛围分析）、replies（\(minReplies)～\(maxReplies) 条可直接发送的中文成品字符串，\
+        按推荐顺序排列——这一行覆盖 skill 里写的 2～3 条）、reason（回复理由）。\
         relationship 的第一句必须是一句不超过 \(headlineLimit) 字的判断（例如「对方在试探你会不会主动」），\
         后面再展开依据。无法确定时明确说明。
         """
