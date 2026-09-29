@@ -1,0 +1,26 @@
+# XcodeGen 现场生成，不入库（没有 Mac 没法维护它）
+*.xcodeproj
+*.xcworkspace
+
+# 构建产物
+build/
+DerivedData/
+*.xcarchive
+*.ipa
+
+# 签名资产绝不入库
+*.p12
+*.mobileprovision
+*.p8
+*.cer
+*.key
+*.csr
+dist_base64.txt
+dev_base64.txt
+p8_base64.txt
+profile_base64.txt
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
+__pycache__/

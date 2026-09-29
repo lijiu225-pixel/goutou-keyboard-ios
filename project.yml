@@ -1,0 +1,68 @@
+# XcodeGen 工程描述 —— 仓库里只放这个 + 源码，不提交 .xcodeproj（没有 Mac 没法维护它）。
+# CI 上 `xcodegen generate` 会现场生成工程。
+#
+# 注意: MARKETING_VERSION 必须带引号, workflow 靠 grep 这一行取版本号。
+
+name: GoutouInput
+
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+
+settings:
+  base:
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: 1
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+targets:
+  # 宿主 App：只负责说明怎么启用键盘 + 一个自测输入框
+  GoutouInput:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.goutouinput
+        PRODUCT_NAME: GoutouInput
+        INFOPLIST_FILE: App/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        VERSIONING_SYSTEM: apple-generic
+    dependencies:
+      - target: GoutouKeyboard
+        embed: true
+        codeSign: true
+
+  # 键盘扩展：最小 QWERTY
+  GoutouKeyboard:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Keyboard
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.goutouinput.keyboard
+        PRODUCT_NAME: GoutouKeyboard
+        INFOPLIST_FILE: Keyboard/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        VERSIONING_SYSTEM: apple-generic
+
+schemes:
+  GoutouInput:
+    build:
+      targets:
+        GoutouInput: all
+    run:
+      config: Debug
+    archive:
+      config: Release

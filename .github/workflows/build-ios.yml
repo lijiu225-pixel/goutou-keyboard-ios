@@ -1,0 +1,391 @@
+# 无 Mac 构建 iOS 键盘扩展：GitHub Actions macOS runner 上 xcodegen + xcodebuild。
+#
+# 一条流水线出两种产物：
+#   1. 未签名 IPA  —— 不需要任何 Secret，push main 就跑，产物在 Artifacts 里，可用 Sideloadly 侧载
+#   2. 已签名 ad-hoc IPA + 装机页 —— 配好 Secrets 后打 tag 触发
+#
+# 触发方式:
+#   A. push main   → 只跑未签名构建（快，验证能不能编译）
+#   B. push tag    → adhoc-v1.0.0，配了 Secrets 就出签名包
+#   C. 手动        → gh workflow run build-ios.yml --ref main
+#
+# 使用前: 改下面 env 的 APP_NAME / SCHEME / BUNDLE_ID / EXTENSION_BUNDLE_ID
+#        （要签名分发时再改 OTA_URL_BASE / OTA_DIR，并按 docs/01 配 Secrets）
+
+name: Build iOS Keyboard
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - 'adhoc-v*'
+
+env:
+  APP_NAME: GoutouInput                            # 宿主 App 的 target / 产物名
+  EXTENSION_NAME: GoutouKeyboard                   # 键盘扩展的 target 名
+  SCHEME: GoutouInput                              # xcodegen 生成的 scheme 名
+  BUNDLE_ID: com.example.goutouinput               # 改成你注册的 Bundle ID
+  EXTENSION_BUNDLE_ID: com.example.goutouinput.keyboard
+  OTA_URL_BASE: https://your-domain.com/install    # OTA 装机页 HTTPS 地址（要可信证书）
+  OTA_DIR: /var/www/install                        # OTA 文件在服务器上的目录
+
+jobs:
+  build:
+    runs-on: macos-15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # build number 用 commit 数, 浅克隆会恒等于 1
+
+      - name: Select latest Xcode
+        run: |
+          XCODE_PATH=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          echo "Using Xcode: $XCODE_PATH"
+          sudo xcode-select -s "$XCODE_PATH"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: |
+          xcodegen generate
+          xcodebuild -list -project $APP_NAME.xcodeproj
+
+      - name: Resolve build number and version
+        run: |
+          echo "BUILD_NUM=$(git rev-list --count HEAD)" >> $GITHUB_ENV
+          echo "VERSION=$(grep -m1 'MARKETING_VERSION:' project.yml | sed 's/.*"\(.*\)".*/\1/')" >> $GITHUB_ENV
+
+      # ── 1. 未签名构建：不需要任何 Secret，先用它确认「真的能编译」───────────
+      - name: Build unsigned archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/unsigned"
+          xcodebuild archive \
+            -project $APP_NAME.xcodeproj \
+            -scheme $SCHEME \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/unsigned/$APP_NAME.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            COMPILER_INDEX_STORE_ENABLE=NO
+
+      - name: Package unsigned IPA
+        run: |
+          UNSIGNED_IPA="$(pwd)/$APP_NAME-unsigned-$BUILD_NUM.ipa"
+          echo "UNSIGNED_IPA=$UNSIGNED_IPA" >> $GITHUB_ENV
+          cd "$RUNNER_TEMP/unsigned"
+          mkdir -p Payload
+          cp -R "$RUNNER_TEMP/unsigned/$APP_NAME.xcarchive/Products/Applications/$APP_NAME.app" Payload/
+          ls -la Payload/$APP_NAME.app
+          echo "--- 扩展是否被正确嵌进 App ---"
+          ls -la "Payload/$APP_NAME.app/PlugIns/" || echo "!! PlugIns 目录不存在，扩展没被嵌入"
+          zip -qry "$UNSIGNED_IPA" Payload
+          unzip -l "$UNSIGNED_IPA" | head -20
+          ls -la "$UNSIGNED_IPA"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-unsigned
+          path: ${{ env.UNSIGNED_IPA }}
+          if-no-files-found: error
+
+      # ── 2. 已签名 ad-hoc 构建：只在 Secrets 配齐时执行 ────────────────────
+      - name: Detect signing secrets
+        id: signing
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          DEV_CERT: ${{ secrets.APPLE_DEV_CERTIFICATE_BASE64 }}
+          APP_PROFILE: ${{ secrets.APPLE_ADHOC_PROFILE_BASE64 }}
+          EXT_PROFILE: ${{ secrets.APPLE_ADHOC_EXT_PROFILE_BASE64 }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY: ${{ secrets.ASC_API_KEY_BASE64 }}
+          OTA_SSH_HOST: ${{ secrets.OTA_SSH_HOST }}
+        run: |
+          missing=""
+          for pair in \
+            "APPLE_CERTIFICATE_BASE64:$CERT" \
+            "APPLE_DEV_CERTIFICATE_BASE64:$DEV_CERT" \
+            "APPLE_ADHOC_PROFILE_BASE64:$APP_PROFILE" \
+            "APPLE_ADHOC_EXT_PROFILE_BASE64:$EXT_PROFILE" \
+            "APPLE_TEAM_ID:$TEAM_ID" \
+            "ASC_API_KEY_BASE64:$ASC_KEY"
+          do
+            name="${pair%%:*}"
+            value="${pair#*:}"
+            [ -z "$value" ] && missing="$missing $name"
+          done
+
+          if [ -z "$missing" ]; then
+            echo "enabled=true" >> $GITHUB_OUTPUT
+            echo "::notice::签名 Secrets 已配齐，继续出 ad-hoc 签名包。"
+          else
+            echo "enabled=false" >> $GITHUB_OUTPUT
+            echo "::notice title=跳过签名构建::缺这些 Secrets:$missing —— 本次只产出未签名 IPA（可侧载安装）。补齐后重跑即可。"
+          fi
+
+          if [ -n "$OTA_SSH_HOST" ]; then
+            echo "ota=true" >> $GITHUB_OUTPUT
+          else
+            echo "ota=false" >> $GITHUB_OUTPUT
+            echo "::notice title=跳过 OTA 部署::没有配 OTA_SSH_HOST，签名 IPA 只放进 Artifacts。"
+          fi
+
+      - name: Install certificates
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_DEV_CERTIFICATE_BASE64: ${{ secrets.APPLE_DEV_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_DEV_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEV_CERTIFICATE_PASSWORD }}
+        run: |
+          DIST_CERT=$RUNNER_TEMP/dist.p12
+          DEV_CERT=$RUNNER_TEMP/dev.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 12)
+
+          echo -n "$APPLE_CERTIFICATE_BASE64" | base64 --decode -o $DIST_CERT
+          echo -n "$APPLE_DEV_CERTIFICATE_BASE64" | base64 --decode -o $DEV_CERT
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          security import $DIST_CERT -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security import $DEV_CERT -P "$APPLE_DEV_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+      - name: Install Ad-Hoc provisioning profiles
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APP_PROFILE_BASE64: ${{ secrets.APPLE_ADHOC_PROFILE_BASE64 }}
+          EXT_PROFILE_BASE64: ${{ secrets.APPLE_ADHOC_EXT_PROFILE_BASE64 }}
+        run: |
+          PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PROFILE_DIR"
+          echo -n "$APP_PROFILE_BASE64" | base64 --decode -o "$PROFILE_DIR/AdHocApp.mobileprovision"
+          echo -n "$EXT_PROFILE_BASE64" | base64 --decode -o "$PROFILE_DIR/AdHocKeyboard.mobileprovision"
+
+          APP_PROFILE_NAME=$(security cms -D -i "$PROFILE_DIR/AdHocApp.mobileprovision" | plutil -extract Name raw -)
+          EXT_PROFILE_NAME=$(security cms -D -i "$PROFILE_DIR/AdHocKeyboard.mobileprovision" | plutil -extract Name raw -)
+          echo "App profile: $APP_PROFILE_NAME"
+          echo "Keyboard profile: $EXT_PROFILE_NAME"
+          echo "APP_PROFILE_NAME=$APP_PROFILE_NAME" >> $GITHUB_ENV
+          echo "EXT_PROFILE_NAME=$EXT_PROFILE_NAME" >> $GITHUB_ENV
+
+      - name: Setup App Store Connect API key
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_API_KEY_BASE64: ${{ secrets.ASC_API_KEY_BASE64 }}
+        run: |
+          mkdir -p ~/private_keys
+          echo -n "$ASC_API_KEY_BASE64" | base64 --decode -o ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+
+      - name: Set build number
+        if: steps.signing.outputs.enabled == 'true'
+        run: agvtool new-version -all $BUILD_NUM
+
+      # archive 阶段必须 Automatic signing：manual 只在 export 阶段用 ExportOptions.plist 完成。
+      - name: Build signed archive
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/signed"
+          xcodebuild archive \
+            -project $APP_NAME.xcodeproj \
+            -scheme $SCHEME \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/signed/$APP_NAME.xcarchive" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
+            -authenticationKeyID $ASC_KEY_ID \
+            -authenticationKeyIssuerID $ASC_ISSUER_ID \
+            DEVELOPMENT_TEAM=$APPLE_TEAM_ID \
+            CODE_SIGN_STYLE=Automatic \
+            COMPILER_INDEX_STORE_ENABLE=NO
+
+      - name: Export signed IPA (ad-hoc)
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          cat > $RUNNER_TEMP/ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>ad-hoc</string>
+            <key>teamID</key>
+            <string>${APPLE_TEAM_ID}</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>uploadBitcode</key>
+            <false/>
+            <key>uploadSymbols</key>
+            <false/>
+            <key>compileBitcode</key>
+            <false/>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${BUNDLE_ID}</key>
+              <string>${APP_PROFILE_NAME}</string>
+              <key>${EXTENSION_BUNDLE_ID}</key>
+              <string>${EXT_PROFILE_NAME}</string>
+            </dict>
+          </dict>
+          </plist>
+          PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/signed/$APP_NAME.xcarchive" \
+            -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist \
+            -exportPath "$RUNNER_TEMP/signed/export"
+
+          ls -la $RUNNER_TEMP/signed/export/
+
+      - name: Generate manifest.plist + install.html
+        if: steps.signing.outputs.enabled == 'true'
+        run: |
+          IPA_NAME="${APP_NAME}-test-${BUILD_NUM}.ipa"
+          echo "IPA_NAME=$IPA_NAME" >> $GITHUB_ENV
+          mv $RUNNER_TEMP/signed/export/$APP_NAME.ipa $RUNNER_TEMP/signed/export/$IPA_NAME
+
+          cat > $RUNNER_TEMP/signed/export/manifest.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>items</key>
+            <array>
+              <dict>
+                <key>assets</key>
+                <array>
+                  <dict>
+                    <key>kind</key>
+                    <string>software-package</string>
+                    <key>url</key>
+                    <string>${OTA_URL_BASE}/${IPA_NAME}</string>
+                  </dict>
+                </array>
+                <key>metadata</key>
+                <dict>
+                  <key>bundle-identifier</key>
+                  <string>${BUNDLE_ID}</string>
+                  <key>bundle-version</key>
+                  <string>${VERSION}</string>
+                  <key>kind</key>
+                  <string>software</string>
+                  <key>title</key>
+                  <string>${APP_NAME} Test</string>
+                </dict>
+              </dict>
+            </array>
+          </dict>
+          </plist>
+          PLIST
+
+          BUILD_TIME=$(date '+%Y-%m-%d %H:%M:%S UTC')
+          cat > $RUNNER_TEMP/signed/export/install.html <<HTML
+          <!DOCTYPE html>
+          <html lang="zh-CN">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width,initial-scale=1">
+            <title>${APP_NAME} 测试包安装</title>
+            <style>
+              body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 40px 20px; max-width: 480px; margin: 0 auto; text-align: center; background: #f5f5f7; }
+              h1 { color: #007AFF; margin-bottom: 8px; }
+              .tag { background: #FF9500; color: white; padding: 4px 12px; border-radius: 12px; font-size: 12px; display: inline-block; }
+              .install { display: inline-block; background: #007AFF; color: white; padding: 18px 48px; border-radius: 14px; text-decoration: none; font-size: 18px; font-weight: 600; margin: 24px 0; box-shadow: 0 4px 12px rgba(0,122,255,0.3); }
+              .install:active { background: #0051D5; }
+              .meta { color: #666; font-size: 14px; line-height: 1.7; background: white; padding: 16px; border-radius: 12px; margin-top: 16px; text-align: left; }
+              .warn { color: #FF3B30; font-size: 13px; margin-top: 16px; }
+            </style>
+          </head>
+          <body>
+            <h1>${APP_NAME}</h1>
+            <p><span class="tag">测试包</span></p>
+            <p><a class="install" href="itms-services://?action=download-manifest&amp;url=${OTA_URL_BASE}/manifest.plist">安装 Install</a></p>
+            <div class="meta">
+              <strong>版本</strong>: ${VERSION} (build ${BUILD_NUM})<br>
+              <strong>构建时间</strong>: ${BUILD_TIME}<br>
+              <strong>包名</strong>: ${IPA_NAME}
+            </div>
+            <p class="warn">必须用 Safari 打开此页面。装完后回到桌面 → 设置 → 通用 → VPN 与设备管理 → 信任开发者证书。</p>
+            <p class="warn">装好后去 设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → 狗头军师。</p>
+          </body>
+          </html>
+          HTML
+
+          ls -la $RUNNER_TEMP/signed/export/
+
+      - name: Upload signed IPA
+        if: steps.signing.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-adhoc-signed
+          path: |
+            ${{ runner.temp }}/signed/export/${{ env.IPA_NAME }}
+            ${{ runner.temp }}/signed/export/manifest.plist
+            ${{ runner.temp }}/signed/export/install.html
+          if-no-files-found: error
+
+      - name: Deploy to OTA server
+        if: steps.signing.outputs.enabled == 'true' && steps.signing.outputs.ota == 'true'
+        env:
+          OTA_SSH_HOST: ${{ secrets.OTA_SSH_HOST }}
+          OTA_SSH_USER: ${{ secrets.OTA_SSH_USER }}
+          OTA_SSH_PASSWORD: ${{ secrets.OTA_SSH_PASSWORD }}
+        run: |
+          brew install hudochenkov/sshpass/sshpass
+
+          sshpass -p "$OTA_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no \
+            $OTA_SSH_USER@$OTA_SSH_HOST \
+            "mkdir -p $OTA_DIR && rm -f $OTA_DIR/*.ipa $OTA_DIR/manifest.plist $OTA_DIR/install.html"
+
+          sshpass -p "$OTA_SSH_PASSWORD" scp -o StrictHostKeyChecking=no \
+            "$RUNNER_TEMP/signed/export/$IPA_NAME" \
+            "$RUNNER_TEMP/signed/export/manifest.plist" \
+            "$RUNNER_TEMP/signed/export/install.html" \
+            $OTA_SSH_USER@$OTA_SSH_HOST:$OTA_DIR/
+
+          sshpass -p "$OTA_SSH_PASSWORD" ssh -o StrictHostKeyChecking=no \
+            $OTA_SSH_USER@$OTA_SSH_HOST \
+            "ls -la $OTA_DIR/"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## 构建结果"
+            echo ""
+            echo "- 版本: ${VERSION} (build ${BUILD_NUM})"
+            echo "- 未签名 IPA: \`${APP_NAME}-unsigned-${BUILD_NUM}.ipa\`（Artifacts，可侧载，不需要 Apple 开发者账号）"
+            if [ "${{ steps.signing.outputs.enabled }}" = "true" ]; then
+              echo "- 已签名 ad-hoc IPA: \`${IPA_NAME}\`"
+              echo "- OTA 装机页（Safari 打开）: ${OTA_URL_BASE}/install.html"
+            else
+              echo "- 已签名 IPA: 未生成（Secrets 没配齐，见上一条 notice）"
+            fi
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: Clean up
+        if: always()
+        run: |
+          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db 2>/dev/null || true
+          rm -rf ~/private_keys
