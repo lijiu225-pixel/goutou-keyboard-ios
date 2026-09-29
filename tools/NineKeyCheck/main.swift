@@ -1507,6 +1507,75 @@ expect(applyAfterUI.items.allSatisfy { $0.personID == manageProfile.id }, "自�
 let promptAfterUI = GoutouPrompt.userMessage(segments: manageChat, memory: selectionAfterUI.items.map { $0.content })
 expect(promptAfterUI.contains("【与当前聊天最相关的长期记忆】"), "分析 prompt 结构没变")
 
+// 6.9.1 手动删除（用户自己要的；自动整理永远只归档、不删除）
+let junkMemory = managed("觉", person: manageProfile.id, days: 0, category: .other, importance: 1)
+let coffeeMemory = managed("她喜欢喝美式咖啡", person: manageProfile.id, days: 10, category: .preference, importance: 2)
+let beforeDeleteSeed = GoutouMemoryRepository.getMemories(personID: manageProfile.id, includeArchived: true, from: manageSuite)
+try? GoutouMemoryRepository.replaceMemories(beforeDeleteSeed + [junkMemory, coffeeMemory], personID: manageProfile.id, from: manageSuite)
+let beforeDeleteCount = GoutouMemoryRepository.getMemories(personID: manageProfile.id, includeArchived: true, from: manageSuite).count
+
+let deletedResult = try? MemoryManagement.apply(.delete(junkMemory.id), personID: manageProfile.id, from: manageSuite)
+expect(deletedResult == nil, "删除不返回记忆（这条已经没了）")
+let afterManageDelete = GoutouMemoryRepository.getMemories(personID: manageProfile.id, includeArchived: true, from: manageSuite)
+expectEqual(afterManageDelete.count, beforeDeleteCount - 1, "删掉一条之后少一条")
+expect(!afterManageDelete.contains { $0.id == junkMemory.id }, "被删的那条真的没了")
+expect(afterManageDelete.contains { $0.id == coffeeMemory.id }, "别的记忆没被误删")
+expectEqual(
+    MemoryManagement.items(personID: manageProfile.id, memories: afterManageDelete, filter: .all, now: manageNow).count,
+    afterManageDelete.filter { !$0.archived }.count,
+    "列表也跟着少一条"
+)
+
+// 跨人物删除必须被拒，且那条一个字都不动
+do {
+    _ = try MemoryManagement.apply(.delete(coffeeMemory.id), personID: manageOther.id, from: manageSuite)
+    expect(false, "跨人物删除应该抛错")
+} catch let error as MemoryRepositoryError {
+    expect(error == .personMismatch, "跨人物删除报 personMismatch")
+} catch {
+    expect(false, "抛出的应该是 MemoryRepositoryError")
+}
+expect(GoutouMemoryRepository.getMemory(id: coffeeMemory.id, personID: manageProfile.id, from: manageSuite) != nil, "跨人物删除被拒后那条还在")
+
+// 删一个不存在的 id：报 memoryNotFound，数据不动
+do {
+    _ = try MemoryManagement.apply(.delete(UUID()), personID: manageProfile.id, from: manageSuite)
+    expect(false, "删不存在的 id 应该抛错")
+} catch let error as MemoryRepositoryError {
+    expect(error == .memoryNotFound, "报 memoryNotFound")
+} catch {
+    expect(false, "抛出的应该是 MemoryRepositoryError")
+}
+expectEqual(
+    GoutouMemoryRepository.getMemories(personID: manageProfile.id, includeArchived: true, from: manageSuite).count,
+    afterManageDelete.count,
+    "失败路径下条数没变"
+)
+
+// 已归档的也能手动删（用户自己决定，跟自动整理无关）
+let archivedJunk = managed("归档里的垃圾记忆", person: manageProfile.id, days: 200, importance: 1, archived: true)
+try? GoutouMemoryRepository.replaceMemories(afterManageDelete + [archivedJunk], personID: manageProfile.id, from: manageSuite)
+expectEqual(
+    GoutouMemoryRepository.getMemories(personID: manageProfile.id, includeArchived: true, from: manageSuite).count,
+    afterManageDelete.count + 1,
+    "先塞进去一条归档的"
+)
+_ = try? MemoryManagement.apply(.delete(archivedJunk.id), personID: manageProfile.id, from: manageSuite)
+expect(
+    !GoutouMemoryRepository.getMemories(personID: manageProfile.id, includeArchived: true, from: manageSuite).contains { $0.id == archivedJunk.id },
+    "归档里的记忆也能被手动删掉"
+)
+
+// 删完之后 Top-K 照常，被删的不会再出现
+let selectionAfterDelete = MemorySelector.select(
+    personID: manageProfile.id,
+    chat: manageChat,
+    memories: GoutouMemoryRepository.getMemories(personID: manageProfile.id, includeArchived: true, from: manageSuite),
+    now: manageNow
+)
+expect(!selectionAfterDelete.items.contains { $0.id == junkMemory.id }, "删掉的那条不会再进 Top-K")
+expect(!selectionAfterDelete.items.isEmpty, "删除之后 Top-K 仍然能选")
+
 print("")
 if failures == 0 {
     print("全部通过：\(checks) 项检查")

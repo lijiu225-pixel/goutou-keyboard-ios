@@ -38,6 +38,8 @@ struct GoutouPanelSnapshot {
     var memoryDetail: MemoryDetailModel? = nil
     /// 正在编辑的草稿；nil = 不在编辑态
     var memoryEditDraft: MemoryEditDraft? = nil
+    /// 正在等二次确认的那条删除；nil = 没在确认
+    var memoryPendingDeleteID: UUID? = nil
 }
 
 enum GoutouPanelAction {
@@ -64,6 +66,10 @@ enum GoutouPanelAction {
     case cycleMemoryCategory
     case cycleMemoryImportance
     case saveMemoryEdit(UUID)
+    /// 记忆管理：删除（要二次确认，删了就找不回来）
+    case requestDeleteMemory(UUID)
+    case cancelDeleteMemory
+    case confirmDeleteMemory(UUID)
     case selectProfile(UUID)
     case createProfile
     case deleteProfile(UUID)
@@ -126,6 +132,7 @@ final class GoutouPanelView: UIView {
     private var memoryKeywords: [String] = []
     private var memoryDetail: MemoryDetailModel?
     private var memoryEditDraft: MemoryEditDraft?
+    private var memoryPendingDeleteID: UUID?
     private var configSummary = ""
     /// 状态行点开＝看上下文明细；结果区默认只给结论 + 推荐回复，布局稳定
     private var showsContextDetail = false
@@ -325,6 +332,7 @@ final class GoutouPanelView: UIView {
         self.memoryKeywords = snapshot.memoryKeywords
         self.memoryDetail = snapshot.memoryDetail
         self.memoryEditDraft = snapshot.memoryEditDraft
+        self.memoryPendingDeleteID = snapshot.memoryPendingDeleteID
         self.configSummary = snapshot.configSummary
         renderStatus()
         rebuildBody()
@@ -843,6 +851,33 @@ final class GoutouPanelView: UIView {
             actions.addArrangedSubview(archive)
         }
         bodyStack.addArrangedSubview(actions)
+
+        // 删除：删了就找不回来（和归档不一样），所以一定要二次确认
+        if memoryPendingDeleteID == detail.id {
+            bodyStack.addArrangedSubview(makeNoticeLabel(
+                "⚠️ 确认删除？删掉就找不回来了（归档还能恢复，删除不能）。",
+                color: GoutouTheme.warning
+            ))
+            let confirmRow = UIStackView()
+            confirmRow.axis = .horizontal
+            confirmRow.spacing = 5
+            confirmRow.distribution = .fillEqually
+            let confirm = makeClosureKey(title: "🗑 确认删除", background: GoutouTheme.function, fontSize: 14) {
+                self.delegate?.goutouPanel(self, didTrigger: .confirmDeleteMemory(detail.id))
+            }
+            confirm.accessibilityLabel = "确认删除这条记忆"
+            confirmRow.addArrangedSubview(confirm)
+            let cancel = makeClosureKey(title: "取消", background: GoutouTheme.function, fontSize: 14) {
+                self.delegate?.goutouPanel(self, didTrigger: .cancelDeleteMemory)
+            }
+            cancel.accessibilityLabel = "取消删除"
+            confirmRow.addArrangedSubview(cancel)
+            bodyStack.addArrangedSubview(confirmRow)
+        } else {
+            bodyStack.addArrangedSubview(makeActionButton(title: "🗑 删除这条记忆", background: GoutouTheme.function, fontSize: 13) {
+                self.delegate?.goutouPanel(self, didTrigger: .requestDeleteMemory(detail.id))
+            })
+        }
     }
 
     /// 一条记忆：整行可点，进详情。按 6.9 要求**这里没有删除键**（要清理就归档）。

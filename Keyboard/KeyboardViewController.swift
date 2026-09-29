@@ -64,6 +64,8 @@ final class KeyboardViewController: UIInputViewController {
     private var memoryQuery = ""
     private var memoryDetailID: UUID?
     private var memoryEditDraft: MemoryEditDraft?
+    /// 正在等二次确认的删除（删了就找不回来，所以要确认）
+    private var memoryPendingDeleteID: UUID?
     /// 全部人物档案 + 当前是谁（第六阶段：一人一份上下文/记忆/总结）
     private var profiles: [GoutouPersonProfile] = []
     private var activeProfileID: UUID = GoutouProfileStore.activeProfile().id
@@ -469,6 +471,7 @@ final class KeyboardViewController: UIInputViewController {
         memoryQuery = ""
         memoryDetailID = nil
         memoryEditDraft = nil
+        memoryPendingDeleteID = nil
     }
 
     private func refreshPanel() {
@@ -498,7 +501,8 @@ final class KeyboardViewController: UIInputViewController {
             memoryDetail: memoryDetailID.flatMap {
                 MemoryManagement.detail(id: $0, personID: activeProfileID, memories: allMemories, now: now)
             },
-            memoryEditDraft: memoryEditDraft
+            memoryEditDraft: memoryEditDraft,
+            memoryPendingDeleteID: memoryPendingDeleteID
         ))
     }
 
@@ -987,7 +991,23 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
         case .closeMemoryDetail:
             memoryDetailID = nil
             memoryEditDraft = nil
+            memoryPendingDeleteID = nil
             refreshPanel()
+
+        case .requestDeleteMemory(let id):
+            memoryPendingDeleteID = id
+            refreshPanel()
+
+        case .cancelDeleteMemory:
+            memoryPendingDeleteID = nil
+            refreshPanel()
+
+        case .confirmDeleteMemory(let id):
+            memoryPendingDeleteID = nil
+            // 删完就没这条了，先把详情收起来再刷新，免得渲染一个不存在的 id
+            memoryDetailID = nil
+            memoryEditDraft = nil
+            performMemoryAction(.delete(id), successNote: "已删掉这条记忆")
 
         case .archiveMemory(let id):
             performMemoryAction(.archive(id), successNote: "已归档（不参与分析，随时可以恢复）")

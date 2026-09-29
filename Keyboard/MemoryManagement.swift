@@ -239,6 +239,9 @@ enum MemoryManagement {
         case confirm(UUID)
         /// content 传 nil 表示不改内容（内容要改时由控制器从剪贴板取）
         case update(id: UUID, content: String?, category: MemoryCategory, importance: Int)
+        /// 物理删除。**只给用户手动用**：自动整理永远不删（6.8 只归档）；
+        /// 界面那边必须二次确认，因为它不可恢复。
+        case delete(UUID)
     }
 
     @discardableResult
@@ -248,6 +251,12 @@ enum MemoryManagement {
         from defaults: UserDefaults = .standard
     ) throws -> PersonMemory? {
         switch action {
+        case .delete(let id):
+            // 直接交给 Repository：它会校验归属（不是这个人的就抛 personMismatch，
+            // 找不到就抛 memoryNotFound），绝不跨人物删
+            try GoutouMemoryRepository.deleteMemory(id: id, personID: personID, from: defaults)
+            return nil
+
         case .archive(let id):
             try GoutouMemoryRepository.archiveMemory(id: id, personID: personID, archived: true, from: defaults)
             return GoutouMemoryRepository.getMemory(id: id, personID: personID, from: defaults)
