@@ -59,6 +59,7 @@ jobs:
             Keyboard/NineKeyInputEngine.swift \
             Keyboard/GoutouConfig.swift \
             Keyboard/GoutouPrompt.swift \
+            Keyboard/GoutouProfileStore.swift \
             Keyboard/GoutouSegmentStore.swift \
             Keyboard/GoutouMemoryStore.swift \
             Keyboard/GoutouAIClient.swift \

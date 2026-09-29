@@ -47,6 +47,7 @@ Keyboard/                            键盘扩展：UIInputViewController + Auto
   GoutouAIClient.swift               OpenAI 兼容请求 + 返回解析（纯 Foundation）
   GoutouSegmentStore.swift           军师上下文落盘（存到你手动清空为止）
   GoutouMemoryStore.swift            长期档案（记忆）落盘，每次分析都带上
+  GoutouProfileStore.swift           多人档案（人物/上下文/记忆/总结 一人一份 + 老数据迁移）
   GoutouSkill.md                     军师人格，从 Android 仓库原样拷来（口径只有一份）
   Info.plist                         NSExtension: com.apple.keyboard-service
 tools/NineKeyCheck/main.swift        九键逻辑冒烟测试（CI 上 swiftc 直接跑，不需要模拟器）
@@ -173,6 +174,11 @@ git tag adhoc-v1.0.0 && git push origin adhoc-v1.0.0
 排序是**启发式**的：按词频分档排序，个别词（比如 `944826` 会先给「一贯/习惯」再给「喜欢」）不保证顺序最优。
 
 ### 军师怎么用
+
+**人物档案（第六阶段）**：面板顶栏中间显示的就是**当前人物**，点它进档案列表——新建 / 切换 / 删除 / 改名。
+**每个人的上下文、记忆、AI 总结都是分开的**，切人就是整组换；人格（分析风格）是全体共用一份 `SKILL.md`。
+没有 App Group，所以键盘里没法打字输入名字：**把名字（或一句话）复制过来，点「✏️ 用剪贴板第一行给当前人物改名」**。
+老版本那份单独存的上下文/记忆会在第一次打开时自动搬进一个叫「默认」的档案，不会丢。
 
 第一次要配接口（这一步决定了它能不能用）：
 

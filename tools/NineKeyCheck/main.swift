@@ -5,7 +5,8 @@ import Foundation
 // 跑法（macOS / CI runner，不需要模拟器）：
 //   swiftc -swift-version 5 Keyboard/NineKeyMapper.swift Keyboard/GoutouPinyinTable.swift \
 //          Keyboard/NineKeyInputEngine.swift Keyboard/GoutouConfig.swift \
-//          Keyboard/GoutouPrompt.swift Keyboard/GoutouSegmentStore.swift \
+//          Keyboard/GoutouPrompt.swift Keyboard/GoutouProfileStore.swift \
+//          Keyboard/GoutouSegmentStore.swift \
 //          Keyboard/GoutouMemoryStore.swift Keyboard/GoutouAIClient.swift \
 //          tools/NineKeyCheck/main.swift -o /tmp/ninekeycheck
 //   /tmp/ninekeycheck
@@ -237,6 +238,51 @@ let withoutMemory = GoutouPrompt.userMessage(segments: [GoutouSegment(speaker: .
 expect(!withoutMemory.contains("长期档案"), "没有记忆就不带这一段")
 GoutouMemoryStore.clear(from: scratchMemory)
 expect(GoutouMemoryStore.load(from: scratchMemory).isEmpty, "清空后为空")
+
+print("== 第六阶段：多人独立档案（数据完全隔离）==")
+let scratchProfiles = UserDefaults(suiteName: "goutou.check.profiles") ?? .standard
+scratchProfiles.removeObject(forKey: GoutouProfileStore.storageKey)
+scratchProfiles.removeObject(forKey: GoutouProfileStore.legacySegmentsKey)
+scratchProfiles.removeObject(forKey: GoutouProfileStore.legacyMemoryKey)
+
+// 老版本的单份数据 → 迁移成「默认」档案
+let legacySegments = [GoutouSegment(speaker: .opponent, text: "睡了吗")]
+scratchProfiles.set(try! JSONEncoder().encode(legacySegments), forKey: GoutouProfileStore.legacySegmentsKey)
+scratchProfiles.set(try! JSONEncoder().encode(["她生日 3 月 5 日"]), forKey: GoutouProfileStore.legacyMemoryKey)
+let migrated = GoutouProfileStore.loadBook(from: scratchProfiles)
+expectEqual(migrated.profiles.count, 1, "老数据迁移成一个档案")
+expectEqual(migrated.profiles[0].name, "默认", "默认档案的名字")
+expectEqual(migrated.profiles[0].segments.count, 1, "老的上下文搬进来了")
+expectEqual(migrated.profiles[0].memory.first ?? "", "她生日 3 月 5 日", "老的记忆搬进来了")
+expect(scratchProfiles.data(forKey: GoutouProfileStore.legacySegmentsKey) == nil, "迁移完删掉旧键，不会重复读")
+
+// 新建第二个人：不能看到第一个人的任何数据
+let second = GoutouProfileStore.create(name: "老王", in: scratchProfiles)
+expectEqual(GoutouProfileStore.loadBook(from: scratchProfiles).profiles.count, 2, "现在有两个档案")
+expect(GoutouSegmentStore.load(from: scratchProfiles).isEmpty, "新档案的上下文是空的（不串）")
+expect(GoutouMemoryStore.load(from: scratchProfiles).isEmpty, "新档案的记忆是空的（不串）")
+
+// 给老王加料
+GoutouSegmentStore.save([GoutouSegment(speaker: .me, text: "老王的消息")], to: scratchProfiles)
+GoutouMemoryStore.save(["老王爱喝酒"], to: scratchProfiles)
+GoutouProfileStore.updateActive({ $0.summary = GoutouSavedSummary(headline: "老王在试探你", replies: ["在"], savedAt: Date()) }, in: scratchProfiles)
+expectEqual(GoutouSegmentStore.load(from: scratchProfiles).first?.text ?? "", "老王的消息", "当前档案读到自己那份")
+expectEqual(GoutouProfileStore.activeProfile(from: scratchProfiles).summary?.headline ?? "", "老王在试探你", "AI 总结也按人存")
+
+// 切回默认：拿到的必须是默认那份
+let firstID = GoutouProfileStore.loadBook(from: scratchProfiles).profiles.first { $0.id != second.id }?.id ?? ""
+GoutouProfileStore.select(id: firstID, in: scratchProfiles)
+expectEqual(GoutouSegmentStore.load(from: scratchProfiles).first?.text ?? "", "睡了吗", "切回默认拿到自己那份上下文")
+expectEqual(GoutouMemoryStore.load(from: scratchProfiles).first ?? "", "她生日 3 月 5 日", "记忆同样隔离")
+expect(GoutouProfileStore.activeProfile(from: scratchProfiles).summary == nil, "默认档案没有老王的总结")
+
+// 改名 / 删除（最后一个不许删）
+GoutouProfileStore.rename(id: second.id, to: "老王（同事）", in: scratchProfiles)
+expect(GoutouProfileStore.loadBook(from: scratchProfiles).profiles.contains { $0.name == "老王（同事）" }, "改名生效")
+GoutouProfileStore.delete(id: second.id, in: scratchProfiles)
+expectEqual(GoutouProfileStore.loadBook(from: scratchProfiles).profiles.count, 1, "删掉一个档案")
+GoutouProfileStore.delete(id: firstID, in: scratchProfiles)
+expectEqual(GoutouProfileStore.loadBook(from: scratchProfiles).profiles.count, 1, "只剩一个时删不掉（保证总有当前人物）")
 
 print("== 军师配置：导出 / 导入 ==")
 let sample = GoutouConfig(baseURL: "https://api.example.com/v1", model: "gpt-4o-mini", apiKey: "sk-test-1234")

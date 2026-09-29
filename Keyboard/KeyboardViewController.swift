@@ -54,6 +54,9 @@ final class KeyboardViewController: UIInputViewController {
     private weak var mentorPanel: GoutouPanelView?
     private var segments: [GoutouSegment] = []
     private var memory: [String] = []
+    /// 全部人物档案 + 当前是谁（第六阶段：一人一份上下文/记忆/总结）
+    private var profiles: [GoutouPersonProfile] = []
+    private var activeProfileID: String = ""
     private var panelState: GoutouPanelState = .empty(banner: nil)
     private var panelTask: URLSessionTask?
     private var isPanelVisible = false
@@ -70,6 +73,7 @@ final class KeyboardViewController: UIInputViewController {
         // 词库 400KB 左右，提前读进来，别等到第一次按键时卡一下。
         GoutouPinyinTable.shared.loadIfNeeded()
         // 上次没清掉的上下文接着用（退出面板、键盘被回收都不会丢）
+        refreshProfiles()
         segments = GoutouSegmentStore.load()
         memory = GoutouMemoryStore.load()
         rebuildKeyboard()
@@ -452,8 +456,79 @@ final class KeyboardViewController: UIInputViewController {
             state: panelState,
             segments: segments,
             memory: memory,
+            profiles: profiles,
+            activeProfileID: activeProfileID,
             configSummary: config?.summary ?? ""
         )
+    }
+
+    /// 重新读一遍档案总表（改过档案之后调一次）。
+    private func refreshProfiles() {
+        let book = GoutouProfileStore.loadBook()
+        profiles = book.profiles
+        activeProfileID = book.activeProfileID
+    }
+
+    /// 切到另一个人物：上下文/记忆/上次总结整组换掉。
+    private func selectProfile(id: String) {
+        GoutouProfileStore.select(id: id)
+        refreshProfiles()
+        segments = GoutouSegmentStore.load()
+        memory = GoutouMemoryStore.load()
+        panelTask?.cancel()
+        panelTask = nil
+        if let summary = GoutouProfileStore.activeProfile().summary {
+            panelState = .ready(GoutouResult(headline: summary.headline, replies: summary.replies))
+        } else {
+            panelState = .empty(banner: nil)
+        }
+        refreshPanel()
+    }
+
+    private func createProfile() {
+        let profile = GoutouProfileStore.create(name: "人物 \(profiles.count + 1)")
+        refreshProfiles()
+        segments = []
+        memory = []
+        panelState = .empty(banner: "已新建「\(profile.name)」——把名字复制过来点「✏️ 改名」")
+        refreshPanel()
+    }
+
+    private func deleteProfile(id: String) {
+        GoutouProfileStore.delete(id: id)
+        refreshProfiles()
+        segments = GoutouSegmentStore.load()
+        memory = GoutouMemoryStore.load()
+        panelState = .empty(banner: nil)
+        refreshPanel()
+    }
+
+    /// 没有 App Group，没法在键盘里打字输入名字：拿剪贴板第一行当名字。
+    private func renameActiveProfile() {
+        guard let text = clipboardText() else {
+            panelState = .needsFullAccess("剪贴板里没读到内容。先把名字复制好再来改名（没开「允许完全访问」时读剪贴板会失败）。")
+            refreshPanel()
+            return
+        }
+        let firstLine = text.split(separator: "\n").first.map(String.init) ?? text
+        let name = String(firstLine.trimmed.prefix(20))
+        guard !name.isEmpty else {
+            panelState = .empty(banner: "剪贴板第一行是空的")
+            refreshPanel()
+            return
+        }
+        GoutouProfileStore.rename(id: activeProfileID, to: name)
+        refreshProfiles()
+        panelState = .empty(banner: "已改名为「\(name)」")
+        refreshPanel()
+    }
+
+    /// 分析成功之后，把这次总结记在当前人物名下（切回来还能看到）。
+    private func saveSummary(_ result: GoutouResult) {
+        GoutouProfileStore.updateActive { profile in
+            profile.summary = GoutouSavedSummary(headline: result.headline, replies: result.replies, savedAt: Date())
+        }
+        refreshProfiles()
     }
 
     private func clipboardText() -> String? {
@@ -546,6 +621,7 @@ final class KeyboardViewController: UIInputViewController {
                 switch result {
                 case .success(let value):
                     self.panelState = .ready(value)
+                    self.saveSummary(value)
                 case .failure(let error):
                     self.panelState = .failed(error.message)
                 }
@@ -692,6 +768,18 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
             memory = []
             GoutouMemoryStore.clear()
             refreshPanel()
+
+        case .selectProfile(let id):
+            selectProfile(id: id)
+
+        case .createProfile:
+            createProfile()
+
+        case .deleteProfile(let id):
+            deleteProfile(id: id)
+
+        case .renameActiveProfile:
+            renameActiveProfile()
 
         case .analyze:
             startAnalysis()

@@ -21,6 +21,10 @@ enum GoutouPanelAction {
     case importMemory
     case deleteMemory(Int)
     case clearMemory
+    case selectProfile(String)
+    case createProfile
+    case deleteProfile(String)
+    case renameActiveProfile
     case analyze
     case cancel
     case clearSegments
@@ -60,12 +64,15 @@ final class GoutouPanelView: UIView {
     private let bodyStack = UIStackView()
     private let settingsButton = NineKeyButton(type: .system)
     private let memoryButton = NineKeyButton(type: .system)
+    private let profileButton = NineKeyButton(type: .system)
 
     private var state: GoutouPanelState = .empty(banner: nil)
     private var segments: [GoutouSegment] = []
     private var memory: [String] = []
+    private var profiles: [GoutouPersonProfile] = []
+    private var activeProfileID = ""
     private var configSummary = ""
-    private enum Screen { case main, settings, memory }
+    private enum Screen { case main, settings, memory, profiles }
     private var screen: Screen = .main
 
     override init(frame: CGRect) {
@@ -106,17 +113,17 @@ final class GoutouPanelView: UIView {
         container.heightAnchor.constraint(equalToConstant: topBarHeight).isActive = true
 
         let back = makeKey(title: "⬅ 键盘", background: GoutouTheme.function, fontSize: 13, action: #selector(didTapBack))
-        let title = UILabel()
-        title.text = "狗头军师"
-        title.font = .systemFont(ofSize: 14, weight: .bold)
-        title.textColor = GoutouTheme.text
-        title.textAlignment = .center
+        // 顶栏中间改成「当前人物」——点它进档案列表
+        profileButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+        profileButton.applyStyle(background: GoutouTheme.function)
+        profileButton.accessibilityLabel = "切换人物档案"
+        profileButton.addTarget(self, action: #selector(didTapProfiles), for: .touchUpInside)
         settingsButton.setTitle("⚙ 设置", for: .normal)
         settingsButton.titleLabel?.font = .systemFont(ofSize: 13)
         settingsButton.applyStyle(background: GoutouTheme.function)
         settingsButton.addTarget(self, action: #selector(didTapSettings), for: .touchUpInside)
 
-        for view in [back, title, settingsButton] as [UIView] {
+        for view in [back, profileButton, settingsButton] as [UIView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(view)
         }
@@ -131,9 +138,10 @@ final class GoutouPanelView: UIView {
             settingsButton.topAnchor.constraint(equalTo: container.topAnchor),
             settingsButton.bottomAnchor.constraint(equalTo: container.bottomAnchor),
 
-            title.leadingAnchor.constraint(equalTo: back.trailingAnchor),
-            title.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor),
-            title.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            profileButton.leadingAnchor.constraint(equalTo: back.trailingAnchor, constant: 4),
+            profileButton.trailingAnchor.constraint(equalTo: settingsButton.leadingAnchor, constant: -4),
+            profileButton.topAnchor.constraint(equalTo: container.topAnchor),
+            profileButton.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
         return container
     }
@@ -216,20 +224,31 @@ final class GoutouPanelView: UIView {
 
     // MARK: - 渲染
 
-    func render(state: GoutouPanelState, segments: [GoutouSegment], memory: [String], configSummary: String) {
+    func render(
+        state: GoutouPanelState,
+        segments: [GoutouSegment],
+        memory: [String],
+        profiles: [GoutouPersonProfile],
+        activeProfileID: String,
+        configSummary: String
+    ) {
         self.state = state
         self.segments = segments
         self.memory = memory
+        self.profiles = profiles
+        self.activeProfileID = activeProfileID
         self.configSummary = configSummary
         renderStatus()
         rebuildBody()
         updateTopTitles()
     }
 
-    /// 面板顶部两个入口的标题：停在那一屏时显示「返回」。
+    /// 面板顶部几个入口的标题：停在那一屏时显示「返回」。
     private func updateTopTitles() {
         settingsButton.setTitle(screen == .settings ? "⬅ 返回" : "⚙ 设置", for: .normal)
         memoryButton.setTitle(screen == .memory ? "⬅ 返回" : memoryButtonTitle, for: .normal)
+        let name = profiles.first { $0.id == activeProfileID }?.name ?? "人物"
+        profileButton.setTitle(screen == .profiles ? "⬅ 返回" : "👤 \(name)", for: .normal)
     }
 
     private func renderStatus() {
@@ -268,6 +287,7 @@ final class GoutouPanelView: UIView {
         }
         if screen == .settings { buildSettingsBody(); return }
         if screen == .memory { buildMemoryBody(); return }
+        if screen == .profiles { buildProfilesBody(); return }
         switch state {
         case .empty(let banner):
             if let banner = banner, !banner.isEmpty {
@@ -362,6 +382,64 @@ final class GoutouPanelView: UIView {
             "在「狗头军师」App 里填好 Base URL / Model / Key → 点「复制配置」→ 回这里导入。\nkey 只存在这台手机的键盘里，不进代码仓库。",
             color: GoutouTheme.secondary
         ))
+    }
+
+    /// 人物档案列表：一人一份上下文 / 记忆 / 总结，切谁用谁。
+    private func buildProfilesBody() {
+        bodyStack.addArrangedSubview(makeNoticeLabel(
+            "每个档案的上下文、记忆、上次总结都是分开的；人格（分析风格）是共用的。",
+            color: GoutouTheme.secondary
+        ))
+        for profile in profiles {
+            bodyStack.addArrangedSubview(makeProfileRow(profile))
+        }
+        bodyStack.addArrangedSubview(makeActionButton(title: "➕ 新建人物档案", background: GoutouTheme.blue, fontSize: 14) {
+            self.delegate?.goutouPanel(self, didTrigger: .createProfile)
+        })
+        bodyStack.addArrangedSubview(makeActionButton(title: "✏️ 用剪贴板第一行给当前人物改名", background: GoutouTheme.function, fontSize: 13) {
+            self.delegate?.goutouPanel(self, didTrigger: .renameActiveProfile)
+        })
+    }
+
+    private func makeProfileRow(_ profile: GoutouPersonProfile) -> UIView {
+        let isActive = profile.id == activeProfileID
+        let row = UIStackView()
+        row.axis = .horizontal
+        row.spacing = 6
+        row.alignment = .fill
+
+        let title = NineKeyButton(type: .system)
+        title.setTitle(
+            "\(isActive ? "✅" : "👤") \(profile.name)　\(profile.segments.count) 段 · \(profile.memory.count) 条记忆",
+            for: .normal
+        )
+        title.titleLabel?.font = .systemFont(ofSize: 13)
+        title.titleLabel?.numberOfLines = 0
+        title.titleLabel?.lineBreakMode = .byWordWrapping
+        title.contentHorizontalAlignment = .left
+        title.titleEdgeInsets = UIEdgeInsets(top: 8, left: 10, bottom: 8, right: 10)
+        title.applyStyle(background: isActive ? GoutouTheme.candidatePrimary : GoutouTheme.key)
+        title.accessibilityLabel = "切到 \(profile.name)"
+        title.addAction(UIAction { [weak self] _ in
+            guard let self = self else { return }
+            self.delegate?.goutouPanel(self, didTrigger: .selectProfile(profile.id))
+        }, for: .touchUpInside)
+        row.addArrangedSubview(title)
+
+        if profiles.count > 1 {
+            let delete = NineKeyButton(type: .system)
+            delete.setTitle("✕", for: .normal)
+            delete.titleLabel?.font = .systemFont(ofSize: 14)
+            delete.applyStyle(background: GoutouTheme.function)
+            delete.accessibilityLabel = "删掉 \(profile.name)"
+            delete.addAction(UIAction { [weak self] _ in
+                guard let self = self else { return }
+                self.delegate?.goutouPanel(self, didTrigger: .deleteProfile(profile.id))
+            }, for: .touchUpInside)
+            delete.widthAnchor.constraint(equalToConstant: 36).isActive = true
+            row.addArrangedSubview(delete)
+        }
+        return row
     }
 
     /// 长期档案：每次分析都会带上，用来养这个军师。
@@ -505,6 +583,10 @@ final class GoutouPanelView: UIView {
 
     @objc private func didTapMemory() {
         setScreen(.memory)
+    }
+
+    @objc private func didTapProfiles() {
+        setScreen(.profiles)
     }
 
     @objc private func didTapCancel() {
