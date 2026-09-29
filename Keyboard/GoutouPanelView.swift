@@ -43,8 +43,8 @@ final class GoutouPanelView: UIView {
 
     /// 没开「允许完全访问」时，一键复制这句给用户照着走。
     static let fullAccessSteps = "设置 → 通用 → 键盘 → 狗头军师 → 允许完全访问"
-    /// 上下文最多叠几段（和控制器里的判断共用这一个数）。
-    static let maxSegments = 6
+    /// 上下文段数不设上限；超过这个字数就在状态行提醒一下（请求会变慢，15 秒会超时）。
+    static let contextWarningLength = 4000
 
     private let topBarHeight: CGFloat = 30
     private let statusHeight: CGFloat = 26
@@ -214,8 +214,10 @@ final class GoutouPanelView: UIView {
             let listed = segments.enumerated()
                 .map { "\($0.offset + 1).\($0.element.speaker.promptLabel)" }
                 .joined(separator: " ")
-            statusLabel.text = "上下文 \(segments.count) 段 · \(listed)"
-            statusLabel.textColor = GoutouTheme.secondary
+            let total = segments.reduce(0) { $0 + $1.text.count }
+            let tooLong = total > GoutouPanelView.contextWarningLength
+            statusLabel.text = "上下文 \(segments.count) 段 · 约 \(total) 字\(tooLong ? "（偏长，可能要等更久）" : "") · \(listed)"
+            statusLabel.textColor = tooLong ? GoutouTheme.warning : GoutouTheme.secondary
             return
         }
         switch state {
@@ -283,7 +285,7 @@ final class GoutouPanelView: UIView {
     private func appendSegmentList() {
         if segments.isEmpty {
             bodyStack.addArrangedSubview(makeNoticeLabel(
-                "1. 长按对方的消息 → 复制\n2. 点上面 👤对方 / 🙋我 把内容加进来（最多 \(GoutouPanelView.maxSegments) 段）\n3. 点 ⟳ 分析，选一条话术上屏",
+                "1. 长按对方的消息 → 复制\n2. 点上面 👤对方 / 🙋我 把内容加进来（段数不限，越多等得越久）\n3. 点 ⟳ 分析，选一条话术上屏",
                 color: GoutouTheme.secondary
             ))
             return

@@ -276,11 +276,6 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func addSegment(_ speaker: GoutouSpeaker) {
-        guard segments.count < GoutouPanelView.maxSegments else {
-            panelState = .empty(banner: "上下文最多 \(GoutouPanelView.maxSegments) 段，先点下面的「清空上下文」")
-            refreshPanel()
-            return
-        }
         let content = speaker == .background ? (draftText() ?? clipboardText()) : clipboardText()
         guard let text = content, !text.isEmpty else {
             panelState = .needsFullAccess(speaker == .background
