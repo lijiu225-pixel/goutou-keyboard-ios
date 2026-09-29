@@ -62,7 +62,12 @@ enum GoutouPrompt {
 
     /// 把叠加的几段拼成 skill 认得的格式：`对方：…` / `我：…` / `背景：…`。
     /// `memory` 是长期档案，会以单独一段放在对话前面（每次分析都带上）。
-    static func userMessage(segments: [GoutouSegment], memory: [String] = []) -> String {
+    /// `extraRequirement` 会附在最后——离答案最近的一句，模型最听。
+    static func userMessage(
+        segments: [GoutouSegment],
+        memory: [String] = [],
+        extraRequirement: String? = nil
+    ) -> String {
         let body = segments
             .map { "\($0.speaker.promptLabel)：\($0.text.trimmed)" }
             .filter { $0.count > 3 }
@@ -70,11 +75,21 @@ enum GoutouPrompt {
         let archive = memory
             .map { $0.trimmed }
             .filter { !$0.isEmpty }
-        guard !archive.isEmpty else {
-            return "聊天内容：\n\(body)"
+        var sections: [String] = []
+        if !archive.isEmpty {
+            let archiveText = archive.map { "- \($0)" }.joined(separator: "\n")
+            sections.append("长期档案（用户自己提供的背景事实，不是本次对话）：\n\(archiveText)")
         }
-        let archiveText = archive.map { "- \($0)" }.joined(separator: "\n")
-        return "长期档案（用户自己提供的背景事实，不是本次对话）：\n\(archiveText)\n\n聊天内容：\n\(body)"
+        sections.append("聊天内容：\n\(body)")
+        if let extraRequirement = extraRequirement, !extraRequirement.trimmed.isEmpty {
+            sections.append(extraRequirement.trimmed)
+        }
+        return sections.joined(separator: "\n\n")
+    }
+
+    /// 主分析用的那句"再强调一次"——放在最后，模型才真的会给够条数。
+    static var replyRequirement: String {
+        "本次要求：replies 给 \(minReplies)～\(maxReplies) 条可直接发送的成品，角度拉开；不要把候选压到 2～3 条。"
     }
 
     /// 只取 relationship 的第一句，超过 20 字就截断加省略号。

@@ -332,6 +332,13 @@ let composed = GoutouPrompt.userMessage(segments: [
     GoutouSegment(speaker: .background, text: "我们上周吵过架"),
 ])
 expectEqual(composed, "聊天内容：\n对方：你昨天不是说好了吗\n我：临时有事\n背景：我们上周吵过架", "上下文拼成 skill 认得的格式")
+let composedWithRequirement = GoutouPrompt.userMessage(
+    segments: [GoutouSegment(speaker: .opponent, text: "睡了吗")],
+    extraRequirement: GoutouPrompt.replyRequirement
+)
+expect(composedWithRequirement.contains("6～8 条"), "主分析的用户消息里再强调一次条数（放在最后，模型更听）")
+expect(composedWithRequirement.contains("不要把候选压到 2～3 条"), "明确顶掉 skill 里的 2～3 条")
+expect(!GoutouPrompt.userMessage(segments: [GoutouSegment(speaker: .opponent, text: "嗯")]).contains("6～8 条"), "不该带要求的场合（比如记忆归纳）不带这句")
 
 print("== 一行判断 ==")
 expectEqual(GoutouPrompt.headline(fromRelationship: "对方在试探你会不会主动。后面是依据。"), "对方在试探你会不会主动。", "只取第一句")

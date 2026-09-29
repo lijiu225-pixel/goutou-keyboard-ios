@@ -653,7 +653,11 @@ final class KeyboardViewController: UIInputViewController {
         let systemPrompt = GoutouPrompt.systemPrompt(skill: skillText)
         // 近期状态标一下，免得模型把它当永久事实
         let memoryLines = memory.map { $0.category.isStable ? $0.content : "（近期）\($0.content)" }
-        let userMessage = GoutouPrompt.userMessage(segments: segments, memory: memoryLines)
+        let userMessage = GoutouPrompt.userMessage(
+            segments: segments,
+            memory: memoryLines,
+            extraRequirement: GoutouPrompt.replyRequirement
+        )
         let analysisPersonID = activeProfileID
         let analysisSegments = segments
         panelTask = GoutouAIClient.analyze(
