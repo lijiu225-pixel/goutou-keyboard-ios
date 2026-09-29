@@ -41,6 +41,7 @@ final class KeyboardViewController: UIInputViewController {
     private var segments: [GoutouSegment] = []
     private var panelState: GoutouPanelState = .empty(banner: nil)
     private var panelTask: URLSessionTask?
+    private var isPanelVisible = false
     private var config: GoutouConfig? = GoutouConfig.load()
     private var skillText: String = ""
 
@@ -77,10 +78,9 @@ final class KeyboardViewController: UIInputViewController {
         mentorPanel = nil
         nineKeyEngine.clear()
         page = .nineKey
-        segments = []
-        panelTask?.cancel()
-        panelTask = nil
-        panelState = .empty(banner: nil)
+        // segments / panelState / 正在跑的请求都不在这里清：
+        // iOS 弹「允许粘贴」的确认框时，键盘的 view 有可能被重建一次，
+        // 以前这样会把你刚加进去的上下文和刚出的结果一起清掉。
 
         switch mode {
         case .englishQWERTY:
@@ -89,6 +89,10 @@ final class KeyboardViewController: UIInputViewController {
         case .chineseNineKey:
             view.backgroundColor = GoutouTheme.background
             buildNineKeyLayout()
+        }
+
+        if isPanelVisible {
+            showMentorPanel()
         }
     }
 
@@ -236,6 +240,7 @@ final class KeyboardViewController: UIInputViewController {
     // MARK: - 军师面板（新增）
 
     private func showMentorPanel() {
+        isPanelVisible = true
         nineKeyView?.isHidden = true
         mentorPanel?.isHidden = false
         mentorPanel?.setShowingSettings(false)
@@ -243,6 +248,7 @@ final class KeyboardViewController: UIInputViewController {
     }
 
     private func hideMentorPanel() {
+        isPanelVisible = false
         panelTask?.cancel()
         panelTask = nil
         mentorPanel?.isHidden = true
