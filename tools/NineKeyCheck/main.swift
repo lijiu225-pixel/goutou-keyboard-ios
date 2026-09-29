@@ -405,9 +405,23 @@ do {
     expect(false, "只回思考时应该抛错")
 } catch let error as GoutouAIError {
     expect(error == .reasoningOnly(true), "只回思考时给出「被截断」的原因（实际：\(error.message)）")
+    expect(error.message.contains("deepseek-chat"), "错误里给出可操作建议（换非推理模型）")
 } catch {
     expect(false, "抛出的应该是 GoutouAIError")
 }
+// 7b) 正文空、但思考里其实混着约定 JSON → 抢救出来，别让用户白等
+let salvaged: [String: Any] = [
+    "choices": [[
+        "finish_reason": "stop",
+        "message": [
+            "content": "",
+            "reasoning_content": "先看这段对话……\n最终答案：{\"relationship\":\"他在发火，先别硬顶。\",\"replies\":[\"先别回\",\"你冷静一下\"]}",
+        ],
+    ]]
+]
+let salvagedResult = try? GoutouAIClient.parseResponse(data: (try? JSONSerialization.data(withJSONObject: salvaged)) ?? Data())
+expectEqual(salvagedResult?.headline ?? "", "他在发火，先别硬顶。", "思考里混着 JSON 也能抢救出来")
+expectEqual(salvagedResult?.replies.count ?? 0, 2, "抢救出来的话术也在")
 // 8) 真的不是 JSON 时，错误里要带出开头，方便定位
 do {
     _ = try GoutouAIClient.parseResponse(data: responseData("抱歉，我不能帮你分析这段关系。"))

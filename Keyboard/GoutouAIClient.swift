@@ -42,8 +42,8 @@ enum GoutouAIError: Error, Equatable {
                 : "接口返回的不是约定格式的 JSON（开头是：\(snippet)）"
         case .reasoningOnly(let truncated):
             return truncated
-                ? "模型把 token 都花在思考上了，正文被截断。换成非推理模型，或把上下文缩短再试"
-                : "模型只返回了思考内容，没有正文。换成非推理模型再试"
+                ? "模型把 token 都花在思考上了，正文被截断。把 Model 换成非推理的（例如 deepseek-reasoner → deepseek-chat），或把上下文缩短再试"
+                : "模型只返回了思考内容、没有正文。把 Model 换成非推理的（例如 deepseek-reasoner → deepseek-chat）再试"
         case .truncated:
             return "模型输出被截断（token 用完了），没能给完整的 JSON。把上下文缩短、或换输出更短的模型再试"
         }
@@ -59,7 +59,8 @@ enum GoutouAIClient {
     static let timeout: TimeInterval = 60
     static let temperature = 0.6
     /// 与 Android 面板一致：推理模型会把思考也算进这个预算，给小了可能只剩思考没有正文。
-    static let maxTokens = 4096
+    /// 提到 8192：推理模型的思考很容易吃掉几千 token，留给正文的余量要够。
+    static let maxTokens = 8192
 
     // MARK: - 请求
 
@@ -114,19 +115,27 @@ enum GoutouAIClient {
 
         // content 可能是字符串，也可能是 [{"type":"text","text":"…"}] 这种分片
         let text = stripThinking(extractText(from: message)).trimmed
-        if text.isEmpty {
-            let reasoning = (message["reasoning_content"] as? String) ?? (message["reasoning"] as? String) ?? ""
-            if !reasoning.trimmed.isEmpty {
-                throw GoutouAIError.reasoningOnly(truncated)
-            }
-            throw GoutouAIError.empty
-        }
+        // 推理模型（deepseek-reasoner 这类）会把过程写在 reasoning_content 里
+        let reasoning = stripThinking(
+            (message["reasoning_content"] as? String) ?? (message["reasoning"] as? String) ?? ""
+        ).trimmed
 
+        // 正文优先；正文捞不出来时，退一步从思考里捞（有些推理模型会把结论也写在思考里）
+        if let result = buildResult(fromText: text) { return result }
+        if !reasoning.isEmpty, let result = buildResult(fromText: reasoning) { return result }
+
+        if !reasoning.isEmpty { throw GoutouAIError.reasoningOnly(truncated) }
+        if text.isEmpty { throw GoutouAIError.empty }
+        throw truncated ? GoutouAIError.truncated : GoutouAIError.badJSON(snippet(text))
+    }
+
+    /// 从一段文本里组装结果；返回 nil 表示这段文本里没有能用的字段（调用方再决定报什么错）。
+    static func buildResult(fromText text: String) -> GoutouResult? {
+        let trimmed = text.trimmed
+        guard !trimmed.isEmpty else { return nil }
         // 严格 JSON 读不出来时，退到「按字段切片」的宽松解析：
         // 未转义引号、字符串里混进裸换行、甚至被截断的 JSON，它都能把认得的字段捞出来。
-        guard let payload = decodePayload(text) ?? lenientFields(in: text) else {
-            throw truncated ? GoutouAIError.truncated : GoutouAIError.badJSON(snippet(text))
-        }
+        guard let payload = decodePayload(trimmed) ?? lenientFields(in: trimmed) else { return nil }
 
         let unwrapped = unwrapPayload(payload)
         let relationship = firstString(
@@ -136,10 +145,7 @@ enum GoutouAIClient {
         let replies = normalizedReplies(from: unwrapped)
 
         let headline = GoutouPrompt.headline(fromRelationship: relationship)
-        guard !headline.isEmpty || !replies.isEmpty else {
-            // 什么都没捞到：如果本来就被截断，就说清是截断，别含糊说「空内容」
-            throw truncated ? GoutouAIError.truncated : GoutouAIError.empty
-        }
+        guard !headline.isEmpty || !replies.isEmpty else { return nil }
         return GoutouResult(headline: headline, replies: Array(replies.prefix(GoutouPrompt.maxReplies)))
     }
 
