@@ -60,6 +60,8 @@ jobs:
             Keyboard/GoutouConfig.swift \
             Keyboard/GoutouPrompt.swift \
             Keyboard/GoutouProfileStore.swift \
+            Keyboard/GoutouMemoryItem.swift \
+            Keyboard/GoutouMemoryExtractor.swift \
             Keyboard/GoutouSegmentStore.swift \
             Keyboard/GoutouMemoryStore.swift \
             Keyboard/GoutouAIClient.swift \

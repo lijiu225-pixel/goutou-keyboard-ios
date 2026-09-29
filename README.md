@@ -47,6 +47,8 @@ Keyboard/                            键盘扩展：UIInputViewController + Auto
   GoutouAIClient.swift               OpenAI 兼容请求 + 返回解析（纯 Foundation）
   GoutouSegmentStore.swift           军师上下文落盘（存到你手动清空为止）
   GoutouMemoryStore.swift            长期档案（记忆）落盘，每次分析都带上
+  GoutouMemoryItem.swift             记忆条目模型（分类/重要度/时间戳）+ 候选事务合并（去重/更新/不删）
+  GoutouMemoryExtractor.swift        分析成功后的自动归纳（提取候选，不存原文；不改网络层）
   GoutouProfileStore.swift           多人档案（人物/上下文/记忆/总结 一人一份 + 老数据迁移）
   GoutouSkill.md                     军师人格，从 Android 仓库原样拷来（口径只有一份）
   Info.plist                         NSExtension: com.apple.keyboard-service
@@ -174,6 +176,14 @@ git tag adhoc-v1.0.0 && git push origin adhoc-v1.0.0
 排序是**启发式**的：按词频分档排序，个别词（比如 `944826` 会先给「一贯/习惯」再给「喜欢」）不保证顺序最优。
 
 ### 军师怎么用
+
+**记忆会自动长**：每次分析成功之后，键盘会用同一套接口再跑一次「归纳」——
+只把这次聊天里**值得长期留下的事实/近况**提炼成几句（**不保存聊天原文**），
+再和你已有的记忆比对，按 `ADD / UPDATE / MERGE / IGNORE` 合并：
+同一个意思不会反复新增，新信息会覆盖旧的那条，AI **只能改不能删**。
+归纳完主界面只提示一句「已从本次聊天更新 X 条记忆」。
+归纳这一步失败（超时/格式不对）时**记忆一个字都不动**。
+记忆分「稳定事实」和「近期状态」两类分开存，记忆页里也分两段列。
 
 **人物档案（第六阶段）**：面板顶栏中间显示的就是**当前人物**，点它进档案列表——新建 / 切换 / 删除 / 改名。
 **每个人的上下文、记忆、AI 总结都是分开的**，切人就是整组换；人格（分析风格）是全体共用一份 `SKILL.md`。

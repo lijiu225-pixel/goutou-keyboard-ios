@@ -6,6 +6,7 @@ import Foundation
 //   swiftc -swift-version 5 Keyboard/NineKeyMapper.swift Keyboard/GoutouPinyinTable.swift \
 //          Keyboard/NineKeyInputEngine.swift Keyboard/GoutouConfig.swift \
 //          Keyboard/GoutouPrompt.swift Keyboard/GoutouProfileStore.swift \
+//          Keyboard/GoutouMemoryItem.swift Keyboard/GoutouMemoryExtractor.swift \
 //          Keyboard/GoutouSegmentStore.swift \
 //          Keyboard/GoutouMemoryStore.swift Keyboard/GoutouAIClient.swift \
 //          tools/NineKeyCheck/main.swift -o /tmp/ninekeycheck
@@ -222,14 +223,18 @@ print("== 长期档案（记忆）==")
 let scratchMemory = UserDefaults(suiteName: "goutou.check.memory") ?? .standard
 GoutouMemoryStore.clear(from: scratchMemory)
 expect(GoutouMemoryStore.load(from: scratchMemory).isEmpty, "一开始没有记忆")
-GoutouMemoryStore.save(["她生日 3 月 5 日", "   ", "我们认识三个月"], to: scratchMemory)
+GoutouMemoryStore.append("她生日 3 月 5 日", to: scratchMemory)
+GoutouMemoryStore.append("   ", to: scratchMemory)
+GoutouMemoryStore.append("我们认识三个月", to: scratchMemory)
 let loadedMemory = GoutouMemoryStore.load(from: scratchMemory)
 expectEqual(loadedMemory.count, 2, "空白条目会被丢掉")
-expectEqual(loadedMemory.first ?? "", "她生日 3 月 5 日", "第一条内容")
+expectEqual(loadedMemory.first?.content ?? "", "她生日 3 月 5 日", "第一条内容")
+expectEqual(loadedMemory.first?.category ?? .recentStatus, .stableFact, "手工加的都算稳定事实")
+expect(!(loadedMemory.first?.id.isEmpty ?? true), "每条记忆都有 id")
 
 let withMemory = GoutouPrompt.userMessage(
     segments: [GoutouSegment(speaker: .opponent, text: "睡了吗")],
-    memory: loadedMemory
+    memory: loadedMemory.map { $0.content }
 )
 expect(withMemory.hasPrefix("长期档案（用户自己提供的背景事实，不是本次对话）："), "记忆放在对话前面")
 expect(withMemory.contains("- 她生日 3 月 5 日"), "记忆按条目列出")
@@ -264,7 +269,7 @@ expect(GoutouMemoryStore.load(from: scratchProfiles).isEmpty, "新档案的记�
 
 // 给老王加料
 GoutouSegmentStore.save([GoutouSegment(speaker: .me, text: "老王的消息")], to: scratchProfiles)
-GoutouMemoryStore.save(["老王爱喝酒"], to: scratchProfiles)
+GoutouMemoryStore.append("老王爱喝酒", to: scratchProfiles)
 GoutouProfileStore.updateActive({ $0.summary = GoutouSavedSummary(headline: "老王在试探你", replies: ["在"], savedAt: Date()) }, in: scratchProfiles)
 expectEqual(GoutouSegmentStore.load(from: scratchProfiles).first?.text ?? "", "老王的消息", "当前档案读到自己那份")
 expectEqual(GoutouProfileStore.activeProfile(from: scratchProfiles).summary?.headline ?? "", "老王在试探你", "AI 总结也按人存")
@@ -273,7 +278,7 @@ expectEqual(GoutouProfileStore.activeProfile(from: scratchProfiles).summary?.hea
 let firstID = GoutouProfileStore.loadBook(from: scratchProfiles).profiles.first { $0.id != second.id }?.id ?? ""
 GoutouProfileStore.select(id: firstID, in: scratchProfiles)
 expectEqual(GoutouSegmentStore.load(from: scratchProfiles).first?.text ?? "", "睡了吗", "切回默认拿到自己那份上下文")
-expectEqual(GoutouMemoryStore.load(from: scratchProfiles).first ?? "", "她生日 3 月 5 日", "记忆同样隔离")
+expectEqual(GoutouMemoryStore.load(from: scratchProfiles).first?.content ?? "", "她生日 3 月 5 日", "记忆同样隔离")
 expect(GoutouProfileStore.activeProfile(from: scratchProfiles).summary == nil, "默认档案没有老王的总结")
 
 // 改名 / 删除（最后一个不许删）
@@ -412,6 +417,89 @@ do {
 } catch {
     expect(false, "抛出的应该是 GoutouAIError")
 }
+
+print("== 自动归纳：MemoryExtractor 解析（AI 只能改不能删）==")
+let extractorReply = """
+{"operations":[
+ {"op":"ADD","content":"她在互联网公司做运营","category":"stable_fact","importance":4,"confidence":0.9},
+ {"op":"UPDATE","targetID":"abc","content":"她生日是 3 月 5 日","category":"stable_fact","importance":4,"confidence":0.9},
+ {"op":"MERGE","targetID":"def","content":"他养了只猫","category":"偏好","importance":2,"confidence":0.6},
+ {"op":"IGNORE","targetID":"abc"},
+ {"op":"DELETE","targetID":"abc"},
+ {"op":"UPDATE","content":"没带 target 的更新应该被丢掉"}
+]}
+"""
+let parsedOps = GoutouMemoryExtractor.parse(extractorReply) ?? []
+expectEqual(parsedOps.count, 4, "只认 ADD/UPDATE/MERGE/IGNORE，UPDATE 必须带 target，DELETE 直接丢")
+expect(parsedOps.first?.operation == .add, "第一条是 ADD")
+expectEqual(parsedOps.first?.category ?? .recentStatus, .stableFact, "英文分类解析")
+expectEqual(parsedOps.count > 1 ? (parsedOps[1].targetID ?? "") : "", "abc", "UPDATE 的 targetID")
+expect(parsedOps.count > 2 ? parsedOps[2].operation == .merge : false, "MERGE 认出来")
+expectEqual(parsedOps.count > 2 ? parsedOps[2].category : .stableFact, .preference, "中文分类也认（偏好）")
+expect(parsedOps.count > 3 ? parsedOps[3].operation == .ignore : false, "IGNORE 认出来")
+expect(GoutouMemoryExtractor.parse("这不是 JSON") == nil, "解析不了 → nil（调用方一个字都不改）")
+expectEqual(GoutouMemoryExtractor.parse("{\"operations\":[]}")?.count ?? 1, 0, "空操作是合法的（记忆不动）")
+expectEqual(
+    GoutouMemoryExtractor.parse("{\"operations\":[{\"op\":\"ADD\",\"content\":\"她在加班\",\"category\":\"近况\"}]}")?.first?.category ?? .stableFact,
+    .recentStatus,
+    "近期状态能认出来（和稳定事实分开存）"
+)
+
+print("== 自动归纳：只动当前人物 / 去重 / 更新 / 重启仍在 ==")
+let scratchAuto = UserDefaults(suiteName: "goutou.check.auto") ?? .standard
+scratchAuto.removeObject(forKey: GoutouProfileStore.storageKey)
+scratchAuto.removeObject(forKey: GoutouProfileStore.legacySegmentsKey)
+scratchAuto.removeObject(forKey: GoutouProfileStore.legacyMemoryKey)
+
+let autoA = GoutouProfileStore.loadBook(from: scratchAuto).profiles[0]
+let autoB = GoutouProfileStore.create(name: "B", in: scratchAuto)
+GoutouProfileStore.select(id: autoB.id, in: scratchAuto)
+GoutouMemoryStore.append("B 的旧记忆", to: scratchAuto)
+GoutouProfileStore.select(id: autoA.id, in: scratchAuto)
+GoutouMemoryStore.append("她生日是 3 月 5 日", to: scratchAuto)
+
+let aItems = GoutouMemoryStore.load(from: scratchAuto)
+let birthdayID = aItems.first?.id ?? ""
+let bItemID = GoutouProfileStore.loadBook(from: scratchAuto)
+    .profiles.first { $0.id == autoB.id }?.memory.first?.id ?? ""
+
+let ops: [GoutouMemoryCandidate] = [
+    GoutouMemoryCandidate(operation: .add, targetID: nil, content: "她在互联网公司做运营",
+                          category: .stableFact, importance: 4, confidence: 0.9),
+    GoutouMemoryCandidate(operation: .update, targetID: birthdayID, content: "她生日是 3 月 5 日（已确认）",
+                          category: .stableFact, importance: 4, confidence: 0.95),
+    GoutouMemoryCandidate(operation: .update, targetID: bItemID, content: "偷改 B 的记忆",
+                          category: .stableFact, importance: 5, confidence: 1.0),
+    GoutouMemoryCandidate(operation: .add, targetID: nil, content: "她生日是3月5日",
+                          category: .stableFact, importance: 3, confidence: 0.8),
+]
+let appliedMemory = GoutouMemoryApplier.apply(ops, to: aItems, personID: autoA.id)
+expectEqual(appliedMemory.changed, 2, "只算「新增 + 真更新」两条（越权 + 重复都不算）")
+GoutouMemoryStore.replaceAll(appliedMemory.items, from: scratchAuto)
+
+let aAfter = GoutouMemoryStore.load(from: scratchAuto)
+expectEqual(aAfter.count, 2, "A 从 1 条变 2 条：重复的没有新增")
+expect(aAfter.contains { $0.content.contains("互联网公司") }, "新事实进来了")
+expect(aAfter.contains { $0.content.contains("已确认") }, "老记忆被更新，而不是新加一条")
+expect(!aAfter.contains { $0.content.contains("她生日是3月5日") }, "近似重复没有变成独立条目")
+expect(aAfter.allSatisfy { $0.personID == autoA.id }, "A 的记忆归属都还是 A")
+
+GoutouProfileStore.select(id: autoB.id, in: scratchAuto)
+let bAfter = GoutouMemoryStore.load(from: scratchAuto)
+expectEqual(bAfter.count, 1, "B 还是 1 条")
+expectEqual(bAfter.first?.content ?? "", "B 的旧记忆", "B 的内容没被动过")
+expect(!bAfter.contains { $0.content.contains("互联网公司") }, "A 的信息没有串到 B")
+expectEqual(bAfter.first?.personID ?? "", autoB.id, "B 的记忆归属还是 B")
+
+// 重启：重新从盘里读（新的 loadBook 调用），记忆还在
+let afterRestart = GoutouProfileStore.loadBook(from: scratchAuto)
+    .profiles.first { $0.id == autoB.id }?.memory ?? []
+expectEqual(afterRestart.count, 1, "重启后 B 的记忆还在")
+let aAfterRestart = GoutouProfileStore.loadBook(from: scratchAuto)
+    .profiles.first { $0.id == autoA.id }?.memory ?? []
+expectEqual(aAfterRestart.count, 2, "重启后 A 的记忆还在")
+expect(aAfterRestart.allSatisfy { !$0.id.isEmpty }, "每条都带稳定 id")
+expect(aAfterRestart.contains { $0.updatedAt > $0.createdAt }, "被更新的那条留了 updatedAt")
 
 print("")
 if failures == 0 {

@@ -17,12 +17,14 @@ enum GoutouPanelState {
 struct GoutouPanelSnapshot {
     var state: GoutouPanelState
     var segments: [GoutouSegment]
-    var memory: [String]
+    var memory: [GoutouMemoryItem]
     var profiles: [GoutouPersonProfile]
     var activeProfileID: String
     /// 上一次成功的结果——失败时也保留，结果区高度不会忽上忽下
     var lastResult: GoutouResult?
     var configSummary: String
+    /// 自动归纳完给一句提示（「已从本次聊天更新 X 条记忆」）
+    var memoryNote: String?
 }
 
 enum GoutouPanelAction {
@@ -32,7 +34,7 @@ enum GoutouPanelAction {
     case addSegment(GoutouSpeaker)
     case deleteSegment(Int)
     case importMemory
-    case deleteMemory(Int)
+    case deleteMemory(String)
     case clearMemory
     case selectProfile(String)
     case createProfile
@@ -84,10 +86,11 @@ final class GoutouPanelView: UIView {
 
     private var state: GoutouPanelState = .empty(banner: nil)
     private var segments: [GoutouSegment] = []
-    private var memory: [String] = []
+    private var memory: [GoutouMemoryItem] = []
     private var profiles: [GoutouPersonProfile] = []
     private var activeProfileID = ""
     private var lastResult: GoutouResult?
+    private var memoryNote: String?
     private var configSummary = ""
     /// 状态行点开＝看上下文明细；结果区默认只给结论 + 推荐回复，布局稳定
     private var showsContextDetail = false
@@ -279,6 +282,7 @@ final class GoutouPanelView: UIView {
         self.profiles = snapshot.profiles
         self.activeProfileID = snapshot.activeProfileID
         self.lastResult = snapshot.lastResult
+        self.memoryNote = snapshot.memoryNote
         self.configSummary = snapshot.configSummary
         renderStatus()
         rebuildBody()
@@ -396,6 +400,9 @@ final class GoutouPanelView: UIView {
         }
 
         bodyStack.addArrangedSubview(makeSectionHeader("分析结论"))
+        if let note = memoryNote, !note.isEmpty {
+            bodyStack.addArrangedSubview(makeNoticeLabel(note, color: GoutouTheme.secondary))
+        }
         if let headline = lastResult?.headline, !headline.isEmpty {
             bodyStack.addArrangedSubview(makeHeadlineLabel(headline))
         } else {
@@ -602,13 +609,22 @@ final class GoutouPanelView: UIView {
     private func buildMemoryBody() {
         bodyStack.addArrangedSubview(makeNoticeLabel(
             memory.isEmpty
-                ? "还没有长期档案。把「她生日 3 月 5 日」「我们认识三个月」这类事实复制过来，点下面导入。"
-                : "长期档案 \(memory.count) 条（每次分析都会带上）：",
+                ? "还没有长期档案。分析一次聊天会自动归纳；也可以把「她生日 3 月 5 日」这类事实复制过来手工导入。"
+                : "长期档案 \(memory.count) 条（每次分析都会带上；自动归纳的会自己合并去重）：",
             color: memory.isEmpty ? GoutouTheme.secondary : GoutouTheme.text
         ))
-        for (index, entry) in memory.enumerated() {
-            bodyStack.addArrangedSubview(makeMemoryRow(index: index, text: entry))
+
+        let stable = memory.filter { $0.category.isStable }
+        let recent = memory.filter { !$0.category.isStable }
+        if !stable.isEmpty {
+            bodyStack.addArrangedSubview(makeSectionHeader("稳定事实 \(stable.count)"))
+            for item in stable { bodyStack.addArrangedSubview(makeMemoryRow(item)) }
         }
+        if !recent.isEmpty {
+            bodyStack.addArrangedSubview(makeSectionHeader("近期状态 \(recent.count)"))
+            for item in recent { bodyStack.addArrangedSubview(makeMemoryRow(item)) }
+        }
+
         bodyStack.addArrangedSubview(makeActionButton(title: "⬇️ 从剪贴板导入一条", background: GoutouTheme.blue, fontSize: 14) {
             self.delegate?.goutouPanel(self, didTrigger: .importMemory)
         })
@@ -619,13 +635,13 @@ final class GoutouPanelView: UIView {
         }
     }
 
-    private func makeMemoryRow(index: Int, text: String) -> UIView {
+    private func makeMemoryRow(_ item: GoutouMemoryItem) -> UIView {
         let row = UIStackView()
         row.axis = .horizontal
         row.spacing = 6
         row.alignment = .fill
 
-        let label = makeNoticeLabel("- \(text)", color: GoutouTheme.text)
+        let label = makeNoticeLabel("[\(item.category.label)] \(item.content)", color: GoutouTheme.text)
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         row.addArrangedSubview(label)
 
@@ -633,10 +649,10 @@ final class GoutouPanelView: UIView {
         delete.setTitle("✕", for: .normal)
         delete.titleLabel?.font = .systemFont(ofSize: 14)
         delete.applyStyle(background: GoutouTheme.function)
-        delete.accessibilityLabel = "删掉第 \(index + 1) 条记忆"
+        delete.accessibilityLabel = "删掉这条记忆"
         delete.addAction(UIAction { [weak self] _ in
             guard let self = self else { return }
-            self.delegate?.goutouPanel(self, didTrigger: .deleteMemory(index))
+            self.delegate?.goutouPanel(self, didTrigger: .deleteMemory(item.id))
         }, for: .touchUpInside)
         delete.widthAnchor.constraint(equalToConstant: 36).isActive = true
         row.addArrangedSubview(delete)

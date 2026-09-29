@@ -53,7 +53,9 @@ final class KeyboardViewController: UIInputViewController {
 
     private weak var mentorPanel: GoutouPanelView?
     private var segments: [GoutouSegment] = []
-    private var memory: [String] = []
+    private var memory: [GoutouMemoryItem] = []
+    /// 自动归纳完之后给一句提示
+    private var memoryNote: String?
     /// 全部人物档案 + 当前是谁（第六阶段：一人一份上下文/记忆/总结）
     private var profiles: [GoutouPersonProfile] = []
     private var activeProfileID: String = ""
@@ -461,7 +463,8 @@ final class KeyboardViewController: UIInputViewController {
             profiles: profiles,
             activeProfileID: activeProfileID,
             lastResult: lastResult,
-            configSummary: config?.summary ?? ""
+            configSummary: config?.summary ?? "",
+            memoryNote: memoryNote
         ))
     }
 
@@ -598,8 +601,8 @@ final class KeyboardViewController: UIInputViewController {
             refreshPanel()
             return
         }
-        memory.append(text)
-        GoutouMemoryStore.save(memory)
+        GoutouMemoryStore.append(text)
+        memory = GoutouMemoryStore.load()
         panelState = .empty(banner: "已记下第 \(memory.count) 条，下次分析会带上")
         refreshPanel()
     }
@@ -646,7 +649,11 @@ final class KeyboardViewController: UIInputViewController {
         refreshPanel()
 
         let systemPrompt = GoutouPrompt.systemPrompt(skill: skillText)
-        let userMessage = GoutouPrompt.userMessage(segments: segments, memory: memory)
+        // 近期状态标一下，免得模型把它当永久事实
+        let memoryLines = memory.map { $0.category.isStable ? $0.content : "（近期）\($0.content)" }
+        let userMessage = GoutouPrompt.userMessage(segments: segments, memory: memoryLines)
+        let analysisPersonID = activeProfileID
+        let analysisSegments = segments
         panelTask = GoutouAIClient.analyze(
             config: config,
             systemPrompt: systemPrompt,
@@ -660,6 +667,9 @@ final class KeyboardViewController: UIInputViewController {
                     self.lastResult = value
                     self.panelState = .ready(value)
                     self.saveSummary(value)
+                    self.refreshPanel()
+                    // 主分析成功之后才去归纳记忆（失败路径根本不走这里）
+                    self.runMemoryExtraction(personID: analysisPersonID, segments: analysisSegments)
                 case .failure(let error):
                     self.panelState = .failed(
                         summary: KeyboardViewController.friendlyFailureSummary(error),
@@ -669,6 +679,47 @@ final class KeyboardViewController: UIInputViewController {
                 self.refreshPanel()
             }
         }
+    }
+
+    // MARK: - 自动归纳记忆（第六阶段补：最近聊天 → 人物记忆）
+
+    /// 主分析成功后才调用；任何一步失败都**不改记忆**。
+    private func runMemoryExtraction(personID: String, segments: [GoutouSegment]) {
+        guard let config = config, config.isReady, !segments.isEmpty else { return }
+        memoryNote = "正在归纳这次聊天…"
+        refreshPanel()
+        GoutouMemoryExtractor.extract(config: config, existing: memory, segments: segments) { [weak self] candidates in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                // 解析失败 / 请求失败 → 记忆一个字都不动
+                guard let candidates = candidates else {
+                    self.memoryNote = nil
+                    self.refreshPanel()
+                    return
+                }
+                self.commitMemory(candidates, personID: personID)
+            }
+        }
+    }
+
+    /// 事务提交：再次确认还是这个人，再算新数组，最后一次性写回。
+    private func commitMemory(_ candidates: [GoutouMemoryCandidate], personID: String) {
+        guard personID == activeProfileID else {
+            memoryNote = nil
+            refreshPanel()
+            return
+        }
+        let existing = GoutouMemoryStore.load()
+        let applied = GoutouMemoryApplier.apply(candidates, to: existing, personID: personID)
+        guard applied.changed > 0 else {
+            memoryNote = "这次没有新的可记内容"
+            refreshPanel()
+            return
+        }
+        GoutouMemoryStore.replaceAll(applied.items)
+        memory = GoutouMemoryStore.load()
+        memoryNote = "已从本次聊天更新 \(applied.changed) 条记忆"
+        refreshPanel()
     }
 
     private func refreshNineKeyView() {
@@ -799,14 +850,14 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
         case .importMemory:
             importMemoryFromClipboard()
 
-        case .deleteMemory(let index):
-            guard memory.indices.contains(index) else { break }
-            memory.remove(at: index)
-            GoutouMemoryStore.save(memory)
+        case .deleteMemory(let id):
+            GoutouMemoryStore.remove(id: id)
+            memory = GoutouMemoryStore.load()
             refreshPanel()
 
         case .clearMemory:
             memory = []
+            memoryNote = nil
             GoutouMemoryStore.clear()
             refreshPanel()
 

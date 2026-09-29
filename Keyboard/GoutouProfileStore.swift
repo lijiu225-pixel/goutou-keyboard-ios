@@ -15,7 +15,7 @@ struct GoutouPersonProfile: Codable, Equatable, Identifiable {
     var name: String
     var note: String = ""
     var segments: [GoutouSegment] = []
-    var memory: [String] = []
+    var memory: [GoutouMemoryItem] = []
     var summary: GoutouSavedSummary?
     var updatedAt: Date = Date()
 
@@ -24,7 +24,7 @@ struct GoutouPersonProfile: Codable, Equatable, Identifiable {
         name: String,
         note: String = "",
         segments: [GoutouSegment] = [],
-        memory: [String] = [],
+        memory: [GoutouMemoryItem] = [],
         summary: GoutouSavedSummary? = nil,
         updatedAt: Date = Date()
     ) {
@@ -45,7 +45,18 @@ struct GoutouPersonProfile: Codable, Equatable, Identifiable {
         name = try container.decode(String.self, forKey: .name)
         note = try container.decodeIfPresent(String.self, forKey: .note) ?? ""
         segments = try container.decodeIfPresent([GoutouSegment].self, forKey: .segments) ?? []
-        memory = try container.decodeIfPresent([String].self, forKey: .memory) ?? []
+        // 记忆两种形态都认：新的结构化条目，以及老版本的纯字符串数组（自动升级成「手工加的稳定事实」）
+        if let items = try? container.decode([GoutouMemoryItem].self, forKey: .memory) {
+            memory = items.map { item in
+                var copy = item
+                if copy.personID.isEmpty { copy.personID = id }
+                return copy
+            }
+        } else if let legacy = try? container.decode([String].self, forKey: .memory) {
+            memory = legacy.map { GoutouMemoryItem(personID: id, content: $0, source: "manual") }
+        } else {
+            memory = []
+        }
         summary = try container.decodeIfPresent(GoutouSavedSummary.self, forKey: .summary)
         updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
     }
@@ -152,8 +163,11 @@ enum GoutouProfileStore {
             profile.segments = segments
         }
         if let data = defaults.data(forKey: legacyMemoryKey),
-           let memory = try? JSONDecoder().decode([String].self, from: data) {
-            profile.memory = memory
+           let legacy = try? JSONDecoder().decode([String].self, from: data) {
+            // 老版本的记忆是纯字符串数组，升级成结构化条目（都算你手工加的稳定事实）
+            profile.memory = legacy.map {
+                GoutouMemoryItem(personID: profile.id, content: $0, source: "manual")
+            }
         }
         // 迁移完就把旧键删掉，避免以后又读一遍旧数据
         defaults.removeObject(forKey: legacySegmentsKey)
