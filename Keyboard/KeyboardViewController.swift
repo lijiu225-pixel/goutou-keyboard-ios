@@ -485,6 +485,8 @@ final class KeyboardViewController: UIInputViewController {
             return "分析失败：接口没给内容"
         case .notConfigured:
             return "还没配置 AI 接口"
+        case .truncated:
+            return "分析失败：模型输出被截断"
         }
     }
 

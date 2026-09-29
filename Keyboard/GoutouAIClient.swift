@@ -19,6 +19,8 @@ enum GoutouAIError: Error, Equatable {
     case badJSON(String)
     /// 只回了思考（reasoning），没有正文；参数表示是不是被 max_tokens 截断了
     case reasoningOnly(Bool)
+    /// 正文被截断（max_tokens 用完），拿不到完整 JSON
+    case truncated
 
     var message: String {
         switch self {
@@ -42,6 +44,8 @@ enum GoutouAIError: Error, Equatable {
             return truncated
                 ? "模型把 token 都花在思考上了，正文被截断。换成非推理模型，或把上下文缩短再试"
                 : "模型只返回了思考内容，没有正文。换成非推理模型再试"
+        case .truncated:
+            return "模型输出被截断（token 用完了），没能给完整的 JSON。把上下文缩短、或换输出更短的模型再试"
         }
     }
 }
@@ -118,8 +122,10 @@ enum GoutouAIClient {
             throw GoutouAIError.empty
         }
 
-        guard let payload = decodePayload(text) else {
-            throw GoutouAIError.badJSON(snippet(text))
+        // 严格 JSON 读不出来时，退到「按字段切片」的宽松解析：
+        // 未转义引号、字符串里混进裸换行、甚至被截断的 JSON，它都能把认得的字段捞出来。
+        guard let payload = decodePayload(text) ?? lenientFields(in: text) else {
+            throw truncated ? GoutouAIError.truncated : GoutouAIError.badJSON(snippet(text))
         }
 
         let unwrapped = unwrapPayload(payload)
@@ -130,7 +136,10 @@ enum GoutouAIClient {
         let replies = normalizedReplies(from: unwrapped)
 
         let headline = GoutouPrompt.headline(fromRelationship: relationship)
-        guard !headline.isEmpty || !replies.isEmpty else { throw GoutouAIError.empty }
+        guard !headline.isEmpty || !replies.isEmpty else {
+            // 什么都没捞到：如果本来就被截断，就说清是截断，别含糊说「空内容」
+            throw truncated ? GoutouAIError.truncated : GoutouAIError.empty
+        }
         return GoutouResult(headline: headline, replies: Array(replies.prefix(GoutouPrompt.maxReplies)))
     }
 
@@ -222,6 +231,142 @@ enum GoutouAIClient {
             }
         }
         return results
+    }
+
+    // MARK: - 按字段切片（对付未转义引号 / 裸换行 / 被截断的 JSON）
+
+    static let lenientStringKeys = ["meaning", "relationship", "reason", "headline", "summary", "判断", "关系", "总结", "理由"]
+    static let lenientListKeys = ["replies", "reply", "回复", "话术", "候选"]
+
+    /// 严格 JSON 之外的最后一道网：按已知字段名找「键 → 值」的区间，各取各的。
+    /// 值里有没转义的引号、有裸换行、甚至对象被截断，都还能把认得的字段捞出来。
+    static func lenientFields(in text: String) -> [String: Any]? {
+        struct Anchor {
+            let key: String
+            let keyStart: String.Index
+            let valueStart: String.Index
+        }
+        var anchors: [Anchor] = []
+
+        for key in lenientStringKeys + lenientListKeys {
+            var searchStart = text.startIndex
+            while let keyRange = text.range(of: "\"\(key)\"", range: searchStart..<text.endIndex) {
+                var cursor = keyRange.upperBound
+                while cursor < text.endIndex, text[cursor].isWhitespace { cursor = text.index(after: cursor) }
+                guard cursor < text.endIndex, text[cursor] == ":" else {
+                    searchStart = keyRange.upperBound
+                    continue
+                }
+                cursor = text.index(after: cursor)
+                while cursor < text.endIndex, text[cursor].isWhitespace { cursor = text.index(after: cursor) }
+                anchors.append(Anchor(key: key, keyStart: keyRange.lowerBound, valueStart: cursor))
+                break
+            }
+        }
+        guard !anchors.isEmpty else { return nil }
+        anchors.sort { $0.valueStart < $1.valueStart }
+
+        var payload: [String: Any] = [:]
+        for (index, anchor) in anchors.enumerated() {
+            // 这一段值一直取到下一个字段名开始之前，所以值里多几个引号也不会串
+            let end = index + 1 < anchors.count ? anchors[index + 1].keyStart : text.endIndex
+            if anchor.valueStart < end, let value = lenientValue(for: anchor.key, slice: text[anchor.valueStart..<end]) {
+                payload[normalizedFieldKey(anchor.key)] = value
+            }
+        }
+        return payload.isEmpty ? nil : payload
+    }
+
+    static func normalizedFieldKey(_ key: String) -> String {
+        switch key {
+        case "回复", "话术", "候选", "reply": return "replies"
+        case "关系", "关系分析", "判断", "总结": return "relationship"
+        case "理由", "summary": return "reason"
+        default: return key
+        }
+    }
+
+    static func lenientValue(for key: String, slice: Substring) -> Any? {
+        let text = String(slice)
+        if lenientListKeys.contains(key) {
+            let items = quotedStrings(in: text)
+            return items.isEmpty ? nil : items
+        }
+        guard let open = text.firstIndex(of: "\"") else { return nil }
+        var body = String(text[text.index(after: open)...])
+        if let close = body.lastIndex(of: "\"") {
+            body = String(body[body.startIndex..<close])
+        } else {
+            // 截断了，没有收尾引号：把尾巴上的 , } 和空白去掉
+            body = body.trimmingCharacters(in: CharacterSet(charactersIn: " \n\t\r,}"))
+        }
+        let value = unescape(body).trimmed
+        return value.isEmpty ? nil : value
+    }
+
+    /// 按引号切字符串；`\"` 不算切断；最后一段没有收尾引号（被截断）也留下。
+    static func quotedStrings(in text: String) -> [String] {
+        var results: [String] = []
+        var current = ""
+        var inside = false
+        var escaped = false
+        for character in text {
+            guard inside else {
+                if character == "\"" {
+                    inside = true
+                    current = ""
+                }
+                continue
+            }
+            if escaped {
+                current.append(character)
+                escaped = false
+            } else if character == "\\" {
+                current.append(character)
+                escaped = true
+            } else if character == "\"" {
+                let value = unescape(current).trimmed
+                if !value.isEmpty { results.append(value) }
+                current = ""
+                inside = false
+            } else {
+                current.append(character)
+            }
+        }
+        if inside {
+            let value = unescape(current).trimmed
+            if !value.isEmpty { results.append(value) }
+        }
+        return results
+    }
+
+    static func unescape(_ text: String) -> String {
+        var result = ""
+        var iterator = text.makeIterator()
+        while let character = iterator.next() {
+            guard character == "\\" else {
+                result.append(character)
+                continue
+            }
+            guard let next = iterator.next() else { break }
+            switch next {
+            case "n": result.append("\n")
+            case "t": result.append("\t")
+            case "r": result.append("\r")
+            case "u":
+                var digits = ""
+                for _ in 0..<4 {
+                    guard let digit = iterator.next() else { break }
+                    digits.append(digit)
+                }
+                if let code = UInt32(digits, radix: 16), let scalar = Unicode.Scalar(code) {
+                    result.append(Character(scalar))
+                }
+            default:
+                result.append(next)
+            }
+        }
+        return result
     }
 
     /// 只补最常见的坏 JSON：对象/数组尾部的多余逗号。

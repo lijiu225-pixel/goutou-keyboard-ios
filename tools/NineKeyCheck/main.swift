@@ -418,6 +418,31 @@ do {
     expect(false, "抛出的应该是 GoutouAIError")
 }
 
+print("== 真机上遇到的那类返回：字段里带未转义引号 / 裸换行 / 被截断（按字段切片兜底）==")
+// 1) 值里有没转义的引号（严格 JSON 必失败）
+let messy = summary("{ \"meaning\": \"1. 对方: 他说\"干死你\"了\\n2. 对方: k\", \"relationship\": \"他在发火，先别硬顶。后面是依据\", \"replies\": [\"先别回\", \"你冷静一下\"], \"reason\": \"...\" }")
+expectEqual(messy?.headline ?? "", "他在发火，先别硬顶。", "字段里带未转义引号也能捞出来")
+expectEqual(messy?.replies.count ?? 0, 2, "话术也在")
+// 2) 字符串里混进裸换行（控制字符，严格 JSON 也不认）
+let rawNewline = summary("{\n \"meaning\": \"第一行\n第二行\",\n \"relationship\": \"他在观望。\",\n \"replies\": [\"在\"]\n}")
+expectEqual(rawNewline?.headline ?? "", "他在观望。", "裸换行也能捞出来")
+expectEqual(rawNewline?.replies.first ?? "", "在", "裸换行时话术也在")
+// 3) 被截断，但已经给了 relationship
+let cutOff = summary("{ \"meaning\": \"1. 对方: 我那你号护我朋友了\", \"relationship\": \"他在发火，先别硬顶。\", \"repl")
+expectEqual(cutOff?.headline ?? "", "他在发火，先别硬顶。", "截断了也把已经给全的字段用上")
+// 4) 截断到只剩半句 meaning，且 finish_reason=length → 明确说被截断
+let onlyMeaning: [String: Any] = [
+    "choices": [["finish_reason": "length", "message": ["content": "{ \"meaning\": \"1. 对方: 我那你号护我朋友了\\n2. 对方: k"]]]
+]
+do {
+    _ = try GoutouAIClient.parseResponse(data: (try? JSONSerialization.data(withJSONObject: onlyMeaning)) ?? Data())
+    expect(false, "截断到没有可用字段时应该抛错")
+} catch let error as GoutouAIError {
+    expect(error == .truncated, "明确报「被截断」而不是含糊的空内容（实际：\(error.message)）")
+} catch {
+    expect(false, "抛出的应该是 GoutouAIError")
+}
+
 print("== 自动归纳：MemoryExtractor 解析（AI 只能改不能删）==")
 let extractorReply = """
 {"operations":[
