@@ -97,7 +97,7 @@ final class GoutouPanelView: UIView {
     /// 失败时是否展开了技术详情
     private var showsFailureDetail = false
     /// 正在管理哪个人物（重命名 / 删除都放这儿，主界面不放）
-    private var managingProfileID: String?
+    private var managingProfileID: UUID?
     /// 删除要二次确认
     private var confirmingDelete = false
     private enum Screen { case main, settings, memory, profiles }
@@ -599,7 +599,11 @@ final class GoutouPanelView: UIView {
     }
 
     @objc private func didLongPressProfile(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began, let id = gesture.view?.accessibilityIdentifier else { return }
+        guard
+            gesture.state == .began,
+            let raw = gesture.view?.accessibilityIdentifier,
+            let id = UUID(uuidString: raw)
+        else { return }
         managingProfileID = id
         confirmingDelete = false
         rebuildBody()
