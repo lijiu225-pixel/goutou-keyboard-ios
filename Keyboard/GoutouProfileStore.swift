@@ -46,22 +46,22 @@ struct GoutouPersonProfile: Codable, Equatable, Identifiable {
     /// 顺便把老版本的记忆形态（纯字符串 / v1 条目）一次性升级，并把归属纠正为本档案。
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        // 先用局部变量：init 里闭包不能提前捕获 self 的属性
+        let decodedID = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        id = decodedID
         name = try container.decodeIfPresent(String.self, forKey: .name) ?? "未命名"
         note = try container.decodeIfPresent(String.self, forKey: .note) ?? ""
         segments = try container.decodeIfPresent([GoutouSegment].self, forKey: .segments) ?? []
 
         if let items = try? container.decode([PersonMemory].self, forKey: .memory) {
-            memory = items.map { item in
-                // 记忆归属一律以所属档案为准：旧数据缺 personID、或写错的，这里一次性纠正
-                item.ownedBy(id)
-            }
+            // 记忆归属一律以所属档案为准：旧数据缺 personID、或写错的，这里一次性纠正
+            memory = items.map { $0.ownedBy(decodedID) }
         } else if let legacy = try? container.decode([String].self, forKey: .memory) {
             // v0：纯字符串数组 → 迁移成条目（分类未知用 other，来源记 migratedLegacy）
             let now = Date()
             memory = legacy.map {
                 PersonMemory(
-                    personID: id,
+                    personID: decodedID,
                     content: $0,
                     category: .other,
                     createdAt: now,
