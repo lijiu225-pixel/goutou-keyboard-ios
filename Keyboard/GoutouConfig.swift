@@ -28,7 +28,12 @@ struct GoutouConfig: Codable, Equatable {
         if !text.lowercased().hasSuffix("/chat/completions") {
             text += "/chat/completions"
         }
-        return URL(string: text)
+        // iOS 17 的 URL(string:) 很宽松，连「不是网址」都能建出相对 URL，
+        // 所以这里必须自己把住：要有 http/https，还要有主机名。
+        guard let url = URL(string: text) else { return nil }
+        let scheme = url.scheme?.lowercased()
+        guard scheme == "https" || scheme == "http", url.host != nil else { return nil }
+        return url
     }
 
     /// 界面上显示用，key 只露最后 4 位。
