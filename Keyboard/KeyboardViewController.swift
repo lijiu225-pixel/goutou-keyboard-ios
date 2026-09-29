@@ -1,3 +1,4 @@
+import Foundation
 import UIKit
 
 /// 狗头军师 iOS 键盘。纯系统控件 + Auto Layout，不联网、不读剪贴板。
@@ -34,13 +35,32 @@ final class KeyboardViewController: UIInputViewController {
     private let nineKeyEngine = NineKeyInputEngine()
     private weak var nineKeyView: NineKeyKeyboardView?
 
+    // MARK: - 军师面板状态（新增）
+
+    private weak var mentorPanel: GoutouPanelView?
+    private var segments: [GoutouSegment] = []
+    private var panelState: GoutouPanelState = .empty(banner: nil)
+    private var panelTask: URLSessionTask?
+    private var config: GoutouConfig? = GoutouConfig.load()
+    private var skillText: String = ""
+
     // MARK: - 生命周期
 
     override func viewDidLoad() {
         super.viewDidLoad()
         let stored = UserDefaults.standard.string(forKey: KeyboardViewController.modeStorageKey)
         mode = Mode(rawValue: stored ?? "") ?? .chineseNineKey
+        skillText = KeyboardViewController.loadSkillText()
         rebuildKeyboard()
+    }
+
+    /// 军师人格：直接把仓库里那份 SKILL.md 打进键盘 bundle，两边共用同一份口径。
+    private static func loadSkillText() -> String {
+        guard
+            let url = Bundle.main.url(forResource: "GoutouSkill", withExtension: "md"),
+            let text = try? String(contentsOf: url, encoding: .utf8)
+        else { return "" }
+        return text
     }
 
     /// 切布局：清掉 view 上的一切重建，避免两种布局互相残留。
@@ -52,8 +72,13 @@ final class KeyboardViewController: UIInputViewController {
             view.removeConstraint(constraint)
         }
         nineKeyView = nil
+        mentorPanel = nil
         nineKeyEngine.clear()
         page = .nineKey
+        segments = []
+        panelTask?.cancel()
+        panelTask = nil
+        panelState = .empty(banner: nil)
 
         switch mode {
         case .englishQWERTY:
@@ -179,11 +204,22 @@ final class KeyboardViewController: UIInputViewController {
         keyboard.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(keyboard)
 
+        let panel = GoutouPanelView()
+        panel.delegate = self
+        panel.isHidden = true
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(panel)
+
         NSLayoutConstraint.activate([
             keyboard.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             keyboard.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             keyboard.topAnchor.constraint(equalTo: view.topAnchor),
             keyboard.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            panel.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            panel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            panel.topAnchor.constraint(equalTo: view.topAnchor),
+            panel.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
         let height = view.heightAnchor.constraint(equalToConstant: nineKeyHeight)
@@ -191,7 +227,122 @@ final class KeyboardViewController: UIInputViewController {
         height.isActive = true
 
         nineKeyView = keyboard
+        mentorPanel = panel
         refreshNineKeyView()
+    }
+
+    // MARK: - 军师面板（新增）
+
+    private func showMentorPanel() {
+        nineKeyView?.isHidden = true
+        mentorPanel?.isHidden = false
+        mentorPanel?.setShowingSettings(false)
+        refreshPanel()
+    }
+
+    private func hideMentorPanel() {
+        panelTask?.cancel()
+        panelTask = nil
+        mentorPanel?.isHidden = true
+        nineKeyView?.isHidden = false
+        refreshNineKeyView()
+    }
+
+    private func refreshPanel() {
+        mentorPanel?.render(
+            state: panelState,
+            segments: segments,
+            configSummary: config?.summary ?? ""
+        )
+    }
+
+    private func clipboardText() -> String? {
+        let text = UIPasteboard.general.string?.trimmed
+        return (text?.isEmpty ?? true) ? nil : text
+    }
+
+    /// 背景优先读草稿（你在聊天框里打的那句），读不到再退到剪贴板。
+    private func draftText() -> String? {
+        let text = textDocumentProxy.documentContextBeforeInput?.trimmed
+        return (text?.isEmpty ?? true) ? nil : text
+    }
+
+    private func addSegment(_ speaker: GoutouSpeaker) {
+        guard segments.count < 3 else {
+            panelState = .empty(banner: "上下文最多 3 段，先点下面的「清空上下文」")
+            refreshPanel()
+            return
+        }
+        let content = speaker == .background ? (draftText() ?? clipboardText()) : clipboardText()
+        guard let text = content, !text.isEmpty else {
+            panelState = .empty(banner: speaker == .background
+                ? "草稿和剪贴板都没读到内容。要么先打一句背景，要么复制一段再点。没开「允许完全访问」时读剪贴板会失败。"
+                : "剪贴板里没读到内容。要么剪贴板是空的，要么没开「允许完全访问」。")
+            refreshPanel()
+            return
+        }
+        segments.append(GoutouSegment(speaker: speaker, text: text))
+        panelState = .empty(banner: nil)
+        refreshPanel()
+    }
+
+    private func importConfigFromClipboard() {
+        guard let text = UIPasteboard.general.string else {
+            panelState = .empty(banner: "剪贴板是空的：先在 App 里点「复制配置」")
+            refreshPanel()
+            return
+        }
+        guard let parsed = GoutouConfig.parse(importText: text) else {
+            panelState = .empty(banner: "剪贴板里不是配置文本（第一行应该是 \(GoutouConfig.marker)）")
+            refreshPanel()
+            return
+        }
+        parsed.save()
+        config = parsed
+        panelState = .empty(banner: "已导入：\(parsed.summary)")
+        refreshPanel()
+    }
+
+    private func startAnalysis() {
+        guard !segments.isEmpty else {
+            panelState = .empty(banner: "先加至少一段上下文（点 👤对方 / 🙋我）")
+            refreshPanel()
+            return
+        }
+        guard let config = config, config.isReady else {
+            panelState = .needsConfig
+            refreshPanel()
+            return
+        }
+        guard !skillText.isEmpty else {
+            panelState = .failed("军师人格文件（GoutouSkill.md）没打进包，需要重新构建")
+            refreshPanel()
+            return
+        }
+
+        panelTask?.cancel()
+        panelState = .loading
+        refreshPanel()
+
+        let systemPrompt = GoutouPrompt.systemPrompt(skill: skillText)
+        let userMessage = GoutouPrompt.userMessage(segments: segments)
+        panelTask = GoutouAIClient.analyze(
+            config: config,
+            systemPrompt: systemPrompt,
+            userMessage: userMessage
+        ) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.panelTask = nil
+                switch result {
+                case .success(let value):
+                    self.panelState = .ready(value)
+                case .failure(let error):
+                    self.panelState = .failed(error.message)
+                }
+                self.refreshPanel()
+            }
+        }
     }
 
     private func refreshNineKeyView() {
@@ -248,6 +399,9 @@ final class KeyboardViewController: UIInputViewController {
             nineKeyEngine.clear()
             refreshNineKeyView()
 
+        case .openMentor:
+            showMentorPanel()
+
         case .showLetters, .showNumbers, .showSymbols:
             flushComposing()
             switch action {
@@ -286,5 +440,54 @@ final class KeyboardViewController: UIInputViewController {
 extension KeyboardViewController: NineKeyKeyboardViewDelegate {
     func nineKeyKeyboardView(_ view: NineKeyKeyboardView, didTrigger action: NineKeyAction) {
         handleNineKeyAction(action)
+    }
+}
+
+// MARK: - 军师面板回调
+
+extension KeyboardViewController: GoutouPanelViewDelegate {
+    func goutouPanel(_ panel: GoutouPanelView, didTrigger action: GoutouPanelAction) {
+        switch action {
+        case .back:
+            hideMentorPanel()
+
+        case .toggleSettings:
+            panel.setShowingSettings(!panel.isShowingSettings)
+
+        case .importConfig:
+            importConfigFromClipboard()
+
+        case .clearConfig:
+            GoutouConfig.clear()
+            config = nil
+            panelState = .empty(banner: "配置已清空")
+            refreshPanel()
+
+        case .addSegment(let speaker):
+            addSegment(speaker)
+
+        case .analyze:
+            startAnalysis()
+
+        case .cancel:
+            panelTask?.cancel()
+            panelTask = nil
+            panelState = .empty(banner: "已取消")
+            refreshPanel()
+
+        case .clearSegments:
+            segments = []
+            panelState = .empty(banner: nil)
+            refreshPanel()
+
+        case .copyFullAccessSteps:
+            UIPasteboard.general.string = GoutouPanelView.fullAccessSteps
+            panelState = .empty(banner: "已复制。照着走一遍：\(GoutouPanelView.fullAccessSteps)")
+            refreshPanel()
+
+        case .insertReply(let text):
+            textDocumentProxy.insertText(text)
+            hideMentorPanel()
+        }
     }
 }

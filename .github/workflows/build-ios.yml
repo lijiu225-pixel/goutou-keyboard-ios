@@ -57,6 +57,9 @@ jobs:
             Keyboard/NineKeyMapper.swift \
             Keyboard/GoutouDictionary.swift \
             Keyboard/NineKeyInputEngine.swift \
+            Keyboard/GoutouConfig.swift \
+            Keyboard/GoutouPrompt.swift \
+            Keyboard/GoutouAIClient.swift \
             tools/NineKeyCheck/main.swift \
             -o "$RUNNER_TEMP/ninekeycheck"
           "$RUNNER_TEMP/ninekeycheck"

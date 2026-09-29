@@ -12,6 +12,7 @@ enum GoutouTheme {
     static let divider = UIColor(goutouHex: 0x505054)
     static let pressed = UIColor(goutouHex: 0x56565A)
     static let candidatePrimary = UIColor(goutouHex: 0x304E70)
+    static let warning = UIColor(goutouHex: 0xFF9F0A)
 }
 
 private extension UIColor {
@@ -69,6 +70,8 @@ enum NineKeyAction {
     case showLetters
     case showNumbers
     case showSymbols
+    /// 顶栏的「军师」：整屏切到军师面板。
+    case openMentor
     case toggleMode
     case returnKey
     case nextKeyboard
@@ -175,12 +178,23 @@ final class NineKeyKeyboardView: UIView {
         compositionLabel.textColor = GoutouTheme.text
         compositionLabel.lineBreakMode = .byTruncatingTail
         compositionLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let mentor = makeFunctionKey(title: "军师", fontSize: 13, action: #selector(didTapMentor))
+        mentor.translatesAutoresizingMaskIntoConstraints = false
+        mentor.accessibilityLabel = "打开狗头军师面板"
+
         container.addSubview(compositionLabel)
+        container.addSubview(mentor)
         NSLayoutConstraint.activate([
             container.heightAnchor.constraint(equalToConstant: compositionHeight),
             compositionLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
-            compositionLabel.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -8),
+            compositionLabel.trailingAnchor.constraint(lessThanOrEqualTo: mentor.leadingAnchor, constant: -8),
             compositionLabel.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+
+            mentor.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            mentor.widthAnchor.constraint(equalToConstant: 64),
+            mentor.topAnchor.constraint(equalTo: container.topAnchor, constant: 3),
+            mentor.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -3),
         ])
         return container
     }
@@ -585,5 +599,9 @@ final class NineKeyKeyboardView: UIView {
 
     @objc private func didTapNextKeyboard() {
         delegate?.nineKeyKeyboardView(self, didTrigger: .nextKeyboard)
+    }
+
+    @objc private func didTapMentor() {
+        delegate?.nineKeyKeyboardView(self, didTrigger: .openMentor)
     }
 }

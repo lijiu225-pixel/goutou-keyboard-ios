@@ -29,6 +29,8 @@ targets:
     platform: iOS
     sources:
       - path: App
+      # 配置结构在 App 和键盘两边共用同一份（Foundation only，不依赖 UIKit）。
+      - path: Keyboard/GoutouConfig.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.goutouinput
@@ -47,6 +49,11 @@ targets:
     platform: iOS
     sources:
       - path: Keyboard
+        excludes:
+          - "GoutouSkill.md"
+      # 军师人格：和 Android / Web 共用同一个 SKILL.md，打进键盘 bundle 当 system prompt。
+      - path: Keyboard/GoutouSkill.md
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.goutouinput.keyboard

@@ -1,8 +1,16 @@
 import SwiftUI
 
-/// 宿主 App 只做两件事：告诉用户怎么把键盘加到系统里，以及给一个能马上试打的输入框。
+/// 宿主 App：配置军师接口 + 启用向导 + 自测输入框。
+///
+/// 配置在这里填（这里能用系统键盘、能粘贴），点「复制配置」，
+/// 回键盘的「军师 → ⚙ 设置 → 从剪贴板导入」。
+/// 键盘扩展和宿主 App 之间没有 App Group，所以只能走剪贴板这一条通道。
 struct ContentView: View {
-    @State private var draft: String = ""
+    @State private var draft = ""
+    @State private var baseURL = ""
+    @State private var model = ""
+    @State private var apiKey = ""
+    @State private var copied = false
 
     private var version: String {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -12,15 +20,19 @@ struct ContentView: View {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
     }
 
+    private var config: GoutouConfig {
+        GoutouConfig(baseURL: baseURL, model: model, apiKey: apiKey)
+    }
+
     var body: some View {
         NavigationStack {
             Form {
                 Section {
                     TextEditor(text: $draft)
-                        .frame(minHeight: 110)
+                        .frame(minHeight: 90)
                         .overlay(alignment: .topLeading) {
                             if draft.isEmpty {
-                                Text("点这里，切到「狗头军师」键盘试打几个字母")
+                                Text("切到「狗头军师」键盘，在这儿打几个字试试")
                                     .foregroundStyle(.tertiary)
                                     .padding(.top, 8)
                                     .padding(.leading, 5)
@@ -30,22 +42,71 @@ struct ContentView: View {
                 } header: {
                     Text("自测输入框")
                 } footer: {
-                    Text("点输入框 → 长按左下角 🌐 → 选「狗头军师」。")
+                    Text("九键：按 6 4 4 2 6 出「你好」。顶栏「军师」进面板。")
+                }
+
+                Section {
+                    TextField("Base URL，例如 https://api.example.com/v1", text: $baseURL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                    TextField("Model，例如 gpt-4o-mini", text: $model)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    SecureField("API Key", text: $apiKey)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Button {
+                        copyConfig()
+                    } label: {
+                        Label(
+                            copied ? "已复制，去键盘点「⚙ 设置 → 从剪贴板导入」" : "复制配置到剪贴板",
+                            systemImage: copied ? "checkmark.circle.fill" : "doc.on.doc"
+                        )
+                    }
+                    .disabled(!config.isReady)
+                } header: {
+                    Text("军师接口")
+                } footer: {
+                    Text(config.isReady
+                        ? "Base URL 填到 /v1 就行（会自动补 /chat/completions）。key 只存在这台手机上，不进代码仓库，也不上传到别处。"
+                        : "填好 Base URL 和 Model 才能复制。key 可以留空（自建接口不需要鉴权时）。")
                 }
 
                 Section("把键盘加到系统里") {
-                    StepRow(index: 1, text: "设置 → 通用 → 键盘 → 键盘 → 添加新键盘")
-                    StepRow(index: 2, text: "在「第三方键盘」里选「狗头军师」")
-                    StepRow(index: 3, text: "回到任意输入框，长按 🌐 切过去即可使用")
+                    StepRow(index: 1, text: "设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → 第三方键盘 → 狗头军师")
+                    StepRow(index: 2, text: "点「狗头军师」→ 打开「允许完全访问」（军师要读剪贴板、要联网，不开就用不了）")
+                    StepRow(index: 3, text: "回到输入框，长按 🌐 切到这个键盘")
+                }
+
+                Section("用军师的三步") {
+                    StepRow(index: 1, text: "长按对方的消息 → 复制")
+                    StepRow(index: 2, text: "键盘顶栏点「军师」→ 点 👤对方（自己的话点 🙋我，背景点 📝背景）")
+                    StepRow(index: 3, text: "点 ⟳ 分析 → 选一条话术上屏（不会自动发送）")
                 }
 
                 Section("关于") {
                     LabeledContent("版本", value: "v\(version) (build \(buildNumber))")
-                    LabeledContent("输入内容", value: "只在本机处理，不联网不上传")
+                    LabeledContent("词库", value: "20 词（与 Android 版同源）")
+                    LabeledContent("联网", value: "只发你配置的那个接口")
                 }
             }
             .navigationTitle("狗头军师输入法")
+            .onAppear(perform: loadStoredConfig)
         }
+    }
+
+    private func copyConfig() {
+        UIPasteboard.general.string = config.exportText
+        config.save()
+        copied = true
+    }
+
+    private func loadStoredConfig() {
+        guard let stored = GoutouConfig.load() else { return }
+        baseURL = stored.baseURL
+        model = stored.model
+        apiKey = stored.apiKey
     }
 }
 

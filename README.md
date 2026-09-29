@@ -17,7 +17,15 @@
 2. 九键多击打拼音，词库出候选，点候选上屏
 3. 九键 ↔ 英文 26 键随时切换，英文 26 键功能不变
 
-**明确不做**：不移植狗头军师 AI、Function Kit、读屏、剪贴板、联网、App Group，也不做中文大词库 / RIME。
+**第三阶段（军师链）**
+
+1. 键盘顶栏「军师」→ 整屏换成军师面板
+2. 上下文靠剪贴板，手动标归属：`👤对方` / `🙋我` / `📝背景`（背景优先读草稿），最多 3 段
+3. 面板出一行判断（≤20 字）+ 3 条话术，点一条直接上屏，不自动发送
+4. 接口配置在宿主 App 填 → 「复制配置」→ 键盘 ⚙「从剪贴板导入」，key 只存在手机上
+5. 没开「允许完全访问」时面板顶部直接提示，一键复制开启步骤
+
+**明确不做**：不做读屏（iOS 没有对应能力）、不接 Function Kit、不做 App Group、不做中文大词库 / RIME、不做任务/风格选择器。
 
 ## 工程结构
 
@@ -33,6 +41,11 @@ Keyboard/                            键盘扩展：UIInputViewController + Auto
   NineKeyMapper.swift                九键多击字母循环（与 Android 逐行对应）
   GoutouDictionary.swift             20 词词库（与 Android 一字不差）
   NineKeyInputEngine.swift           中文九键输入状态机（composing / flush / 回删）
+  GoutouPanelView.swift              军师面板（顶栏 / 状态行 / 归属行 / 结果区）
+  GoutouConfig.swift                 接口配置（App 与键盘共用同一份结构）
+  GoutouPrompt.swift                 prompt 组装 + 一行判断提取
+  GoutouAIClient.swift               OpenAI 兼容请求 + 返回解析（纯 Foundation）
+  GoutouSkill.md                     军师人格，从 Android 仓库原样拷来（口径只有一份）
   Info.plist                         NSExtension: com.apple.keyboard-service
 tools/NineKeyCheck/main.swift        九键逻辑冒烟测试（CI 上 swiftc 直接跑，不需要模拟器）
 .github/workflows/build-ios.yml      无 Mac 构建流水线
@@ -54,6 +67,20 @@ tools/NineKeyCheck/main.swift        九键逻辑冒烟测试（CI 上 swiftc �
 
 Android 专属的 `InputMethodService`、`View` 树、JNI 一律没搬，按 Keyboard Extension 的
 `UIInputViewController` + `textDocumentProxy` 重写。
+
+### 军师链的通道
+
+iOS 上宿主 App 和键盘扩展**没有 App Group 就没法共享数据**（免费 Apple ID 不保证给 App Group），
+所以三者之间只有一条通道：**系统剪贴板**。
+
+```
+宿主 App 填 Base URL/Model/Key ──「复制配置」──▶ 剪贴板 ──键盘 ⚙「从剪贴板导入」──▶ 键盘 UserDefaults
+聊天里长按消息 → 复制 ─────────────────────────▶ 剪贴板 ──👤对方 / 🙋我 / 📝背景──▶ 上下文（最多 3 段）
+上下文 ──键盘内直接发请求（要「允许完全访问」）──▶ 一行判断 + 3 条话术 ──点一条──▶ 当前输入框
+```
+
+任务/风格写死成 Android 面板的两个默认值（`分析她/他说什么意思` + `自然`）；`relationship`
+被要求「第一句必须是一句不超过 20 字的判断」，iOS 只取第一句显示，Android 那边仍然显示全文。
 
 ## 构建产物有两种
 
@@ -124,11 +151,27 @@ git tag adhoc-v1.0.0 && git push origin adhoc-v1.0.0
 
 > 词库还是 Android 那 20 个词，超出词库的拼音按完不会有候选（那串数字会被原样上屏）。要扩词库是另一件事，见「下一阶段」。
 
+### 军师怎么用
+
+第一次要配接口（这一步决定了它能不能用）：
+
+1. 宿主 App「狗头军师」里填 Base URL / Model / API Key → 点「复制配置到剪贴板」
+2. 切到键盘 → 顶栏「军师」→ ⚙ 设置 → 「⬇️ 从剪贴板导入配置」
+3. 回键盘试一次：长按对方的消息 → 复制 → 「军师」→ 👤对方 → ⟳ 分析
+
+之后每次就三步：**复制对方的话 → 点 👤对方 / 🙋我 / 📝背景 → 点 ⟳ 分析 → 点一条话术上屏**。
+
+- `📝背景` 优先读你正在输入框里打的那句草稿（不发出去），读不到才退到剪贴板——用来补「我们上周吵过架」这种对话里没有的信息
+- 上下文最多 3 段，面板里会列出来；要重来点「清空上下文」
+- 请求超时 15 秒，失败会给原因 + 「重试」；等待中可以「取消」
+- 没开「允许完全访问」→ 面板顶部直接提示，点一下复制开启步骤。**这个开关是军师能不能用的硬前提**（读剪贴板、联网都靠它）
+- 话术只填进输入框，**不会自动发送**
+
 ## 下一阶段（现在没做）
 
-- 中文大词库 / 整句拼音（现在是 20 词精确匹配，换 RIME 或把词库放宿主 App + App Group）
-- 军师面板（WebView 不要进键盘，放宿主 App，键盘只读 App Group）
-- AI 请求（需要 `RequestsOpenAccess = YES` + 用户开「允许完全访问」）
+- 中文大词库 / 整句拼音（现在是 20 词精确匹配，换 RIME，或把词库放宿主 App + App Group）
+- 任务/风格选择器（iOS 面板现在写死 Android 的两个默认值）
+- 宿主 App 里的完整面板 + 历史（现在是"键盘内面板 + 剪贴板传配置"）
 
 路线细节见 Android 仓库的 `docs/ios-port.md`。
 

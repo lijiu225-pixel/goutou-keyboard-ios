@@ -4,7 +4,9 @@ import Foundation
 //
 // 跑法（macOS / CI runner，不需要模拟器）：
 //   swiftc -swift-version 5 Keyboard/NineKeyMapper.swift Keyboard/GoutouDictionary.swift \
-//          Keyboard/NineKeyInputEngine.swift tools/NineKeyCheck/main.swift -o /tmp/ninekeycheck
+//          Keyboard/NineKeyInputEngine.swift Keyboard/GoutouConfig.swift \
+//          Keyboard/GoutouPrompt.swift Keyboard/GoutouAIClient.swift \
+//          tools/NineKeyCheck/main.swift -o /tmp/ninekeycheck
 //   /tmp/ninekeycheck
 //
 // 覆盖：数字序列查候选、候选上屏、回删边界、词库兜底，
@@ -103,6 +105,81 @@ let cycle2 = NineKeyMapper.next(text: cycle.text, key: "6", previous: cycle.stat
 expectEqual(cycle2.text, "n", "650ms 内再按 6 循环到 n")
 let cycle3 = NineKeyMapper.next(text: "m", key: "6", previous: cycle.state, timestamp: 5.0)
 expectEqual(cycle3.text, "mm", "超过 650ms 另起一个字母")
+
+print("== 军师配置：导出 / 导入 ==")
+let sample = GoutouConfig(baseURL: "https://api.example.com/v1", model: "gpt-4o-mini", apiKey: "sk-test-1234")
+let exported = sample.exportText
+expect(exported.hasPrefix(GoutouConfig.marker), "导出文本第一行是版本标记")
+expectEqual(GoutouConfig.parse(importText: exported)?.baseURL ?? "", "https://api.example.com/v1", "导入回来的 Base URL")
+expectEqual(GoutouConfig.parse(importText: exported)?.model ?? "", "gpt-4o-mini", "导入回来的 Model")
+expectEqual(GoutouConfig.parse(importText: exported)?.apiKey ?? "", "sk-test-1234", "导入回来的 Key")
+expect(GoutouConfig.parse(importText: "随便一段别的文本") == nil, "剪贴板里不是配置文本时不认领")
+expect(GoutouConfig.parse(importText: GoutouConfig.marker + "\nbase=\nmodel=\nkey=x") == nil, "缺 Base URL 时不算有效配置")
+expectEqual(sample.summary, "gpt-4o-mini · ****1234", "配置摘要里 key 只露最后 4 位")
+
+print("== 请求地址拼接 ==")
+expectEqual(GoutouConfig(baseURL: "https://a.com/v1", model: "m", apiKey: "").chatCompletionsURL?.absoluteString ?? "", "https://a.com/v1/chat/completions", "只填到 /v1")
+expectEqual(GoutouConfig(baseURL: "https://a.com/v1/", model: "m", apiKey: "").chatCompletionsURL?.absoluteString ?? "", "https://a.com/v1/chat/completions", "结尾多一个斜杠")
+expectEqual(GoutouConfig(baseURL: "https://a.com/v1/chat/completions", model: "m", apiKey: "").chatCompletionsURL?.absoluteString ?? "", "https://a.com/v1/chat/completions", "直接填完整地址不重复拼")
+expect(GoutouConfig(baseURL: "不是网址", model: "m", apiKey: "").chatCompletionsURL == nil, "非法地址拼不出 URL")
+
+print("== 请求体 ==")
+let request = try? GoutouAIClient.buildURLRequest(config: sample, systemPrompt: "SYS", userMessage: "USER")
+expectEqual(request?.httpMethod ?? "", "POST", "请求方法")
+expectEqual(request?.value(forHTTPHeaderField: "Authorization") ?? "", "Bearer sk-test-1234", "带上 Bearer key")
+let bodyObject = ((try? JSONSerialization.jsonObject(with: request?.httpBody ?? Data())) as? [String: Any]) ?? [:]
+expectEqual(bodyObject["model"] as? String ?? "", "gpt-4o-mini", "请求体里的 model")
+expect(bodyObject["stream"] as? Bool == false, "非流式")
+let sentMessages = bodyObject["messages"] as? [[String: Any]] ?? []
+expectEqual(sentMessages.count, 2, "system + user 共两条")
+expectEqual((sentMessages.first?["content"] as? String) ?? "", "SYS", "第一条是 system")
+
+print("== prompt 口径 ==")
+let prompt = GoutouPrompt.systemPrompt(skill: "【人格】")
+expect(prompt.hasPrefix("【人格】"), "skill 原文放在最前面")
+expect(prompt.contains("当前任务：分析她/他说什么意思。回复风格：自然。"), "写死的任务/风格与 Android 默认值一致")
+expect(prompt.contains("不超过 20 字"), "补了 relationship 第一句 ≤20 字的要求")
+expect(prompt.contains("meaning") && prompt.contains("replies"), "四字段契约仍然在")
+let composed = GoutouPrompt.userMessage(segments: [
+    GoutouSegment(speaker: .opponent, text: "你昨天不是说好了吗"),
+    GoutouSegment(speaker: .me, text: "临时有事"),
+    GoutouSegment(speaker: .background, text: "我们上周吵过架"),
+])
+expectEqual(composed, "聊天内容：\n对方：你昨天不是说好了吗\n我：临时有事\n背景：我们上周吵过架", "上下文拼成 skill 认得的格式")
+
+print("== 一行判断 ==")
+expectEqual(GoutouPrompt.headline(fromRelationship: "对方在试探你会不会主动。后面是依据。"), "对方在试探你会不会主动。", "只取第一句")
+expectEqual(GoutouPrompt.headline(fromRelationship: String(repeating: "很", count: 30)), String(repeating: "很", count: 20) + "…", "超 20 字截断加省略号")
+expectEqual(GoutouPrompt.headline(fromRelationship: "   \n  "), "", "空内容返回空串")
+
+print("== 解析模型返回 ==")
+func responseData(_ content: String) -> Data {
+    let payload: [String: Any] = ["choices": [["message": ["content": content]]]]
+    return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
+}
+let goodJSON = """
+{"meaning":"...","relationship":"对方在试探你会不会主动。依据是……",\
+"replies":["在啊","刚忙完，怎么了","你找我有事？","这条应该被丢掉"],"reason":"..."}
+"""
+let parsedResult = try? GoutouAIClient.parseResponse(data: responseData("```json\n" + goodJSON + "\n```"))
+expectEqual(parsedResult?.headline ?? "", "对方在试探你会不会主动。", "带代码围栏也能解析，并取到一行判断")
+expectEqual(parsedResult?.replies.count ?? 0, 3, "话术最多留 3 条")
+expectEqual(parsedResult?.replies.first ?? "", "在啊", "第一条话术")
+let errorBody = (try? JSONSerialization.data(withJSONObject: ["error": ["message": "invalid api key"]])) ?? Data()
+do {
+    _ = try GoutouAIClient.parseResponse(data: errorBody)
+    expect(false, "接口报错时应该抛错")
+} catch let error as GoutouAIError {
+    expect(error.message.contains("invalid api key"), "接口报错会带出原文")
+} catch {
+    expect(false, "抛出的应该是 GoutouAIError")
+}
+do {
+    _ = try GoutouAIClient.parseResponse(data: responseData("这不是 JSON"))
+    expect(false, "模型没返回 JSON 时应该抛错")
+} catch {
+    expect(true, "模型没返回 JSON 时抛错")
+}
 
 print("")
 if failures == 0 {
