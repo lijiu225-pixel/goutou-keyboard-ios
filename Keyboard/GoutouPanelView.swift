@@ -40,12 +40,15 @@ struct GoutouPanelSnapshot {
     var memoryEditDraft: MemoryEditDraft? = nil
     /// 正在等二次确认的那条删除；nil = 没在确认
     var memoryPendingDeleteID: UUID? = nil
+    var sharedChat: SharedChatSnapshot? = nil
+    var sharedChatError: String? = nil
 }
 
 enum GoutouPanelAction {
     case back
     case importConfig
     case readAppGroupProbe
+    case readRecognizedChat
     case clearConfig
     case addSegment(GoutouSpeaker)
     case deleteSegment(Int)
@@ -144,7 +147,9 @@ final class GoutouPanelView: UIView {
     private var managingProfileID: UUID?
     /// 删除要二次确认
     private var confirmingDelete = false
-    private enum Screen { case main, settings, memory, profiles }
+    private var sharedChat: SharedChatSnapshot?
+    private var sharedChatError: String?
+    private enum Screen { case main, settings, memory, profiles, sharedChat }
     private var screen: Screen = .main
 
     override init(frame: CGRect) {
@@ -320,6 +325,8 @@ final class GoutouPanelView: UIView {
     // MARK: - 渲染
 
     func render(_ snapshot: GoutouPanelSnapshot) {
+        self.sharedChat = snapshot.sharedChat
+        self.sharedChatError = snapshot.sharedChatError
         self.state = snapshot.state
         self.segments = snapshot.segments
         self.memory = snapshot.memory
@@ -398,6 +405,7 @@ final class GoutouPanelView: UIView {
             subview.removeFromSuperview()
         }
         if screen == .settings { buildSettingsBody(); return }
+        if screen == .sharedChat { buildSharedChatBody(); return }
         if screen == .memory {
             if memoryDetail != nil {
                 buildMemoryDetailBody()
@@ -407,6 +415,7 @@ final class GoutouPanelView: UIView {
             return
         }
         if screen == .profiles { buildProfilesBody(); return }
+        bodyStack.addArrangedSubview(makeReadChatButton())
         if showsContextDetail {
             buildContextDetailBody()
         } else {
@@ -479,6 +488,45 @@ final class GoutouPanelView: UIView {
             for (index, reply) in replies.enumerated() {
                 bodyStack.addArrangedSubview(makeReplyRow(index: index, text: reply))
             }
+        }
+    }
+
+    func showSharedChatPreview() {
+        screen = .sharedChat
+        bodyScroll.setContentOffset(.zero, animated: false)
+        rebuildBody()
+        updateButtons()
+    }
+
+    private func makeReadChatButton() -> NineKeyButton {
+        makeActionButton(title: "读取识别聊天", background: GoutouTheme.function, fontSize: 14) {
+            self.delegate?.goutouPanel(self, didTrigger: .readRecognizedChat)
+        }
+    }
+
+    private func buildSharedChatBody() {
+        bodyStack.addArrangedSubview(makeReadChatButton())
+        bodyStack.addArrangedSubview(makeActionButton(title: "返回军师面板", background: GoutouTheme.function, fontSize: 13) {
+            self.setScreen(.main)
+        })
+        if let error = sharedChatError {
+            bodyStack.addArrangedSubview(makeNoticeLabel(error, color: GoutouTheme.warning))
+            return
+        }
+        guard let chat = sharedChat else {
+            bodyStack.addArrangedSubview(makeNoticeLabel("尚未读取识别聊天。", color: GoutouTheme.secondary))
+            return
+        }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .medium
+        bodyStack.addArrangedSubview(makeSectionHeader("\(chat.messages.count) 条聊天 · 保存时间：\(formatter.string(from: chat.updatedAt))"))
+        if chat.isOlderThanThirtyMinutes() {
+            bodyStack.addArrangedSubview(makeNoticeLabel("聊天内容可能较旧", color: GoutouTheme.warning))
+        }
+        bodyStack.addArrangedSubview(makeNoticeLabel("仅供预览；再次点击读取可刷新。", color: GoutouTheme.secondary))
+        for (index, message) in chat.messages.enumerated() {
+            bodyStack.addArrangedSubview(makeNoticeLabel("\(index + 1). \(message.role.displayName)：\(message.text)", color: GoutouTheme.text))
         }
     }
 

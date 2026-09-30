@@ -70,6 +70,8 @@ final class KeyboardViewController: UIInputViewController {
     private var profiles: [GoutouPersonProfile] = []
     private var activeProfileID: UUID = GoutouProfileStore.activeProfile().id
     private var panelState: GoutouPanelState = .empty(banner: nil)
+    private var sharedChatPreview: SharedChatSnapshot?
+    private var sharedChatPreviewError: String?
     /// 上一次成功的结果（失败时也留着，结果区不会空掉）
     private var lastResult: GoutouResult?
     private var panelTask: URLSessionTask?
@@ -502,7 +504,9 @@ final class KeyboardViewController: UIInputViewController {
                 MemoryManagement.detail(id: $0, personID: activeProfileID, memories: allMemories, now: now)
             },
             memoryEditDraft: memoryEditDraft,
-            memoryPendingDeleteID: memoryPendingDeleteID
+            memoryPendingDeleteID: memoryPendingDeleteID,
+            sharedChat: sharedChatPreview,
+            sharedChatError: sharedChatPreviewError
         ))
     }
 
@@ -953,6 +957,19 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
             } catch {
                 panel.showAppGroupDiagnostic("App Group：\(error.localizedDescription)")
             }
+
+        case .readRecognizedChat:
+            // Always discard the previous preview before attempting a fresh read.
+            sharedChatPreview = nil
+            sharedChatPreviewError = nil
+            if !hasFullAccess {
+                sharedChatPreviewError = "没有开启键盘完全访问。请到设置开启「允许完全访问」后重试。"
+            } else {
+                do { sharedChatPreview = try SharedChatStore().read() }
+                catch { sharedChatPreviewError = error.localizedDescription }
+            }
+            refreshPanel()
+            panel.showSharedChatPreview()
 
         case .importConfig:
             importConfigFromClipboard()

@@ -3,13 +3,13 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
-/// 主 App 的「截图 OCR → 剪贴板」页。
+/// 主 App 的截图 OCR、人工修正、手动复制与共享保存页。
 ///
-/// 这一页刻意只做四件事：选图 → 本机识别 → 人工检查修正 → 手动复制。
+/// 选图 → 本机识别 → 人工检查修正 → 手动复制或保存。
 /// - **不**自动写剪贴板（只有点「复制聊天文字」才写）；
 /// - **不**调用 AI；
 /// - **不**保存图片：UIImage 只作为局部变量活在识别过程中，@State 里只留文字和框；
-/// - **不**碰键盘：键盘那边的导入是后续阶段的事（本阶段还没做）。
+/// - 共享聊天只供键盘独立预览，不进入 AI 或人物记忆。
 ///
 /// 第二阶段新增的两点：
 /// 1. 顶部状态栏/标题、底部输入区/键盘这些**确定不是聊天**的内容直接不进列表，只报个数；
@@ -29,6 +29,8 @@ struct ChatOCRView: View {
     @State private var copiedNote: String?
     /// 有「未确定」的归属时，复制前先问怎么算。
     @State private var isShowingUnresolvedPrompt = false
+    private enum ExportDestination { case clipboard, sharedChat }
+    @State private var exportDestination: ExportDestination = .clipboard
 
     /// 当前这次识别的任务。换图 / 清空 / 退出页面时取消它。
     @State private var recognitionTask: Task<Void, Never>?
@@ -128,9 +130,9 @@ struct ChatOCRView: View {
         ) {
             Button("未确定的算「对方」") { performCopy(treatingUnknownAs: .other) }
             Button("未确定的算「我」") { performCopy(treatingUnknownAs: .me) }
-            Button("先不复制", role: .cancel) {}
+            Button("先不处理", role: .cancel) {}
         } message: {
-            Text("选一个，我会先把这几条的归属改掉再复制，方便你在上面核对。")
+            Text("选一个，我会先把这几条的归属改掉，再完成你点击的复制或保存。也可以取消后逐条核对。")
         }
     }
 
@@ -185,7 +187,7 @@ struct ChatOCRView: View {
         Section {
             ForEach(candidateIndexes, id: \.self) { index in
                 row(for: $messages[index], showsRolePicker: false)
-                Toggle("保留这条，加入复制", isOn: $messages[index].isKept)
+                Toggle("保留这条，加入保存或复制", isOn: $messages[index].isKept)
                 if messages[index].isKept {
                     Picker("这条是谁说的", selection: $messages[index].role) {
                         ForEach(ChatLayoutRole.selectable, id: \.self) { role in
@@ -292,11 +294,29 @@ struct ChatOCRView: View {
     private var actionSection: some View {
         Section {
             Button {
+                exportDestination = .sharedChat
+                requestExport()
+            } label: {
+                Label("保存给狗头军师", systemImage: "square.and.arrow.down")
+            }
+            .disabled(!canCopy)
+
+            Button {
                 copyChat()
             } label: {
                 Label("复制聊天文字", systemImage: "doc.on.clipboard")
             }
             .disabled(!canCopy)
+
+            Button("清除已共享聊天（键盘将无法读取）", role: .destructive) {
+                copiedNote = nil
+                do {
+                    try SharedChatStore().clear()
+                    notice = "已清除共享聊天；当前识别和编辑结果仍保留。"
+                } catch {
+                    notice = error.localizedDescription
+                }
+            }
 
             Button("清空识别结果", role: .destructive) {
                 clearResults()
@@ -307,9 +327,9 @@ struct ChatOCRView: View {
                 Button("取消识别", role: .cancel) { cancelRecognition() }
             }
         } header: {
-            Text("复制到剪贴板")
+            Text("保存与复制")
         } footer: {
-            Text("复制完全由你点：这里的代码不会自动写剪贴板，也不会自动覆盖你现在复制的东西。只复制你保留的聊天消息（非聊天候选默认不带）。复制出来的 JSON 只带文本和 me/other 归属（format/version 标记：\(GoutouChatClipboardPayload.format)/v\(GoutouChatClipboardPayload.version)）。本阶段到「复制」为止：键盘那边的导入入口和 AI 分析都在后续阶段，现在键盘里点不到。")
+            Text("点击才保存或复制，只包含你保留的消息。保存后可在键盘点「读取识别聊天」预览。清空识别结果不会删除共享聊天。共享组由签名服务提供，项目子目录只避免文件重名，不隔离同组其他应用；清除共享聊天可删除这份保存内容。")
         }
     }
 
@@ -429,10 +449,16 @@ struct ChatOCRView: View {
         requestID == recognitionRequestID
     }
 
-    // MARK: - 复制
+    // MARK: - 手动导出
 
     /// 有「未确定」时先问用户怎么算，再决定复制什么。
     private func copyChat() {
+        exportDestination = .clipboard
+        requestExport()
+    }
+
+    private func requestExport() {
+        copiedNote = nil
         guard unresolvedCount == 0 else {
             notice = nil
             isShowingUnresolvedPrompt = true
@@ -443,7 +469,7 @@ struct ChatOCRView: View {
 
     /// fallback 为 nil 时表示「已经没有未确定了」。
     ///
-    /// 分成「问」和「算 + 复制」两步：确认对话框里的按钮只负责用哪个 fallback 去复制，
+    /// 分成「问」和「算 + 导出」两步：确认对话框里的按钮负责指定归属再保存或复制，
     /// 不顺手改 @State（在 ViewBuilder 里改状态容易出顺序问题）。
     private func performCopy(treatingUnknownAs fallback: GoutouChatRole?) {
         if let fallback = fallback {
@@ -461,16 +487,20 @@ struct ChatOCRView: View {
         }
 
         guard !payloadMessages.isEmpty else {
-            notice = "没有要复制的内容：非聊天候选默认不带，确认要的话先把它们放回来。"
+            notice = "没有要保存或复制的内容：非聊天候选默认不带，确认要的话先把它们放回来。"
             return
         }
 
         do {
-            let text = try GoutouChatClipboardCodec.encode(
-                GoutouChatClipboardPayload(messages: payloadMessages)
-            )
-            UIPasteboard.general.string = text
-            copiedNote = "已复制 \(payloadMessages.count) 条到剪贴板。本阶段到此为止：键盘的「导入识别聊天」还没做，AI 分析也用不上它。"
+            let payload = GoutouChatClipboardPayload(messages: payloadMessages)
+            switch exportDestination {
+            case .clipboard:
+                UIPasteboard.general.string = try GoutouChatClipboardCodec.encode(payload)
+                copiedNote = "已复制 \(payloadMessages.count) 条到剪贴板。"
+            case .sharedChat:
+                let saved = try SharedChatStore().save(payload)
+                copiedNote = "已保存 \(saved.messages.count) 条聊天，去键盘点『读取识别聊天』。"
+            }
             notice = nil
         } catch {
             // 错误文案里只说第几条出了什么问题，不回显聊天内容。

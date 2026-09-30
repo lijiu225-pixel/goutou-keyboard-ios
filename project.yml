@@ -55,11 +55,11 @@ targets:
           - "GoutouSkill.md"
           - "pinyin-chars.tsv"
           - "pinyin-words.tsv"
-      # 只编通信契约与 probe：键盘不需要 OCR 的界面和几何代码。
-      # App Group 当前只用于固定 probe，尚未接聊天业务。
+      # 通信契约、共享存储与 probe：键盘不需要 OCR 的界面和几何代码。
       - path: Shared/GoutouChatClipboard.swift
       - path: Shared/SharedConstants.swift
       - path: Shared/AppGroupDiagnostics.swift
+      - path: Shared/SharedChatStore.swift
       # 军师人格：和 Android / Web 共用同一个 SKILL.md，打进键盘 bundle 当 system prompt。
       - path: Keyboard/GoutouSkill.md
         buildPhase: resources

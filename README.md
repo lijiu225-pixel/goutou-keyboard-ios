@@ -37,9 +37,12 @@
 细节、判据和已知限制见 [截图 OCR 第二阶段说明](docs/phase-2-chat-ocr.md)，
 第一阶段的支持范围见 [截图 OCR 第一阶段说明](docs/phase-1-chat-ocr.md)。
 
-**本阶段到「复制」为止**：键盘侧的「导入识别聊天」入口**还没做**，AI 分析也不读这份 JSON，
-主 App 里不会指引你去点一个不存在的按钮。早期那套 App Group 共享缓存路线已废弃：
-相关代码、状态行和两份 entitlement 都已删除，App 与键盘之间只剩剪贴板这一条通道。
+**第三个增量（共享聊天预览）**：主 App 修正结果后点「保存给狗头军师」，
+键盘军师面板点「读取识别聊天」可查看条数、时间与按顺序排列的归属和正文。
+沿用已验证的 App Group 和固定 probe；保存为原子文件，剪贴板复制仍保留。
+超过 30 分钟提醒可能较旧，读取失败清除旧预览。清除共享聊天与清空 OCR 结果分开。
+签名服务组内的项目子目录不提供应用隔离。预览不接入上下文、AI、人物档案或记忆。
+实现与真机验收步骤见 [共享聊天预览说明](docs/phase-3-shared-chat.md)。
 
 ## 工程结构
 
@@ -52,7 +55,8 @@ App/                                 宿主 App：配置接口 + 截图 OCR
   ChatOCRService.swift               本机 Vision OCR：长图按计划分片识别，坐标换算回原图归一化
   ChatLayoutParser.swift             阅读顺序整理 + 按气泡边缘轨道判归属 / 聊天区域过滤（纯 Foundation）
   Info.plist
-Shared/                              两端共用（只有剪贴板契约会被编进键盘）
+Shared/                              两端共用（键盘编译契约、共享存储和 probe）
+  SharedChatStore.swift              latest_chat.json 原子保存、校验读取与清除
   GoutouChatClipboard.swift          goutou-chat JSON 契约与编解码（含 version 严格校验与体量上限）
   GoutouChatOCRGeometry.swift        长图分片几何：缩放口径 / 切片 / 坐标换算 / 重叠去重（纯 Foundation）
   GoutouChatBubbleScanner.swift      气泡边缘扫描：底色估计 / 行内色块 / 头像侧（纯 Foundation，有测试）
