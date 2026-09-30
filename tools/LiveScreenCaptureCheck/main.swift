@@ -185,6 +185,10 @@ for file in liveSourceFiles {
         continue
     }
     for token in forbiddenTokens {
+        // 阶段 12C 起，捕获管理器里确实出现了 SharedChatStore —— 但只在用户点
+        // 「保存给狗头军师」时的手动交接里（LiveChatReviewSaver）。「识别过程绝不自动写共享聊天」
+        // 由 LiveChatReviewCheck 的行为测试把关（跑完整识别流程后容器里不该出现文件）。
+        if token == "SharedChatStore" && file.hasSuffix("LiveScreenCaptureManager.swift") { continue }
         expect(!text.contains(token), "\(file) 不该出现 \(token)")
     }
 }
