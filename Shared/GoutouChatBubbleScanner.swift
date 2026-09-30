@@ -372,7 +372,7 @@ enum ChatBubbleScanner {
         for fraction in [0.25, 0.5, 0.75] {
             let column = min(
                 rows.width - 1,
-                max(0, Int((span.minX + span.width * fraction) * Double(rows.width)).rounded(.down))
+                max(0, Int(((span.minX + span.width * fraction) * Double(rows.width)).rounded(.down)))
             )
             thickness = max(
                 thickness,
