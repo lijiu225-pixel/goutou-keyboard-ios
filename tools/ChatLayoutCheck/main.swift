@@ -621,9 +621,9 @@ for error: ChatOCRGeometryError in [
 // MARK: - 11. 分片坐标换算回原图统一归一化
 
 // 坐标换算用一份**合成**计划，数字好核对：1290×12000 原图，工作图 645×6000（缩放 0.5），
-// 片高 1400 → 4 片，起点 0 / 1400 / 2800 / 4200。
-// （真实计划里 1290×12000 的缩放是 0.372，工作图 480×4465.116，数字不好看，
-//  所以这里用合成计划单独验换算，剩下的部分在上面用真实计划验。）
+// 片高 1400 → 5 片，每片 1200 高，起点 0 / 1200 / 2400 / 3600 / 4800。
+// （真实计划里 1290×12000 的缩放是 0.372，工作图 480×4465.116，除不尽、数字不好看，
+//  所以这里用合成计划单独验换算，其余部分在上面用真实计划验。）
 let syntheticPlan = ChatOCRTilingPlan(
     originalWidth: 1290,
     originalHeight: 12000,
@@ -633,13 +633,13 @@ let syntheticPlan = ChatOCRTilingPlan(
     strategy: .tiled,
     tiles: ChatOCRTilingPlanner.tileRects(workingWidth: 645, workingHeight: 6000, tileSpan: 1400)
 )
-expect(syntheticPlan.tiles.count == 4, "合成计划应该有 4 片，实际 \(syntheticPlan.tiles.count)")
+expect(syntheticPlan.tiles.count == 5, "合成计划应该有 5 片，实际 \(syntheticPlan.tiles.count)")
 let mapper = ChatOCRCoordinateMapper(plan: syntheticPlan)
 
-// 第 2 片（工作图 y 从 1400 开始）里、贴着该片顶部的一行：
-// 片内归一化 y=0 → 工作图 1400 → 原图 2800 → 归一化 2800/12000 = 0.2333…
+// 第 2 片（工作图 y 从 1200 开始）里、贴着该片顶部的一行：
+// 片内归一化 y=0 → 工作图 1200 → 原图 2400 → 归一化 2400/12000 = 0.2
 let secondTile = syntheticPlan.tiles[1]
-expect(secondTile.y == 1400, "合成计划第 2 片起点应该是 1400，实际 \(secondTile.y)")
+expect(secondTile.y == 1200, "合成计划第 2 片起点应该是 1200，实际 \(secondTile.y)")
 let mappedFromSecondTile = mapper.map(
     lines: [
         ChatOCRLine(
@@ -653,11 +653,11 @@ let mappedFromSecondTile = mapper.map(
 )
 let secondBox = mappedFromSecondTile[0].box
 expect(
-    abs(secondBox.minY - 2800.0 / 12000.0) < 0.0005,
-    "第 2 片顶部的行必须换算到原图 y≈0.2333，实际 \(secondBox.minY)"
+    abs(secondBox.minY - 2400.0 / 12000.0) < 0.0005,
+    "第 2 片顶部的行必须换算到原图 y=0.2，实际 \(secondBox.minY)"
 )
 expect(
-    abs(secondBox.maxY - 2800.0 / 12000.0 - 0.05 * 0.5) < 0.0005,
+    abs(secondBox.maxY - 2400.0 / 12000.0 - 0.05 * 0.5) < 0.0005,
     "行高要按缩放比一起放大回原图，实际 \(secondBox.maxY)"
 )
 // 横向：片内 x=0.1 → 工作图 0.1×645=64.5 → 原图 129 → 归一化 129/1290 = 0.1
