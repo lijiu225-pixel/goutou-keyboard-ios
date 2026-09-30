@@ -180,12 +180,17 @@ func runStageTwoChecks() {
     var restored = edgeReview.reviewMessages
     restored[0].isKept = true
     restored[0].role = .other
-    let exportMessages = restored.filter { $0.isKept }.map {
-        GoutouChatClipboardMessage(role: $0.role.clipboardRole!, text: $0.text)
+    // Simulate the user's explicit role correction before copying this synthetic fixture.
+    restored[1].role = .other
+    restored[2].role = .me
+    let exportMessages = restored.filter { $0.isKept }.compactMap { message -> GoutouChatClipboardMessage? in
+        guard let role = message.role.clipboardRole else { return nil }
+        return GoutouChatClipboardMessage(role: role, text: message.text)
     }
-    let exportText = try! GoutouChatClipboardCodec.encode(GoutouChatClipboardPayload(messages: exportMessages))
-    let exportBack = try! GoutouChatClipboardCodec.decode(exportText)
-    expect(exportBack.messages.map { $0.text } == ["边缘真实消息", "甲甲甲", "乙乙乙"],
+    expect(exportMessages.count == 3, "All selected roles must be confirmed before export")
+    let exportText = try? GoutouChatClipboardCodec.encode(GoutouChatClipboardPayload(messages: exportMessages))
+    let exportBack = exportText.flatMap { try? GoutouChatClipboardCodec.decode($0) }
+    expect(exportBack?.messages.map { $0.text } == ["边缘真实消息", "甲甲甲", "乙乙乙"],
            "Restored content enters the JSON in reading order; unselected candidates stay out")
 
     // ── 1. 气泡扫描：底色估计 ───────────────────────────────────────────
