@@ -123,7 +123,7 @@ jobs:
             -o "$RUNNER_TEMP/recognizedchatcontextcheck"
           "$RUNNER_TEMP/recognizedchatcontextcheck"
 
-      # 阶段 9/10：识别聊天分析的状态、Prompt 与结构化结果契约。不联网、不消耗 token，请求体只组装出来检查。
+      # 阶段 9~11：识别聊天分析的状态、Prompt、结构化结果与插入契约（spy 写入，不联网、不消耗 token）。
       - name: Recognized chat analysis contract
         run: |
           swiftc -swift-version 5 \

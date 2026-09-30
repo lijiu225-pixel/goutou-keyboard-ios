@@ -1067,6 +1067,12 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
             dropRecognizedChatAnalysis()
             refreshPanel()
 
+        case .insertRecognizedReply(let reply):
+            // 阶段 11：只有「当前结果里逐字有这一条」才把原文插进输入框。
+            // 不重新分析、不清草稿、不加空格 / 换行、不模拟回车、不发送、不写记忆、不落盘。
+            let proxy = textDocumentProxy
+            RecognizedReplyInsert.perform(reply, from: recognizedChatAnalysis) { proxy.insertText($0) }
+
         case .importConfig:
             importConfigFromClipboard()
 

@@ -227,6 +227,36 @@ struct RecognizedChatAnalysisSession: Equatable {
     }
 }
 
+extension RecognizedChatAnalysisSession {
+    /// 阶段 11：这条回复现在能不能插进宿主输入框。
+    ///
+    /// 只有「**当前**结果里逐字有这一条」才返回它——idle / loading / failure / 已经失效的旧结果
+    /// 一律返回 nil。返回的就是要写进输入框的原文：不加序号、不加空格、不加换行。
+    func replyToInsert(_ reply: String) -> String? {
+        guard case .success(let result) = state else { return nil }
+        guard result.replies.contains(reply) else { return nil }
+        return reply
+    }
+}
+
+/// 阶段 11：把一条候选回复写进宿主输入框。
+///
+/// 只做一件事：确认这条回复属于**当前**结果，然后原样写一次。
+/// 写入方式由调用方注入（生产环境就是 `textDocumentProxy.insertText`），
+/// 这里不清草稿、不加空格、不加换行、不模拟回车、不发送、不联网、不写记忆、不落盘。
+enum RecognizedReplyInsert {
+    @discardableResult
+    static func perform(
+        _ reply: String,
+        from session: RecognizedChatAnalysisSession,
+        write: (String) -> Void
+    ) -> Bool {
+        guard let text = session.replyToInsert(reply) else { return false }
+        write(text)
+        return true
+    }
+}
+
 /// 阶段 9 专用的 Prompt：只做聊天分析。
 ///
 /// 旧的 `GoutouPrompt.systemPrompt(skill:)`（军师人格 + 6～8 条话术契约）一个字都没动，

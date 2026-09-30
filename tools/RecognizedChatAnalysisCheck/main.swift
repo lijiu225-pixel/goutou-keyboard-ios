@@ -355,6 +355,80 @@ expectThrows(.badJSON("不是 JSON"), "响应体不是 JSON") {
     _ = try GoutouAIClient.parseRecognizedChatFields(data: Data("不是 JSON".utf8))
 }
 
+// MARK: - 阶段 11：点一条候选 = 只插一次原文
+
+var insertSession = RecognizedChatAnalysisSession()
+var writes: [String] = []
+func tapReply(_ reply: String) -> Bool {
+    RecognizedReplyInsert.perform(reply, from: insertSession) { writes.append($0) }
+}
+
+// 10~12：idle / loading / failure 都不能插入
+expect(!tapReply(goodResult.replies[0]), "idle 状态不能插入")
+expect(writes.isEmpty, "idle 状态一次都没写")
+guard case .started(let insertGeneration) = insertSession.begin(hasFullAccess: true, config: config, skillAvailable: true, context: context) else {
+    fatalError("RecognizedChatAnalysisCheck: 插入用例没能发起分析")
+}
+expect(!tapReply(goodResult.replies[0]), "loading 状态不能插入")
+expect(writes.isEmpty, "loading 状态一次都没写")
+insertSession.complete(generation: insertGeneration, result: .failure(.ai(.timeout)))
+expect(!tapReply(goodResult.replies[0]), "failure 状态不能插入")
+expect(writes.isEmpty, "failure 状态一次都没写")
+
+// 2~9 / 25~26：成功之后三条分别映射、写的就是原文、点一次只写一次
+insertSession.invalidate()
+guard case .started(let readyGeneration) = insertSession.begin(hasFullAccess: true, config: config, skillAvailable: true, context: context) else {
+    fatalError("RecognizedChatAnalysisCheck: 插入用例没能拿到结果")
+}
+insertSession.complete(generation: readyGeneration, result: .success(goodResult))
+
+for (index, reply) in goodResult.replies.enumerated() {
+    writes.removeAll()
+    expect(tapReply(reply), "第 \(index + 1) 条应当可以插入")
+    expect(writes.count == 1, "一次点击只写一次")
+    expect(writes == [reply], "点第 \(index + 1) 条就写第 \(index + 1) 条原文")
+}
+expect(!writes.contains { $0.hasPrefix("①") || $0.hasPrefix("②") || $0.hasPrefix("③") }, "插入内容不带序号")
+expect(!writes.contains { $0 != $0.trimmed }, "插入内容不带首尾空白")
+expect(!writes.contains { $0.contains("\n") }, "插入内容不带换行")
+
+// 6 / 9：脏文本都不算这一条
+writes.removeAll()
+expect(!tapReply("① " + goodResult.replies[0]), "带序号的文本不算这一条")
+expect(!tapReply(" " + goodResult.replies[0]), "带前导空格的文本不算这一条")
+expect(!tapReply(goodResult.replies[0] + "\n"), "带尾随换行的文本不算这一条")
+expect(!tapReply("别的聊天的回复"), "不在当前结果里的文本不能插")
+expect(writes.isEmpty, "这些都不该写进去")
+
+// 13~16：结果失效 / 读取新聊天 / 取消使用 / 重新分析 loading
+insertSession.invalidate()
+expect(!tapReply(goodResult.replies[0]), "结果作废之后旧卡片插不进去")
+expect(writes.isEmpty, "作废之后一次都没写")
+expect(insertSession.replyToInsert(goodResult.replies[0]) == nil, "作废之后没有可插入的回复")
+
+insertSession.invalidate()
+guard case .started(let reloadGeneration) = insertSession.begin(hasFullAccess: true, config: config, skillAvailable: true, context: context) else {
+    fatalError("RecognizedChatAnalysisCheck: 重新分析用例没能发起")
+}
+insertSession.complete(generation: reloadGeneration, result: .success(goodResult))
+writes.removeAll()
+guard case .started = insertSession.begin(hasFullAccess: true, config: config, skillAvailable: true, context: context) else {
+    fatalError("RecognizedChatAnalysisCheck: 重新分析没能进入 loading")
+}
+expect(!tapReply(goodResult.replies[0]), "重新分析 loading 时旧回复不能插")
+expect(writes.isEmpty, "重新分析 loading 时一次都没写")
+
+// 17：同一份结果里，用户再主动点同一条允许再插一次（每次都要一次明确点击）
+insertSession.invalidate()
+guard case .started(let againGeneration) = insertSession.begin(hasFullAccess: true, config: config, skillAvailable: true, context: context) else {
+    fatalError("RecognizedChatAnalysisCheck: 重复点击用例没能发起")
+}
+insertSession.complete(generation: againGeneration, result: .success(goodResult))
+writes.removeAll()
+expect(tapReply(goodResult.replies[0]), "第一次明确点击")
+expect(tapReply(goodResult.replies[0]), "第二次明确点击也允许")
+expect(writes == [goodResult.replies[0], goodResult.replies[0]], "两次明确点击 = 两次插入")
+
 // MARK: - 20. 不落盘、不写记忆
 
 // 走完一整轮「开始 → 成功 → 读取新聊天作废」，容器里不该多出任何文件。
@@ -366,6 +440,8 @@ let beforeRun = try fm.contentsOfDirectory(atPath: probeRoot.path)
 var cycle = RecognizedChatAnalysisSession()
 if case .started(let cycleGeneration) = cycle.begin(hasFullAccess: true, config: config, skillAvailable: true, context: context) {
     cycle.complete(generation: cycleGeneration, result: .success(goodResult))
+    // 阶段 11：插入一次也不该往磁盘或 UserDefaults 里留东西。
+    _ = RecognizedReplyInsert.perform(goodResult.replies[0], from: cycle) { _ in }
 }
 cycle.invalidate()
 let afterRun = try fm.contentsOfDirectory(atPath: probeRoot.path)

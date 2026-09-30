@@ -60,6 +60,8 @@ enum GoutouPanelAction {
     /// 阶段 9：用户主动点「分析这段聊天」——这是唯一会发网络请求的动作。
     case analyzeRecognizedChat
     case cancelRecognizedChatAnalysis
+    /// 阶段 11：用户主动点某条候选回复，把**原文**交给控制器插进输入框（不等于发送）。
+    case insertRecognizedReply(String)
     case clearConfig
     case addSegment(GoutouSpeaker)
     case deleteSegment(Int)
@@ -617,27 +619,33 @@ final class GoutouPanelView: UIView {
         for (index, reply) in result.replies.enumerated() {
             bodyStack.addArrangedSubview(makeReplyCard(index: index, text: reply))
         }
+        bodyStack.addArrangedSubview(makeNoticeLabel("点一条候选即可上屏。", color: GoutouTheme.secondary))
     }
 
     private static let replyCardMarks = ["①", "②", "③"]
 
-    /// 只读候选卡片：没有任何点击动作，也不是「发送」按钮（插入属于后续阶段）。
-    private func makeReplyCard(index: Int, text: String) -> UIView {
+    /// 阶段 11：候选卡片可以点——点一下把**原文**交给控制器插入输入框。
+    /// 序号只属于标题；带出去的是 `text` 本身，不加前缀、空格或换行，也不是「发送」。
+    private func makeReplyCard(index: Int, text: String) -> NineKeyButton {
         let mark = index < Self.replyCardMarks.count ? Self.replyCardMarks[index] : "\(index + 1)."
-        let label = makeNoticeLabel("\(mark) \(text)", color: GoutouTheme.text)
-        label.translatesAutoresizingMaskIntoConstraints = false
-
-        let card = UIView()
-        card.backgroundColor = GoutouTheme.key
-        card.layer.cornerRadius = 6
-        card.addSubview(label)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 8),
-            label.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -8),
-            label.topAnchor.constraint(equalTo: card.topAnchor, constant: 7),
-            label.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -7),
-        ])
+        let card = NineKeyButton(type: .system)
+        card.setTitle("\(mark) \(text)", for: .normal)
+        card.titleLabel?.font = .systemFont(ofSize: 13)
+        card.titleLabel?.numberOfLines = 0
+        card.titleLabel?.lineBreakMode = .byWordWrapping
+        card.contentHorizontalAlignment = .left
+        card.titleEdgeInsets = UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
+        card.applyStyle(background: GoutouTheme.key, cornerRadius: 6)
+        card.accessibilityLabel = "在第 \(index + 1) 条候选上上屏"
+        card.payload = text
+        card.addTarget(self, action: #selector(didTapRecognizedReply(_:)), for: .touchUpInside)
         return card
+    }
+
+    /// 点一条候选：只把原文交给控制器（序号不进正文，也不发送）。
+    @objc private func didTapRecognizedReply(_ sender: NineKeyButton) {
+        guard let reply = sender.payload else { return }
+        delegate?.goutouPanel(self, didTrigger: .insertRecognizedReply(reply))
     }
 
     private func makeSectionHeader(_ title: String) -> UILabel {

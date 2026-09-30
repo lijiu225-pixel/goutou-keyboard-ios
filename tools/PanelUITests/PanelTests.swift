@@ -247,6 +247,93 @@ final class PanelTests: XCTestCase {
         assertBounded(panel)
     }
 
+    /// 阶段 11：三张候选卡片可点击，点第 N 条只发一个「插入第 N 条原文」的动作，
+    /// 序号只属于标题；idle / loading / failure 下根本没有卡片可点。
+    @MainActor
+    func testRecognizedChatReplyCardsInsertExactText() throws {
+        let messages = (0..<4).map { GoutouChatClipboardMessage(role: $0 % 2 == 0 ? .me : .other, text: "合成消息\($0)") }
+        let savedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let replies = ["好啊，七点老地方", "你先定地方，我都行", "行，那我请客"]
+        var snapshot = GoutouPanelSnapshot(state: .empty(banner: nil), segments: [], memory: [], profiles: [],
+            activeProfileID: UUID(), lastResult: nil, configSummary: "", memoryNote: nil)
+        snapshot.sharedChat = SharedChatSnapshot(messages: messages, updatedAt: savedAt)
+        snapshot.activeRecognizedChat = RecognizedChatContext(messages: messages, updatedAt: savedAt)
+
+        let panel = GoutouPanelView(frame: CGRect(x: 0, y: 0, width: 390, height: 302))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.addSubview(panel)
+        defer { window.isHidden = true }
+
+        func replyCards() -> [UIButton] {
+            let marks = ["①", "②", "③"]
+            return descendants(panel).compactMap { $0 as? UIButton }.filter { button in
+                marks.contains(where: (button.title(for: .normal) ?? "").hasPrefix)
+            }
+        }
+        func tapAndCapture(_ prefix: String) throws -> [GoutouPanelAction] {
+            let fresh = PanelActionRecorder()
+            panel.delegate = fresh
+            try tap(prefix, in: panel)
+            return fresh.actions
+        }
+        func insertedText(_ actions: [GoutouPanelAction]) -> String? {
+            for action in actions {
+                if case .insertRecognizedReply(let text) = action { return text }
+            }
+            return nil
+        }
+        func firesAnalysis(_ actions: [GoutouPanelAction]) -> Bool {
+            actions.contains { action in
+                switch action {
+                case .analyze, .analyzeRecognizedChat: return true
+                default: return false
+                }
+            }
+        }
+
+        panel.render(snapshot)
+        panel.showSharedChatPreview()
+        panel.layoutIfNeeded()
+
+        // idle / loading / failure：没有可点的候选卡片
+        XCTAssertTrue(replyCards().isEmpty)
+        snapshot.recognizedChatAnalysis = .loading
+        panel.render(snapshot)
+        panel.layoutIfNeeded()
+        XCTAssertTrue(replyCards().isEmpty)
+        snapshot.recognizedChatAnalysis = .failure(.ai(.timeout))
+        panel.render(snapshot)
+        panel.layoutIfNeeded()
+        XCTAssertTrue(replyCards().isEmpty)
+
+        // success：恰好三张可点卡片
+        snapshot.recognizedChatAnalysis = .success(
+            RecognizedChatResult(analysis: "对方在确认晚上。", tone: "轻松", replies: replies)
+        )
+        panel.render(snapshot)
+        panel.layoutIfNeeded()
+        XCTAssertEqual(replyCards().count, 3)
+        XCTAssertTrue(replyCards().allSatisfy { $0.isEnabled })
+
+        // 点第 1 条：只发一个插入动作，文本是原文（不带序号），也不触发分析
+        let first = try tapAndCapture("① ")
+        XCTAssertEqual(first.count, 1, "点一次只发一个面板动作")
+        XCTAssertEqual(insertedText(first), replies[0], "第 1 条映射 replies[0]")
+        XCTAssertFalse(firesAnalysis(first), "点候选不得触发分析")
+
+        XCTAssertEqual(insertedText(try tapAndCapture("② ")), replies[1], "第 2 条映射 replies[1]")
+        XCTAssertEqual(insertedText(try tapAndCapture("③ ")), replies[2], "第 3 条映射 replies[2]")
+        XCTAssertEqual(insertedText(try tapAndCapture("① ")), replies[0], "再次主动点同一条仍然插入同一条")
+
+        // 界面里仍然没有「发送」
+        XCTAssertFalse(titles(in: panel).contains { $0.contains("发送") })
+        XCTAssertFalse(labels(in: panel).contains { $0.contains("发送") })
+        assertBounded(panel)
+    }
+
     @MainActor
     private func labels(in panel: GoutouPanelView) -> [String] {
         descendants(panel).compactMap { ($0 as? UILabel)?.text }
