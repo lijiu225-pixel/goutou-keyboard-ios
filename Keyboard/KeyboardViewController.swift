@@ -942,6 +942,18 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
         case .back:
             hideMentorPanel()
 
+        case .readAppGroupProbe:
+            guard hasFullAccess else {
+                panel.showAppGroupDiagnostic("App Group：请先开启键盘「允许完全访问」，再读取测试。")
+                break
+            }
+            do {
+                let probe = try AppGroupDiagnostics().readProbe()
+                panel.showAppGroupDiagnostic("主 App → 输入法通信成功\n写入时间：\(probe.timestamp)\n固定测试值：\(probe.value)")
+            } catch {
+                panel.showAppGroupDiagnostic("App Group：\(error.localizedDescription)")
+            }
+
         case .importConfig:
             importConfigFromClipboard()
 

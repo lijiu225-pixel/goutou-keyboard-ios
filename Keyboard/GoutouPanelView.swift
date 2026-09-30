@@ -45,6 +45,7 @@ struct GoutouPanelSnapshot {
 enum GoutouPanelAction {
     case back
     case importConfig
+    case readAppGroupProbe
     case clearConfig
     case addSegment(GoutouSpeaker)
     case deleteSegment(Int)
@@ -556,7 +557,18 @@ final class GoutouPanelView: UIView {
         return row
     }
 
+    private var appGroupDiagnosticStatus = "App Group：尚未测试"
+
+    func showAppGroupDiagnostic(_ message: String) {
+        appGroupDiagnosticStatus = message
+        rebuildBody()
+    }
+
     private func buildSettingsBody() {
+        bodyStack.addArrangedSubview(makeNoticeLabel(appGroupDiagnosticStatus, color: GoutouTheme.text))
+        bodyStack.addArrangedSubview(makeActionButton(title: "读取 App Group 测试", background: GoutouTheme.function, fontSize: 13) {
+            self.delegate?.goutouPanel(self, didTrigger: .readAppGroupProbe)
+        })
         bodyStack.addArrangedSubview(makeNoticeLabel(
             configSummary.isEmpty ? "当前配置：未导入" : "当前配置：\(configSummary)",
             color: GoutouTheme.text

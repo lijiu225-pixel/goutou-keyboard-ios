@@ -58,6 +58,10 @@ struct ContentView: View {
                 }
 
                 Section {
+                    NavigationLink("App Group 诊断") { AppGroupDiagnosticView() }
+                }
+
+                Section {
                     TextField("Base URL，例如 https://api.example.com/v1", text: $baseURL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()

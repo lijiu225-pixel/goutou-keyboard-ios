@@ -101,6 +101,11 @@ jobs:
             -o "$RUNNER_TEMP/chatvisioncheck"
           "$RUNNER_TEMP/chatvisioncheck"
 
+      - name: App Group probe filesystem contract
+        run: |
+          swiftc -swift-version 5 Shared/SharedConstants.swift Shared/AppGroupDiagnostics.swift tools/AppGroupProbeCheck/main.swift -o "$RUNNER_TEMP/appgroupprobecheck"
+          "$RUNNER_TEMP/appgroupprobecheck"
+
       - name: Generate Xcode project
         run: |
           xcodegen generate
