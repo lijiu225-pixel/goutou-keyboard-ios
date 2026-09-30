@@ -241,4 +241,31 @@ for frame in 0..<4 {
 expect(isolation.core.chatGeneration > oldGeneration, "production pipeline rotates generation")
 expect(isolation.timelineCount == 2, "production pipeline contains only new contact messages")
 
+let keyboardScreen = chatScreen() + [observation("键盘合成文本", x: 0.05, y: 0.70, width: 0.30)]
+let keyboardEvidence = ChatSceneDetector.probeEvidence(observations: keyboardScreen,
+    rectangles: [CGRect(x: 0.18, y: 0.56, width: 0.62, height: 0.04)])
+expect(keyboardEvidence.inputTopRatio == 0.56, "input area follows keyboard height")
+var keyboardPipeline = LiveChatScenePipeline()
+for frame in 0..<3 {
+    keyboardPipeline.detect(keyboardEvidence)
+    _ = keyboardPipeline.ingest(keyboardScreen, at: t0.addingTimeInterval(Double(frame)))
+}
+expect(keyboardPipeline.allowsFullRecognition, "chat remains active with keyboard open")
+expect(!keyboardPipeline.snapshot().messages.contains { $0.text.contains("键盘合成文本") }, "keyboard text excluded from real timeline")
+
+var shortExit = ChatSceneGate()
+_ = shortExit.update(isChatFrame: true, titleFingerprint: "同名")
+_ = shortExit.update(isChatFrame: true, titleFingerprint: "同名")
+_ = shortExit.update(isChatFrame: false)
+expect(shortExit.verdict == .activeChat, "single transition frame preserves display")
+_ = shortExit.update(isChatFrame: true, titleFingerprint: "同名")
+expect(!shortExit.allowsSubmission, "same-title short exit requires fresh confirmation")
+expect(shortExit.update(isChatFrame: true, titleFingerprint: "同名").startsNewSession, "same-title short exit rotates session")
+let delivery = LiveFrameDeliveryGate()
+expect(delivery.acquire(), "first frame queued")
+expect(!(0..<1000).contains { _ in delivery.acquire() }, "frame delivery queue is bounded")
+delivery.release()
+expect(delivery.acquire(), "delivery resumes after completion")
+delivery.release()
+
 print("ChatScreenDetectionCheck passed (\(checks) assertions; pure logic only; synthetic screens; no network)")

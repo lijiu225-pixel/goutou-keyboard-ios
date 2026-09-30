@@ -773,10 +773,6 @@ final class KeyboardViewController: UIInputViewController {
             return
         }
 
-        #if DEBUG
-        // 只记条数：不打印 Prompt、消息正文、API Key。
-
-        #endif
 
         recognizedChatTask = GoutouAIClient.analyzeChat(
             config: config,

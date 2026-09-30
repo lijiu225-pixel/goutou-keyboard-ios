@@ -18,12 +18,12 @@ struct LiveScreenCaptureView: View {
             Section {
                 LabeledContent("识别门控", value: manager.sceneVerdict.title)
                 LabeledContent("状态", value: manager.model.state.title)
-                Button("开始动态识别测试") { manager.start() }
+                Button("开始动态识别") { manager.start() }
                     .disabled(!manager.model.state.canStart)
                 Button("停止动态识别", role: .destructive) { manager.stop() }
                     .disabled(!manager.model.state.canStop)
             } header: {
-                Text("动态识别测试")
+                Text("动态识别")
             } footer: {
                 Text("点「开始」后会弹出系统内容共享选择，请选整屏 / Entire Display，然后切到微信测试。识别全部在本机进行，本阶段不会上传屏幕图像，也不会自动分析聊天。")
             }

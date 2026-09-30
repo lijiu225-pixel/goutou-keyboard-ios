@@ -39,6 +39,7 @@ final class LiveScreenCaptureManager: ObservableObject {
     private let ocrQueue = DispatchQueue(label: "goutou.live.capture.ocr", qos: .utility)
     private let chatEngine = LiveChatEngineBox()
     private let captureFence = LiveCaptureFence()
+    private nonisolated let frameDeliveryGate = LiveFrameDeliveryGate()
     /// 阶段 12D 的自动同步：和聊天引擎同一条串行队列，不需要额外加锁。
     private let autoSync: LiveChatAutoSyncCoordinator
     /// 灵动岛 / 锁屏状态（ActivityKit 失败只记原因，绝不影响识别链路）
@@ -111,6 +112,7 @@ final class LiveScreenCaptureManager: ObservableObject {
     /// 捕获失败：进 `failed` 并收掉灵动岛状态（End 时带上错误文案，但不含正文 / 路径）。
     private func markCaptureDidFail(_ reason: String) {
         captureFence.invalidate()
+        autoSyncState = .disabled
         let sync = autoSync
         ocrQueue.async { sync.stop() }
         model.captureDidFail(reason)
@@ -166,6 +168,7 @@ final class LiveScreenCaptureManager: ObservableObject {
     func stop() {
         guard model.beginStop() else { return }
         captureFence.invalidate()
+        autoSyncState = .disabled
         pendingFrame = nil
         let sync = autoSync
         ocrQueue.async { sync.stop() }      // 取消排队 + 关闭开关；已共享成功的聊天不动
@@ -317,6 +320,7 @@ final class LiveScreenCaptureManager: ObservableObject {
         let sync = autoSync
         ocrQueue.async { sync.stop() }
         model.captureDidStopWithError(reason)
+        autoSyncState = .disabled
         noteCaptureActivityStopped()   // 系统结束了共享：把灵动岛状态也收掉
     }
 
@@ -326,8 +330,10 @@ final class LiveScreenCaptureManager: ObservableObject {
     nonisolated func handleSampleBuffer(_ sampleBuffer: CMSampleBuffer, generation: Int) {
         guard CMSampleBufferIsValid(sampleBuffer),
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        guard frameDeliveryGate.acquire() else { return }
         let orientation = LiveScreenCaptureManager.frameOrientation(sampleBuffer)
         Task { @MainActor in
+            defer { self.frameDeliveryGate.release() }
             guard generation == self.model.generation else { return }
             self.handleScreenFrame(pixelBuffer: pixelBuffer, orientation: orientation)
         }

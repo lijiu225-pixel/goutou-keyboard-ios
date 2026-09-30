@@ -59,6 +59,8 @@ struct ChatSceneGateConfiguration: Equatable {
     var requiredInputBarText = true
     /// 顶部文字连续变化多少帧后认为「换了聊天会话」
     var requiredTitleChangeFrames = 2
+    var minimumInputTopRatio: CGFloat = 0.50
+    var maximumInputHeight: CGFloat = 0.09
 
     static let `default` = ChatSceneGateConfiguration()
 }
@@ -72,6 +74,7 @@ struct ChatSceneEvidence: Equatable {
     var hasCenteredText = false
     /// 顶部文字（聊天标题）的指纹，用来发现「换了个人聊天」
     var topBarFingerprint: String?
+    var inputTopRatio: CGFloat?
 }
 
 /// 从一帧的 observations + 候选块里收集证据（纯函数）。
@@ -81,7 +84,17 @@ enum ChatSceneDetector {
     static func probeEvidence(observations: [LiveOCRObservation], rectangles: [CGRect],
                               config: ChatSceneGateConfiguration = .default) -> ChatSceneEvidence {
         var result = evidence(observations: observations, candidates: [], config: config)
-        let bottom = 1 - config.bottomInsetRatio
+        let inputText = observations.filter {
+            $0.box.minY >= config.minimumInputTopRatio
+                && ($0.text.contains("输入") || $0.text.contains("按住") || $0.text == "发送")
+        }.map(\.box)
+        let inputBoxes = rectangles.filter {
+            $0.minY >= config.minimumInputTopRatio && $0.width > 0.35
+                && $0.width < 0.9 && $0.height < config.maximumInputHeight
+                && $0.minX > 0.04 && $0.maxX < 0.96
+        }
+        result.inputTopRatio = (inputText + inputBoxes).map(\.minY).min()
+        let bottom = result.inputTopRatio ?? (1 - config.bottomInsetRatio)
         let body = observations.map(\.box) + rectangles
         let anchored = body.filter {
             $0.minY > config.topInsetRatio && $0.maxY < bottom
@@ -96,11 +109,7 @@ enum ChatSceneDetector {
         }
         result.messageBlockCount = rows.count
         result.anchoredBlockCount = rows.count
-        result.hasInputBarText = observations.contains {
-            $0.box.midY >= bottom && ($0.text.contains("输入") || $0.text.contains("按住") || $0.text == "发送")
-        } || rectangles.contains {
-            $0.midY >= bottom && $0.width > 0.35 && $0.width < 0.9 && $0.height < 0.09
-        }
+        result.hasInputBarText = result.inputTopRatio != nil
         let tabLabels = Set(observations.filter { $0.box.midY > 0.85 }.map { $0.text.trimmed })
         if tabLabels.intersection(["微信", "通讯录", "发现", "我"]).count >= 2 {
             result.hasInputBarText = false
@@ -161,6 +170,7 @@ struct ChatSceneGate {
     private var observedTitle: String?
     private var pendingTitle: String?
     private var titleChangeStreak = 0
+    private var needsNewSessionOnResume = false
     private(set) var allowsSubmission = false
 
     mutating func update(
@@ -170,6 +180,7 @@ struct ChatSceneGate {
     ) -> (verdict: ChatSceneVerdict, startsNewSession: Bool) {
         allowsSubmission = false
         if !isChatFrame {
+            if stableVerdict == .activeChat { needsNewSessionOnResume = true }
             activeStreak = 0
             inactiveStreak = min(inactiveStreak + 1, config.requiredInactiveFrames)
             titleChangeStreak = 0
@@ -190,11 +201,20 @@ struct ChatSceneGate {
             stableVerdict = .activeChat
             verdict = .activeChat
             observedTitle = titleFingerprint
+            needsNewSessionOnResume = false
             titleChangeStreak = 0
             allowsSubmission = true
             return (verdict, true)
         }
         verdict = .activeChat
+        if needsNewSessionOnResume {
+            guard activeStreak >= config.requiredActiveFrames else { return (verdict, false) }
+            needsNewSessionOnResume = false
+            observedTitle = titleFingerprint
+            titleChangeStreak = 0
+            allowsSubmission = true
+            return (verdict, true)
+        }
         if titleFingerprint != observedTitle {
             // Do not overwrite the confirmed title on the first differing frame.
             if pendingTitle == titleFingerprint { titleChangeStreak += 1 }

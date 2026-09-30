@@ -6,7 +6,9 @@
 
 主 App 用户授权整屏共享 → ScreenCaptureKit → 0.8 秒节流 → fast OCR / 标题区域 OCR / 矩形几何场景检测 → ChatSceneGate → 完整 Vision OCR → LiveChatScenePipeline → LiveChatSystem / Timeline → LiveChatAutoSyncCoordinator → SharedChatStore → App Group。
 
-门控保持 unknown、candidate、activeChat、inactive。连续 2 个聊天检测帧进入，连续 3 个非聊天帧退出。滞回保留 UI 稳定状态，但不把可疑画面提交到 Timeline。标题仅取顶部中间区域，排除侧边返回按钮与状态栏；不同标题连续确认期间隔离新帧。重新进入、确认换标题、无可靠 overlap 时开始新 chat generation，宁可截断也不拼接不同联系人。矩形几何支持没有可识别正文的图片、视频与语音布局；效果仍需真实微信测试，不宣称覆盖全部主题和机型。
+门控保持 unknown、candidate、activeChat、inactive。连续 2 个聊天检测帧进入，连续 3 个非聊天帧退出。滞回保留 UI 稳定状态，但不把可疑画面提交到 Timeline。标题仅取顶部中间区域，排除侧边返回按钮与状态栏；不同标题连续确认期间隔离新帧。聊天区域的底部边界按本帧检测到的输入栏或键盘位置动态收紧，键盘弹出后的键盘文字不进时间线。即使两个联系人的标题相同，只要离开过聊天界面，恢复提交前也要重新确认并开启新的 chat generation；确认换标题、无可靠 overlap 同样重开 generation，宁可截断也不拼接不同联系人。矩形几何支持没有可识别正文的图片、视频与语音布局；效果仍需真实微信测试，不宣称覆盖全部主题和机型。
+
+每一帧只允许一份等待主线程的投递，OCR 未完成时后续帧直接丢弃，不在主线程堆积帧任务。
 
 Auto Sync 默认关闭，每次 capture 重新授权。system 排除，unknown 阻止整次同步，debounce 1.5 秒、最低写间隔 2 秒，相同内容不推迟原期限、不重复写。SHA-256 使用 UTF-8 长度界定消息角色、正文和顺序，避免正文换行形成消息边界碰撞。同步串行、不并发保存、Stop 取消排队；同步文件写入与 Stop 失效使用短临界区。人工 Review 保存与自动保存使用同一 OCR 串行队列，人工成功后立刻暂停自动同步。
 
