@@ -44,6 +44,8 @@ struct GoutouPanelSnapshot {
     var sharedChatError: String? = nil
     /// 键盘正在使用的识别聊天临时上下文；nil = 只是看过预览，没在使用。
     var activeRecognizedChat: RecognizedChatContext? = nil
+    /// 识别聊天分析区的状态（idle / loading / success / failure），由控制器算好。
+    var recognizedChatAnalysis: RecognizedChatAnalysisState = .idle
 }
 
 enum GoutouPanelAction {
@@ -55,6 +57,9 @@ enum GoutouPanelAction {
     case useRecognizedChat
     /// 只取消使用，不删共享聊天、不动预览。
     case cancelRecognizedChatUse
+    /// 阶段 9：用户主动点「分析这段聊天」——这是唯一会发网络请求的动作。
+    case analyzeRecognizedChat
+    case cancelRecognizedChatAnalysis
     case clearConfig
     case addSegment(GoutouSpeaker)
     case deleteSegment(Int)
@@ -160,6 +165,7 @@ final class GoutouPanelView: UIView {
     private var sharedChat: SharedChatSnapshot?
     private var sharedChatError: String?
     private var activeRecognizedChat: RecognizedChatContext?
+    private var recognizedChatAnalysis: RecognizedChatAnalysisState = .idle
     private enum Screen { case main, settings, memory, profiles, sharedChat, contextText }
     private var screen: Screen = .main
 
@@ -339,6 +345,7 @@ final class GoutouPanelView: UIView {
         self.sharedChat = snapshot.sharedChat
         self.sharedChatError = snapshot.sharedChatError
         self.activeRecognizedChat = snapshot.activeRecognizedChat
+        self.recognizedChatAnalysis = snapshot.recognizedChatAnalysis
         self.state = snapshot.state
         self.segments = snapshot.segments
         self.memory = snapshot.memory
@@ -547,6 +554,7 @@ final class GoutouPanelView: UIView {
             bodyStack.addArrangedSubview(makeActionButton(title: "取消使用识别聊天", background: GoutouTheme.function, fontSize: 13) {
                 self.delegate?.goutouPanel(self, didTrigger: .cancelRecognizedChatUse)
             })
+            buildRecognizedChatAnalysis()
         } else {
             bodyStack.addArrangedSubview(makeNoticeLabel("已读取 \(chat.messages.count) 条聊天", color: GoutouTheme.secondary))
             bodyStack.addArrangedSubview(makeActionButton(title: "使用这份聊天", background: GoutouTheme.blue, fontSize: 14) {
@@ -556,6 +564,50 @@ final class GoutouPanelView: UIView {
         bodyStack.addArrangedSubview(makeNoticeLabel("仅供预览与准备上下文；再次点击读取可刷新。", color: GoutouTheme.secondary))
         for (index, message) in chat.messages.enumerated() {
             bodyStack.addArrangedSubview(makeNoticeLabel("\(index + 1). \(message.role.displayName)：\(message.text)", color: GoutouTheme.text))
+        }
+    }
+
+    /// 阶段 9：只有「正在使用」的识别聊天才出现分析区。
+    /// 这里只画一份分析——推荐回复（多条候选 + 插入）是后续阶段的事。
+    private func buildRecognizedChatAnalysis() {
+        bodyStack.addArrangedSubview(makeSectionHeader("聊天分析"))
+        switch recognizedChatAnalysis {
+        case .idle:
+            bodyStack.addArrangedSubview(makeNoticeLabel(
+                "还没分析。点下面的按钮，才会把这份聊天交给狗头军师分析。",
+                color: GoutouTheme.secondary
+            ))
+        case .loading:
+            bodyStack.addArrangedSubview(makeNoticeLabel(
+                "正在分析…（超时 \(Int(GoutouAIClient.timeout)) 秒）",
+                color: GoutouTheme.secondary
+            ))
+        case .success(let text):
+            bodyStack.addArrangedSubview(makeNoticeLabel(text, color: GoutouTheme.text))
+        case .failure(let error):
+            bodyStack.addArrangedSubview(makeNoticeLabel(error.message, color: GoutouTheme.warning))
+        }
+
+        if case .loading = recognizedChatAnalysis {
+            bodyStack.addArrangedSubview(makeActionButton(title: "取消分析", background: GoutouTheme.function, fontSize: 13) {
+                self.delegate?.goutouPanel(self, didTrigger: .cancelRecognizedChatAnalysis)
+            })
+        } else {
+            let hasResult: Bool
+            if case .success = recognizedChatAnalysis { hasResult = true } else { hasResult = false }
+            bodyStack.addArrangedSubview(makeActionButton(
+                title: hasResult ? "重新分析" : "分析这段聊天",
+                background: GoutouTheme.blue,
+                fontSize: 14
+            ) {
+                self.delegate?.goutouPanel(self, didTrigger: .analyzeRecognizedChat)
+            })
+            if case .failure = recognizedChatAnalysis {
+                bodyStack.addArrangedSubview(makeNoticeLabel(
+                    "本次只做聊天分析，没有推荐回复、也不会自动发送。",
+                    color: GoutouTheme.secondary
+                ))
+            }
         }
     }
 

@@ -72,6 +72,9 @@ final class KeyboardViewController: UIInputViewController {
     private var panelState: GoutouPanelState = .empty(banner: nil)
     /// 识别聊天：预览 → 使用 → 取消使用 的状态机（纯内存，不持久化，阶段 8 不接 AI）
     private var recognizedChat = RecognizedChatSession()
+    /// 阶段 9：识别聊天分析的状态机 + 在途请求（只有用户点「分析这段聊天」才会赋值）
+    private var recognizedChatAnalysis = RecognizedChatAnalysisSession()
+    private var recognizedChatTask: URLSessionTask?
     /// 上一次成功的结果（失败时也留着，结果区不会空掉）
     private var lastResult: GoutouResult?
     private var panelTask: URLSessionTask?
@@ -462,6 +465,10 @@ final class KeyboardViewController: UIInputViewController {
         isPanelVisible = false
         panelTask?.cancel()
         panelTask = nil
+        // 阶段 9：面板收起就作废在途的分析请求；已经拿到的分析留着，不塞进记忆也不落盘。
+        recognizedChatTask?.cancel()
+        recognizedChatTask = nil
+        recognizedChatAnalysis.cancelInFlight()
         mentorPanel?.isHidden = true
         nineKeyView?.isHidden = false
         refreshNineKeyView()
@@ -507,7 +514,8 @@ final class KeyboardViewController: UIInputViewController {
             memoryPendingDeleteID: memoryPendingDeleteID,
             sharedChat: recognizedChat.preview,
             sharedChatError: recognizedChat.errorMessage,
-            activeRecognizedChat: recognizedChat.active
+            activeRecognizedChat: recognizedChat.active,
+            recognizedChatAnalysis: recognizedChatAnalysis.state
         ))
     }
 
@@ -681,6 +689,72 @@ final class KeyboardViewController: UIInputViewController {
         parsed.save()
         config = parsed
         panelState = .empty(banner: "已导入：\(parsed.summary)")
+        refreshPanel()
+    }
+
+    // MARK: - 识别聊天分析（阶段 9）
+
+    /// 作废在途请求并清掉这份聊天已有的分析：读取新聊天、取消使用、取消分析都走这里。
+    private func dropRecognizedChatAnalysis() {
+        recognizedChatTask?.cancel()
+        recognizedChatTask = nil
+        recognizedChatAnalysis.invalidate()
+    }
+
+    /// 用户主动点「分析这段聊天」才会走到这里。
+    ///
+    /// 准入判断全在状态机里（完全访问 / 配置 / 人格 / 有没有 Active Context / 是不是正在跑），
+    /// 这里只负责把 Prompt 拼好交给现有 AI 网络层，再按代际号把结果写回去。
+    /// 不碰 `segments` / `lastResult` / 记忆链路，也不插输入框。
+    private func startRecognizedChatAnalysis() {
+        let start = recognizedChatAnalysis.begin(
+            hasFullAccess: hasFullAccess,
+            config: config,
+            skillAvailable: !skillText.isEmpty,
+            context: recognizedChat.active
+        )
+        guard case .started(let generation) = start else {
+            // .alreadyRunning 不会改状态；其它情况状态机已经写好了失败原因。
+            refreshPanel()
+            return
+        }
+
+        guard let activeContext = recognizedChat.active,
+              let userMessage = RecognizedChatPrompt.userMessage(messages: activeContext.messages) else {
+            recognizedChatAnalysis.complete(generation: generation, result: .failure(.noActiveContext))
+            refreshPanel()
+            return
+        }
+        guard let config = config else {
+            recognizedChatAnalysis.complete(generation: generation, result: .failure(.notConfigured))
+            refreshPanel()
+            return
+        }
+
+        #if DEBUG
+        // 只记条数：不打印 Prompt、消息正文、API Key。
+        print("[RecognizedChatAnalysis] request: \(activeContext.messages.count) messages")
+        #endif
+
+        recognizedChatTask = GoutouAIClient.analyzeChat(
+            config: config,
+            systemPrompt: RecognizedChatPrompt.systemPrompt(skill: skillText),
+            userMessage: userMessage
+        ) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                // 代际号对不上（用户已经读了别的聊天 / 取消使用 / 收起面板）就一个字都不写。
+                guard self.recognizedChatAnalysis.generation == generation else { return }
+                self.recognizedChatTask = nil
+                switch result {
+                case .success(let text):
+                    self.recognizedChatAnalysis.complete(generation: generation, result: .success(text))
+                case .failure(let error):
+                    self.recognizedChatAnalysis.complete(generation: generation, result: .failure(.ai(error)))
+                }
+                self.refreshPanel()
+            }
+        }
         refreshPanel()
     }
 
@@ -961,6 +1035,7 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
 
         case .readRecognizedChat:
             // 重新读取＝先作废旧预览和旧的活动上下文，再读文件（读失败也不会留下旧聊天当上下文）。
+            dropRecognizedChatAnalysis()
             if hasFullAccess {
                 recognizedChat.read { try SharedChatStore().read() }
             } else {
@@ -975,8 +1050,17 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
             refreshPanel()
 
         case .cancelRecognizedChatUse:
-            // 只取消使用：预览仍在，共享聊天文件不动。
+            // 只取消使用：预览仍在，共享聊天文件不动；这份聊天已有的分析也一起作废。
             recognizedChat.cancelUse()
+            dropRecognizedChatAnalysis()
+            refreshPanel()
+
+        case .analyzeRecognizedChat:
+            // 阶段 9 唯一会发网络请求的分支。
+            startRecognizedChatAnalysis()
+
+        case .cancelRecognizedChatAnalysis:
+            dropRecognizedChatAnalysis()
             refreshPanel()
 
         case .importConfig:

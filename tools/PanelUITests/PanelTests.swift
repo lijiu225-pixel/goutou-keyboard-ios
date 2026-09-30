@@ -160,6 +160,74 @@ final class PanelTests: XCTestCase {
         assertBounded(panel)
     }
 
+    /// 阶段 9：只有点「分析这段聊天」才会发出分析动作——读取和使用都不发；
+    /// 分析区只画一份分析，不出现推荐回复，也不出现插入按钮。
+    @MainActor
+    func testRecognizedChatAnalysisNeedsExplicitTap() throws {
+        let messages = (0..<4).map { GoutouChatClipboardMessage(role: $0 % 2 == 0 ? .me : .other, text: "合成消息\($0)") }
+        let savedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        var snapshot = GoutouPanelSnapshot(state: .empty(banner: nil), segments: [], memory: [], profiles: [],
+            activeProfileID: UUID(), lastResult: nil, configSummary: "", memoryNote: nil)
+        snapshot.sharedChat = SharedChatSnapshot(messages: messages, updatedAt: savedAt)
+        snapshot.activeRecognizedChat = RecognizedChatContext(messages: messages, updatedAt: savedAt)
+
+        let panel = GoutouPanelView(frame: CGRect(x: 0, y: 0, width: 390, height: 302))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.addSubview(panel)
+        defer { window.isHidden = true }
+        let recorder = PanelActionRecorder()
+        panel.delegate = recorder
+
+        panel.render(snapshot)
+        panel.showSharedChatPreview()
+        panel.layoutIfNeeded()
+
+        // idle：有入口，但还没有任何分析内容
+        XCTAssertTrue(labels(in: panel).contains("聊天分析"))
+        XCTAssertTrue(titles(in: panel).contains { $0.hasPrefix("分析这段聊天") })
+
+        // 「读取识别聊天」只发读取动作，不发分析
+        try tap("读取识别聊天", in: panel)
+        XCTAssertEqual(recorder.actions.count, 1)
+        XCTAssertTrue(recorder.actions.contains { if case .readRecognizedChat = $0 { return true }; return false })
+        XCTAssertFalse(recorder.actions.contains { if case .analyzeRecognizedChat = $0 { return true }; return false })
+        XCTAssertFalse(recorder.actions.contains { if case .analyze = $0 { return true }; return false })
+
+        // 「分析这段聊天」只发一个分析动作
+        try tap("分析这段聊天", in: panel)
+        XCTAssertEqual(recorder.actions.count, 2)
+        XCTAssertTrue(recorder.actions.contains { if case .analyzeRecognizedChat = $0 { return true }; return false })
+
+        // loading：写清正在分析，按钮换成取消分析，不能再点第二次
+        snapshot.recognizedChatAnalysis = .loading
+        panel.render(snapshot)
+        panel.layoutIfNeeded()
+        XCTAssertTrue(labels(in: panel).contains { $0.hasPrefix("正在分析") })
+        XCTAssertTrue(titles(in: panel).contains { $0.hasPrefix("取消分析") })
+        XCTAssertFalse(titles(in: panel).contains { $0.hasPrefix("分析这段聊天") })
+        assertBounded(panel)
+
+        // success：只展示这一份分析
+        snapshot.recognizedChatAnalysis = .success("对方在确认今晚的安排。")
+        panel.render(snapshot)
+        panel.layoutIfNeeded()
+        XCTAssertTrue(labels(in: panel).contains("对方在确认今晚的安排。"))
+        XCTAssertTrue(titles(in: panel).contains { $0.hasPrefix("重新分析") })
+        XCTAssertFalse(titles(in: panel).contains { $0.contains("插入") })
+        XCTAssertFalse(labels(in: panel).contains { $0.contains("推荐回复") })
+        assertBounded(panel)
+
+        // failure：给一个人能看懂的原因
+        snapshot.recognizedChatAnalysis = .failure(.ai(.timeout))
+        panel.render(snapshot)
+        panel.layoutIfNeeded()
+        XCTAssertTrue(labels(in: panel).contains { $0.contains("超时") })
+        assertBounded(panel)
+    }
+
     @MainActor
     private func labels(in panel: GoutouPanelView) -> [String] {
         descendants(panel).compactMap { ($0 as? UILabel)?.text }

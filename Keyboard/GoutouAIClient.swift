@@ -475,6 +475,62 @@ enum GoutouAIClient {
         return result
     }
 
+    // MARK: - 阶段 9：只取一份聊天分析
+
+    /// 阶段 9 认的字段：先看 `analysis`，其余是兼容旧返回格式的容错。
+    /// 正式发给模型的契约只要求 `analysis` 一个字段（见 `RecognizedChatPrompt`）。
+    static let analysisKeys = ["analysis", "分析", "聊天分析", "分析结果", "relationship", "关系", "总结", "summary", "meaning"]
+    /// 键盘面板里一份分析的展示上限（和单条消息一样是 2000 字），超了截断加省略号。
+    static let maxAnalysisLength = 2000
+
+    /// 从响应里取「完整聊天分析正文」。
+    ///
+    /// 和 `parseResponse` 共用同一套宽容工具（代码围栏、字段切片、思考片段剥离）：
+    /// 认得出 JSON 就取 `analysis`，认不出就把正文本身当分析——但绝不要求 replies。
+    static func parseAnalysisResponse(data: Data) throws -> String {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            throw GoutouAIError.badJSON(snippet(String(data: data, encoding: .utf8) ?? ""))
+        }
+        if let error = root["error"] as? [String: Any] {
+            let detail = (error["message"] as? String) ?? (error["code"] as? String) ?? ""
+            throw GoutouAIError.http(0, detail)
+        }
+        guard let choices = root["choices"] as? [[String: Any]],
+              let first = choices.first,
+              let message = first["message"] as? [String: Any] else { throw GoutouAIError.empty }
+        let truncated = (first["finish_reason"] as? String) == "length"
+
+        let text = stripThinking(extractText(from: message)).trimmed
+        let reasoning = stripThinking(
+            (message["reasoning_content"] as? String) ?? (message["reasoning"] as? String) ?? ""
+        ).trimmed
+
+        if let analysis = analysisText(in: text) { return analysis }
+        if !reasoning.isEmpty, let analysis = analysisText(in: reasoning) { return analysis }
+        if !reasoning.isEmpty { throw GoutouAIError.reasoningOnly(truncated) }
+        if truncated { throw GoutouAIError.truncated }
+        throw GoutouAIError.empty
+    }
+
+    /// 一段正文里有没有可用的分析；没有就返回 nil，交给调用方决定报什么错。
+    static func analysisText(in text: String) -> String? {
+        let trimmed = text.trimmed
+        guard !trimmed.isEmpty else { return nil }
+        if let payload = decodePayload(trimmed) ?? lenientFields(in: trimmed) {
+            let unwrapped = unwrapPayload(payload)
+            if let value = firstString(in: unwrapped, keys: analysisKeys), !value.trimmed.isEmpty {
+                return capped(value.trimmed)
+            }
+        }
+        // 模型没给 JSON、直接写了一段分析：照样认，总比让用户看「格式不对」强。
+        let stripped = stripCodeFence(trimmed).trimmed
+        return stripped.isEmpty ? nil : capped(stripped)
+    }
+
+    private static func capped(_ text: String) -> String {
+        text.count <= maxAnalysisLength ? text : String(text.prefix(maxAnalysisLength)) + "…"
+    }
+
     // MARK: - 发送（60 秒超时，可取消）
 
     @discardableResult
@@ -483,6 +539,41 @@ enum GoutouAIClient {
         systemPrompt: String,
         userMessage: String,
         completion: @escaping (Result<GoutouResult, GoutouAIError>) -> Void
+    ) -> URLSessionTask? {
+        return send(
+            config: config,
+            systemPrompt: systemPrompt,
+            userMessage: userMessage,
+            parse: { try parseResponse(data: $0) },
+            completion: completion
+        )
+    }
+
+    /// 阶段 9：识别聊天分析。复用与 `analyze` 完全相同的请求组装、超时、取消与 HTTP 错误处理，
+    /// 只是把返回解析成一份分析正文。
+    @discardableResult
+    static func analyzeChat(
+        config: GoutouConfig,
+        systemPrompt: String,
+        userMessage: String,
+        completion: @escaping (Result<String, GoutouAIError>) -> Void
+    ) -> URLSessionTask? {
+        return send(
+            config: config,
+            systemPrompt: systemPrompt,
+            userMessage: userMessage,
+            parse: { try parseAnalysisResponse(data: $0) },
+            completion: completion
+        )
+    }
+
+    /// 两个入口共用的网络骨架（原来内联在 `analyze` 里，行为不变）。
+    private static func send<T>(
+        config: GoutouConfig,
+        systemPrompt: String,
+        userMessage: String,
+        parse: @escaping (Data) throws -> T,
+        completion: @escaping (Result<T, GoutouAIError>) -> Void
     ) -> URLSessionTask? {
         let request: URLRequest
         do {
@@ -527,7 +618,7 @@ enum GoutouAIClient {
                 return
             }
             do {
-                completion(.success(try parseResponse(data: body)))
+                completion(.success(try parse(data: body)))
             } catch let error as GoutouAIError {
                 completion(.failure(error))
             } catch {
