@@ -92,6 +92,7 @@ jobs:
       - name: Vision OCR synthetic regression (macOS)
         run: |
           swiftc -swift-version 5 \
+            Shared/GoutouChatClipboard.swift \
             Shared/GoutouChatBubbleScanner.swift \
             App/ChatLayoutParser.swift \
             Shared/GoutouChatOCRGeometry.swift \
