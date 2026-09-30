@@ -355,6 +355,9 @@ for file in scannedFiles {
     for token in forbiddenTokens {
         // 捕获管理器自己就是 ScreenCaptureKit 的入口，这一条对它豁免
         if token == "ScreenCaptureKit" && file.hasSuffix("LiveScreenCaptureManager.swift") { continue }
+        // 阶段 12C 起，用户点「保存给狗头军师」的手动交接也在管理器里（LiveChatReviewSaver）；
+        // 「识别过程绝不自动写共享聊天」由 LiveChatReviewCheck 的行为测试把关。
+        if token == "SharedChatStore" && file.hasSuffix("LiveScreenCaptureManager.swift") { continue }
         expect(!text.contains(token), "\(file) 不该出现 \(token)")
     }
 }
