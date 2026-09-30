@@ -1,6 +1,7 @@
 import Foundation
 
-/// 阶段 9 的契约：Active Context →「分析这段聊天」→ 现有 AI 网络层 → 一份聊天分析。
+/// 阶段 9 / 10 的契约：Active Context →「分析这段聊天」→ 现有 AI 网络层 →
+/// 聊天分析 + 对方状态 + 恰好三条推荐回复。
 ///
 /// 纯 Foundation，**不联网**：请求只用 `buildURLRequest` 组装出来检查内容，不真的发出去；
 /// 测试里的聊天全是虚构的（今晚吃什么这类），不涉及任何真实对话。
@@ -92,16 +93,29 @@ expect(session.isAnalyzing, "被挡下不能把 loading 冲掉")
 // MARK: - 成功 / 失败 / 空响应
 
 // 10. 成功
-session.complete(generation: generationA, result: .success("对方在确认今晚的安排。"))
-expect(session.state == .success("对方在确认今晚的安排。"), "成功进入 success")
+let goodResult = RecognizedChatResult(
+    analysis: "对方在确认今晚的安排。",
+    tone: "轻松、在推进",
+    replies: ["好啊，七点老地方", "你先定地方，我都行", "行，那我请客"]
+)
+session.complete(generation: generationA, result: .success(goodResult))
+expect(session.state == .success(goodResult), "成功进入 success 并带着结构化结果")
 
-// 12. 空响应不能算成功
+// 12. 空正文 / 条数不对的结果不许进 success
 session.invalidate()
 guard case .started(let generationEmpty) = note(session.begin(hasFullAccess: true, config: config, skillAvailable: true, context: context)) else {
     fatalError("RecognizedChatAnalysisCheck: 空响应用例没能发起")
 }
-session.complete(generation: generationEmpty, result: .success("  \n "))
-expect(session.state == .failure(.ai(.empty)), "空响应不得显示成功")
+session.complete(generation: generationEmpty, result: .success(RecognizedChatResult(analysis: "  \n ", tone: "平静",
+                                                                                     replies: ["一", "二", "三"])))
+expect(session.state == .failure(.incompleteResult), "空正文不得显示成功")
+session.invalidate()
+guard case .started(let generationShort) = note(session.begin(hasFullAccess: true, config: config, skillAvailable: true, context: context)) else {
+    fatalError("RecognizedChatAnalysisCheck: 条数不足用例没能发起")
+}
+session.complete(generation: generationShort, result: .success(RecognizedChatResult(analysis: "分析", tone: "平静",
+                                                                                     replies: ["一", "二", "二"])))
+expect(session.state == .failure(.notEnoughReplies(validCount: 2)), "不到 3 条不得显示成功")
 
 // 11. 失败
 session.invalidate()
@@ -127,20 +141,20 @@ session.invalidate()
 guard case .started(let generationOld) = note(session.begin(hasFullAccess: true, config: config, skillAvailable: true, context: context)) else {
     fatalError("RecognizedChatAnalysisCheck: 清除旧结果用例没能发起")
 }
-session.complete(generation: generationOld, result: .success("A 的分析"))
-expect(session.state == .success("A 的分析"), "先有一份 A 的分析")
+session.complete(generation: generationOld, result: .success(goodResult))
+expect(session.state == .success(goodResult), "先有一份聊天 A 的完整结果")
 session.invalidate()
-expect(session.state == .idle, "读取聊天 B 时结果 A 被清除")
+expect(session.state == .idle, "读取聊天 B 时 analysis / tone / replies 全部清除")
 
 // 15. 取消使用：结果 A 也被清除
 session.invalidate()
 guard case .started(let generationCancelUse) = note(session.begin(hasFullAccess: true, config: config, skillAvailable: true, context: context)) else {
     fatalError("RecognizedChatAnalysisCheck: 取消使用用例没能发起")
 }
-session.complete(generation: generationCancelUse, result: .success("A 的分析"))
-expect(session.state == .success("A 的分析"), "再有一份 A 的分析")
+session.complete(generation: generationCancelUse, result: .success(goodResult))
+expect(session.state == .success(goodResult), "再有一份聊天 A 的完整结果")
 session.invalidate()
-expect(session.state == .idle, "取消使用识别聊天会清掉分析结果")
+expect(session.state == .idle, "取消使用识别聊天会清掉结构化结果")
 
 // 16. A 还在路上，用户读了 B：A 返回后不得写回
 session.invalidate()
@@ -148,8 +162,8 @@ guard case .started(let staleA) = note(session.begin(hasFullAccess: true, config
     fatalError("RecognizedChatAnalysisCheck: 竞态（读取 B）用例没能发起")
 }
 session.invalidate()
-session.complete(generation: staleA, result: .success("A 的分析"))
-expect(session.state == .idle, "A 的迟到响应不能写进新上下文")
+session.complete(generation: staleA, result: .success(goodResult))
+expect(session.state == .idle, "A 的迟到响应（analysis / tone / replies）不能写进新上下文")
 
 // 17. A 还在路上，用户取消使用（或收起面板）：返回后同样不得写回
 session.invalidate()
@@ -158,21 +172,25 @@ guard case .started(let staleB) = note(session.begin(hasFullAccess: true, config
 }
 session.cancelInFlight()
 expect(session.state == .idle, "收起面板时在途分析作废")
-session.complete(generation: staleB, result: .success("A 的分析"))
+session.complete(generation: staleB, result: .success(goodResult))
 expect(session.state == .idle, "迟到响应在作废之后一个字都不写")
 
 // 代际号确实随时在涨
 expect(session.generation > 0, "状态机持有一个代际号")
 
-// MARK: - Prompt：阶段 9 只要求一份 analysis
+// MARK: - Prompt：阶段 10 要 analysis + tone + 恰好 3 条
 
 guard let userMessage = RecognizedChatPrompt.userMessage(messages: messages) else {
     fatalError("RecognizedChatAnalysisCheck: 正常聊天应当能拼出 user message")
 }
-let phase9System = RecognizedChatPrompt.systemPrompt(skill: skillFixture)
+let phase10System = RecognizedChatPrompt.systemPrompt(skill: skillFixture)
 
-expect(phase9System.hasPrefix(skillFixture), "阶段 9 仍然加载原来的 skill 原文")
-expect(phase9System.contains("{\"analysis\""), "阶段 9 只要求 analysis 一个字段")
+expect(phase10System.hasPrefix(skillFixture), "阶段 10 仍然加载原来的 skill 原文")
+expect(phase10System.contains("\"analysis\""), "阶段 10 要求 analysis")
+expect(phase10System.contains("\"tone\""), "阶段 10 要求 tone")
+expect(phase10System.contains("\"replies\""), "阶段 10 要求 replies")
+expect(phase10System.contains("恰好 3 条"), "阶段 10 只要恰好 3 条")
+expect(userMessage.contains("恰好 3 条"), "user message 也只要 3 条")
 
 // 6~9. 条数 / 正文 / role / 顺序
 let renderedLines = userMessage.components(separatedBy: "\n")
@@ -192,10 +210,10 @@ expect(orderKept, "请求保持原顺序、原正文、原归属")
 expect(userMessage.contains("我：都可以"), "「我」保持是 me")
 expect(userMessage.contains("对方：今晚吃什么"), "「对方」保持是 other")
 
-// 10. 阶段 9 的 Prompt 不得再要求推荐回复
-for forbidden in ["replies", "6～8", "6~8", "推荐回复", "回复话术"] {
-    expect(!phase9System.contains(forbidden), "阶段 9 system prompt 不得要求 \(forbidden)")
-    expect(!userMessage.contains(forbidden), "阶段 9 user message 不得要求 \(forbidden)")
+// 3. 阶段 10 的 Prompt 不得再要求 6～8 条回复
+for forbidden in ["6～8", "6~8"] {
+    expect(!phase10System.contains(forbidden), "阶段 10 system prompt 不得要求 \(forbidden)")
+    expect(!userMessage.contains(forbidden), "阶段 10 user message 不得要求 \(forbidden)")
 }
 
 // 原来的狗头军师 Prompt（手动上下文 / 推荐回复 / 记忆链路）没被动过
@@ -224,7 +242,7 @@ expect(RecognizedChatPrompt.userMessage(messages: [GoutouChatClipboardMessage(
 
 // MARK: - 真正会发出去的那个请求（只组装，不发送）
 
-let request = try GoutouAIClient.buildURLRequest(config: config, systemPrompt: phase9System, userMessage: userMessage)
+let request = try GoutouAIClient.buildURLRequest(config: config, systemPrompt: phase10System, userMessage: userMessage)
 expect(request.httpMethod == "POST", "请求是 POST")
 expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer test-key", "Key 只在请求头里")
 expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json", "Content-Type 照旧")
@@ -236,13 +254,15 @@ guard let root = (try? JSONSerialization.jsonObject(with: body)) as? [String: An
 }
 expect(sent.count == 2, "system + user 两条消息")
 expect(sent[0]["role"] as? String == "system", "第一条是 system")
-expect(sent[0]["content"] as? String == phase9System, "system 就是阶段 9 的 Prompt")
+expect(sent[0]["content"] as? String == phase10System, "system 就是阶段 10 的 Prompt")
 expect(sent[1]["role"] as? String == "user", "第二条是 user")
 expect(sent[1]["content"] as? String == userMessage, "user 就是 Builder 的输出")
 expect(root["model"] as? String == "test-model", "模型沿用配置")
 expect(root["stream"] as? Bool == false, "非流式请求照旧")
 expect(!bodyText.contains("test-key"), "Key 不得进请求体")
-expect(!bodyText.contains("replies"), "请求体里不得要求 replies")
+expect(!bodyText.contains("6～8"), "请求体里不得要求 6～8 条")
+// JSON 里引号会被转义，这里只查关键字出现，不查引号形态。
+expect(bodyText.contains("replies"), "请求体里只要求 3 条 replies")
 
 func response(_ content: String, finish: String = "stop", reasoning: String? = nil) -> Data {
     var message: [String: Any] = ["role": "assistant", "content": content]
@@ -251,28 +271,89 @@ func response(_ content: String, finish: String = "stop", reasoning: String? = n
     return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
 }
 
-// MARK: - 返回解析：只要一份分析
+// MARK: - 返回解析：宽容进、严格出（恰好三条）
 
-let analysisField = try GoutouAIClient.parseAnalysisResponse(data: response("{\"analysis\":\"对方在确认今晚的安排。\"}"))
-expect(analysisField == "对方在确认今晚的安排。", "analysis 字段")
-let fenced = try GoutouAIClient.parseAnalysisResponse(data: response("```json\n{\"analysis\":\"带围栏的分析\"}\n```"))
-expect(fenced == "带围栏的分析", "代码围栏容错")
-let legacyBody = "{\"relationship\":\"关系分析正文。\",\"replies\":[\"话术一\",\"话术二\"]}"
-let legacyAnalysis = try GoutouAIClient.parseAnalysisResponse(data: response(legacyBody))
-expect(legacyAnalysis == "关系分析正文。", "兼容旧返回格式时只取分析")
-expect(!legacyAnalysis.contains("话术"), "旧格式里的 replies 一律不展示")
-let prose = try GoutouAIClient.parseAnalysisResponse(data: response("对方像是在确认时间。"))
-expect(prose == "对方像是在确认时间。", "模型直接给一段文字也认")
-let fromReasoning = try GoutouAIClient.parseAnalysisResponse(data: response("", reasoning: "推理里写的结论"))
-expect(fromReasoning == "推理里写的结论", "只回思考时退一步用思考里的结论")
-let longAnalysis = String(repeating: "长", count: GoutouAIClient.maxAnalysisLength + 500)
-let capped = try GoutouAIClient.parseAnalysisResponse(data: response("{\"analysis\":\"\(longAnalysis)\"}"))
-expect(capped.count == GoutouAIClient.maxAnalysisLength + 1 && capped.hasSuffix("…"), "过长的分析截断加省略号")
-expectThrows(.empty, "空内容") { _ = try GoutouAIClient.parseAnalysisResponse(data: response("")) }
-expectThrows(.truncated, "只被截断、没有任何正文") {
-    _ = try GoutouAIClient.parseAnalysisResponse(data: response("", finish: "length"))
+func chatJSON(analysis: String = "对方在确认今晚的安排。", tone: String = "轻松、在推进",
+              replies: [String] = ["好啊，七点老地方", "你先定地方，我都行", "行，那我请客"]) -> String {
+    let object: [String: Any] = ["analysis": analysis, "tone": tone, "replies": replies]
+    return String(data: (try? JSONSerialization.data(withJSONObject: object)) ?? Data(), encoding: .utf8) ?? ""
 }
-expectThrows(.badJSON("不是 JSON"), "响应体不是 JSON") { _ = try GoutouAIClient.parseAnalysisResponse(data: Data("不是 JSON".utf8)) }
+
+/// 和控制器里那三行同一条流水线：响应体 → 拆字段 → 阶段 10 归一化。
+func analyze(_ content: String, finish: String = "stop", reasoning: String? = nil)
+    -> Result<RecognizedChatResult, RecognizedChatAnalysisError> {
+    do {
+        let fields = try GoutouAIClient.parseRecognizedChatFields(data: response(content, finish: finish, reasoning: reasoning))
+        return RecognizedChatResult.normalized(fields)
+    } catch let error as GoutouAIError {
+        return .failure(.ai(error))
+    } catch {
+        return .failure(.incompleteResult)
+    }
+}
+
+// 5~8. 正常返回：analysis / tone / 三条 / 顺序
+guard case .success(let parsed) = analyze(chatJSON()) else {
+    fatalError("RecognizedChatAnalysisCheck: 正常 JSON 应当解析成功")
+}
+expect(parsed.analysis == "对方在确认今晚的安排。", "analysis 正确")
+expect(parsed.tone == "轻松、在推进", "tone 正确")
+expect(parsed.replies == ["好啊，七点老地方", "你先定地方，我都行", "行，那我请客"], "三条回复正确且顺序不变")
+expect(parsed.replies.count == RecognizedChatResult.requiredReplies, "结果恰好三条")
+
+// 9. 超过 3 条只保留前三条有效回复
+guard case .success(let many) = analyze(chatJSON(replies: ["一", "二", "三", "四", "五"])) else {
+    fatalError("RecognizedChatAnalysisCheck: 多于三条应当仍能成功")
+}
+expect(many.replies == ["一", "二", "三"], "超过 3 条只保留前三条")
+
+// 10. 少于 3 条不能成功
+expect(analyze(chatJSON(replies: ["一", "二"])) == .failure(.notEnoughReplies(validCount: 2)), "少于 3 条不能进入 success")
+
+// 11~12. 空、纯空格、纯标点都不算有效回复
+expect(analyze(chatJSON(replies: ["一", "", "三"])) == .failure(.notEnoughReplies(validCount: 2)), "空回复不算数")
+expect(analyze(chatJSON(replies: ["一", "   ", "三"])) == .failure(.notEnoughReplies(validCount: 2)), "纯空格回复不算数")
+expect(analyze(chatJSON(replies: ["一", "！！！", "三"])) == .failure(.notEnoughReplies(validCount: 2)), "纯标点回复不算数")
+
+// 13. 完全重复的回复不算三条
+expect(analyze(chatJSON(replies: ["一样", "一样", "一样"])) == .failure(.notEnoughReplies(validCount: 1)), "三条完全相同视为无效")
+guard case .success(let deduped) = analyze(chatJSON(replies: ["一", "二", "二", "三"])) else {
+    fatalError("RecognizedChatAnalysisCheck: 去掉重复后仍有三条应当成功")
+}
+expect(deduped.replies == ["一", "二", "三"], "完全重复的只留第一条")
+
+// 14. 单条超长按设计截断
+let longReply = String(repeating: "长", count: RecognizedChatResult.maxReplyLength + 50)
+guard case .success(let truncated) = analyze(chatJSON(replies: [longReply, "二", "三"])) else {
+    fatalError("RecognizedChatAnalysisCheck: 超长回复截断后应当成功")
+}
+expect(truncated.replies[0].count == RecognizedChatResult.maxReplyLength + 1, "超长回复截到上限")
+expect(truncated.replies[0].hasSuffix(RecognizedChatResult.ellipsis), "截断带省略号")
+
+// 15~16. 代码围栏 / thinking 片段 / 只回思考
+guard case .success = analyze("```json\n" + chatJSON() + "\n```") else {
+    fatalError("RecognizedChatAnalysisCheck: 代码围栏应当能解析")
+}
+guard case .success = analyze("<thinking>先想一想</thinking>" + chatJSON()) else {
+    fatalError("RecognizedChatAnalysisCheck: thinking 片段应当先被去掉")
+}
+guard case .success(let fromReasoning) = analyze("", reasoning: chatJSON()) else {
+    fatalError("RecognizedChatAnalysisCheck: 只回思考时应当退一步用思考")
+}
+expect(fromReasoning.tone == "轻松、在推进", "思考里的结构化结果也能用")
+
+// 17. 纯文本 / 缺字段：不许伪装成阶段 10 成功
+expect(analyze("对方像是在确认时间。") == .failure(.incompleteResult), "纯文本不能伪装成完整结果")
+expect(analyze("{\"analysis\":\"只有分析\"}") == .failure(.incompleteResult), "缺 tone 与三条回复不算完整")
+expect(analyze("{\"analysis\":\"分析\",\"tone\":\"\",\"replies\":[\"一\",\"二\",\"三\"]}") == .failure(.incompleteResult),
+       "tone 为空不算完整")
+
+// 传输层错误沿用阶段 9 口径
+expect(analyze("") == .failure(.ai(.empty)), "空内容")
+expect(analyze("", finish: "length") == .failure(.ai(.truncated)), "只被截断、没有任何正文")
+expectThrows(.badJSON("不是 JSON"), "响应体不是 JSON") {
+    _ = try GoutouAIClient.parseRecognizedChatFields(data: Data("不是 JSON".utf8))
+}
 
 // MARK: - 20. 不落盘、不写记忆
 

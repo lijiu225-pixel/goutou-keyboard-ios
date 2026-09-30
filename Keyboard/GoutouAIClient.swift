@@ -475,19 +475,28 @@ enum GoutouAIClient {
         return result
     }
 
-    // MARK: - 阶段 9：只取一份聊天分析
+    // MARK: - 识别聊天：宽容拆字段（严格归一化在 RecognizedChatResult 里）
 
-    /// 阶段 9 认的字段：先看 `analysis`，其余是兼容旧返回格式的容错。
-    /// 正式发给模型的契约只要求 `analysis` 一个字段（见 `RecognizedChatPrompt`）。
+    /// 聊天分析的字段名；其余是兼容旧返回格式的容错。
     static let analysisKeys = ["analysis", "分析", "聊天分析", "分析结果", "relationship", "关系", "总结", "summary", "meaning"]
+    /// 阶段 10：对方语气 / 态度 / 意图的字段名。
+    static let toneKeys = ["tone", "attitude", "intent", "语气", "态度", "意图", "对方状态", "状态", "mood"]
     /// 键盘面板里一份分析的展示上限（和单条消息一样是 2000 字），超了截断加省略号。
     static let maxAnalysisLength = 2000
 
-    /// 从响应里取「完整聊天分析正文」。
+    /// 模型返回里「已经认出来、但还没校验」的字段。
+    /// 归一化（恰好 3 条回复、非空、去重、长度上限）在 `RecognizedChatResult` 里做。
+    struct RecognizedChatFields: Equatable {
+        var analysis: String?
+        var tone: String?
+        var replies: [String]
+    }
+
+    /// 从响应里宽容地拆字段。
     ///
-    /// 和 `parseResponse` 共用同一套宽容工具（代码围栏、字段切片、思考片段剥离）：
-    /// 认得出 JSON 就取 `analysis`，认不出就把正文本身当分析——但绝不要求 replies。
-    static func parseAnalysisResponse(data: Data) throws -> String {
+    /// 和 `parseResponse` 共用同一套宽容工具（代码围栏、字段切片、思考片段剥离）；
+    /// 认得出 JSON 就按字段名取，认不出就把正文整段当分析——严格校验交给模型层。
+    static func parseRecognizedChatFields(data: Data) throws -> RecognizedChatFields {
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             throw GoutouAIError.badJSON(snippet(String(data: data, encoding: .utf8) ?? ""))
         }
@@ -505,30 +514,28 @@ enum GoutouAIClient {
             (message["reasoning_content"] as? String) ?? (message["reasoning"] as? String) ?? ""
         ).trimmed
 
-        if let analysis = analysisText(in: text) { return analysis }
-        if !reasoning.isEmpty, let analysis = analysisText(in: reasoning) { return analysis }
+        if let fields = recognizedChatFields(in: text) { return fields }
+        if !reasoning.isEmpty, let fields = recognizedChatFields(in: reasoning) { return fields }
         if !reasoning.isEmpty { throw GoutouAIError.reasoningOnly(truncated) }
         if truncated { throw GoutouAIError.truncated }
         throw GoutouAIError.empty
     }
 
-    /// 一段正文里有没有可用的分析；没有就返回 nil，交给调用方决定报什么错。
-    static func analysisText(in text: String) -> String? {
+    /// 一段正文里能不能拆出字段；空正文返回 nil。不是 JSON 时把整段当分析。
+    static func recognizedChatFields(in text: String) -> RecognizedChatFields? {
         let trimmed = text.trimmed
         guard !trimmed.isEmpty else { return nil }
-        if let payload = decodePayload(trimmed) ?? lenientFields(in: trimmed) {
-            let unwrapped = unwrapPayload(payload)
-            if let value = firstString(in: unwrapped, keys: analysisKeys), !value.trimmed.isEmpty {
-                return capped(value.trimmed)
-            }
+        guard let payload = decodePayload(trimmed) ?? lenientFields(in: trimmed) else {
+            let prose = stripCodeFence(trimmed).trimmed
+            // 模型没给 JSON、直接写了一段话：当分析收下，缺 tone / 三条回复由模型层拦。
+            return prose.isEmpty ? nil : RecognizedChatFields(analysis: prose, tone: nil, replies: [])
         }
-        // 模型没给 JSON、直接写了一段分析：照样认，总比让用户看「格式不对」强。
-        let stripped = stripCodeFence(trimmed).trimmed
-        return stripped.isEmpty ? nil : capped(stripped)
-    }
-
-    private static func capped(_ text: String) -> String {
-        text.count <= maxAnalysisLength ? text : String(text.prefix(maxAnalysisLength)) + "…"
+        let unwrapped = unwrapPayload(payload)
+        return RecognizedChatFields(
+            analysis: firstString(in: unwrapped, keys: analysisKeys),
+            tone: firstString(in: unwrapped, keys: toneKeys),
+            replies: normalizedReplies(from: unwrapped)
+        )
     }
 
     // MARK: - 发送（60 秒超时，可取消）
@@ -549,20 +556,20 @@ enum GoutouAIClient {
         )
     }
 
-    /// 阶段 9：识别聊天分析。复用与 `analyze` 完全相同的请求组装、超时、取消与 HTTP 错误处理，
-    /// 只是把返回解析成一份分析正文。
+    /// 阶段 9 / 10：识别聊天分析。复用与 `analyze` 完全相同的请求组装、超时、取消与 HTTP 错误处理，
+    /// 只是把返回解析成结构化字段（严格校验由 `RecognizedChatResult` 负责）。
     @discardableResult
     static func analyzeChat(
         config: GoutouConfig,
         systemPrompt: String,
         userMessage: String,
-        completion: @escaping (Result<String, GoutouAIError>) -> Void
+        completion: @escaping (Result<RecognizedChatFields, GoutouAIError>) -> Void
     ) -> URLSessionTask? {
         return send(
             config: config,
             systemPrompt: systemPrompt,
             userMessage: userMessage,
-            parse: { try parseAnalysisResponse(data: $0) },
+            parse: { try parseRecognizedChatFields(data: $0) },
             completion: completion
         )
     }

@@ -567,24 +567,26 @@ final class GoutouPanelView: UIView {
         }
     }
 
-    /// 阶段 9：只有「正在使用」的识别聊天才出现分析区。
-    /// 这里只画一份分析——推荐回复（多条候选 + 插入）是后续阶段的事。
+    /// 阶段 9 / 10：只有「正在使用」的识别聊天才出现分析区。
+    /// 成功时画「分析 / 对方状态 / 恰好 3 条候选」三段；候选在本阶段只展示，不可点。
     private func buildRecognizedChatAnalysis() {
-        bodyStack.addArrangedSubview(makeSectionHeader("聊天分析"))
         switch recognizedChatAnalysis {
+        case .success(let result):
+            buildRecognizedChatResult(result)
         case .idle:
+            bodyStack.addArrangedSubview(makeSectionHeader("【聊天分析】"))
             bodyStack.addArrangedSubview(makeNoticeLabel(
                 "还没分析。点下面的按钮，才会把这份聊天交给狗头军师分析。",
                 color: GoutouTheme.secondary
             ))
         case .loading:
+            bodyStack.addArrangedSubview(makeSectionHeader("【聊天分析】"))
             bodyStack.addArrangedSubview(makeNoticeLabel(
                 "正在分析…（超时 \(Int(GoutouAIClient.timeout)) 秒）",
                 color: GoutouTheme.secondary
             ))
-        case .success(let text):
-            bodyStack.addArrangedSubview(makeNoticeLabel(text, color: GoutouTheme.text))
         case .failure(let error):
+            bodyStack.addArrangedSubview(makeSectionHeader("【聊天分析】"))
             bodyStack.addArrangedSubview(makeNoticeLabel(error.message, color: GoutouTheme.warning))
         }
 
@@ -602,13 +604,40 @@ final class GoutouPanelView: UIView {
             ) {
                 self.delegate?.goutouPanel(self, didTrigger: .analyzeRecognizedChat)
             })
-            if case .failure = recognizedChatAnalysis {
-                bodyStack.addArrangedSubview(makeNoticeLabel(
-                    "本次只做聊天分析，没有推荐回复、也不会自动发送。",
-                    color: GoutouTheme.secondary
-                ))
-            }
         }
+    }
+
+    /// 阶段 10 的正式结果：聊天分析 + 对方状态 + 恰好三条推荐回复。
+    private func buildRecognizedChatResult(_ result: RecognizedChatResult) {
+        bodyStack.addArrangedSubview(makeSectionHeader("【聊天分析】"))
+        bodyStack.addArrangedSubview(makeNoticeLabel(result.analysis, color: GoutouTheme.text))
+        bodyStack.addArrangedSubview(makeSectionHeader("【对方状态】"))
+        bodyStack.addArrangedSubview(makeNoticeLabel(result.tone, color: GoutouTheme.text))
+        bodyStack.addArrangedSubview(makeSectionHeader("【推荐回复】"))
+        for (index, reply) in result.replies.enumerated() {
+            bodyStack.addArrangedSubview(makeReplyCard(index: index, text: reply))
+        }
+    }
+
+    private static let replyCardMarks = ["①", "②", "③"]
+
+    /// 只读候选卡片：没有任何点击动作，也不是「发送」按钮（插入属于后续阶段）。
+    private func makeReplyCard(index: Int, text: String) -> UIView {
+        let mark = index < Self.replyCardMarks.count ? Self.replyCardMarks[index] : "\(index + 1)."
+        let label = makeNoticeLabel("\(mark) \(text)", color: GoutouTheme.text)
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let card = UIView()
+        card.backgroundColor = GoutouTheme.key
+        card.layer.cornerRadius = 6
+        card.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 8),
+            label.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -8),
+            label.topAnchor.constraint(equalTo: card.topAnchor, constant: 7),
+            label.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -7),
+        ])
+        return card
     }
 
     private func makeSectionHeader(_ title: String) -> UILabel {

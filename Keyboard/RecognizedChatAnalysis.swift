@@ -1,10 +1,71 @@
 import Foundation
 
-/// 阶段 9：把「正在使用的识别聊天」交给现有 AI 网络层分析。
+/// 阶段 9 / 10：把「正在使用的识别聊天」交给现有 AI 网络层分析。
 ///
-/// 只做一件事：用户点「分析这段聊天」→ 一次请求 → 一份聊天分析。
-/// 不生成推荐回复、不插入输入框、不写人物记忆、不落盘。
+/// 用户点「分析这段聊天」→ 一次请求 → 聊天分析 + 对方状态 + 恰好 3 条推荐回复。
+/// 三条回复本阶段只展示：不插入输入框、不自动发送、不写人物记忆、不落盘。
 /// 本文件纯 Foundation、不联网：网络由控制器调用现有 `GoutouAIClient` 完成。
+
+/// 阶段 10 的正式结果：一份聊天分析 + 对方当前状态 + **恰好 3 条**候选回复。
+///
+/// 和旧 manual 狗头军师的 `GoutouResult`（headline + 6～8 条）是两个东西，
+/// 那条链路一个字都没动，避免语义混淆。
+struct RecognizedChatResult: Equatable {
+    let analysis: String
+    let tone: String
+    let replies: [String]
+
+    /// 正式要求：恰好 3 条。
+    static let requiredReplies = 3
+    /// 单条候选的长度上限：超了截断加省略号，不让模型塞几千字当一条"回复"。
+    static let maxReplyLength = 300
+    /// 对方状态一句话的长度上限。
+    static let maxToneLength = 200
+    static let ellipsis = "…"
+
+    /// 宽容进、严格出：把拆出来的字段归一化成 analysis + tone + 恰好 3 条。
+    ///
+    /// - trim 每条回复；
+    /// - 丢掉空白与纯标点的；
+    /// - 丢掉与前面完全重复的；
+    /// - 单条超长截断；
+    /// - 不足 3 条有效回复就失败，不用空串凑数、不复制同一条。
+    static func normalized(
+        _ fields: GoutouAIClient.RecognizedChatFields
+    ) -> Result<RecognizedChatResult, RecognizedChatAnalysisError> {
+        let analysis = capped(fields.analysis, limit: GoutouAIClient.maxAnalysisLength)
+        let tone = capped(fields.tone, limit: maxToneLength)
+        guard !analysis.isEmpty, !tone.isEmpty else { return .failure(.incompleteResult) }
+
+        var replies: [String] = []
+        for raw in fields.replies {
+            let text = capped(raw, limit: maxReplyLength)
+            guard !text.isEmpty, hasVisibleContent(text) else { continue }
+            guard !replies.contains(text) else { continue }
+            replies.append(text)
+        }
+        guard replies.count >= requiredReplies else {
+            return .failure(.notEnoughReplies(validCount: replies.count))
+        }
+        return .success(RecognizedChatResult(
+            analysis: analysis,
+            tone: tone,
+            replies: Array(replies.prefix(requiredReplies))
+        ))
+    }
+
+    private static func capped(_ text: String?, limit: Int) -> String {
+        guard let text = text else { return "" }
+        let flat = text.trimmed
+        guard flat.count > limit else { return flat }
+        return String(flat.prefix(limit)) + ellipsis
+    }
+
+    /// 纯空白 / 纯标点 / 只有一个表情的候选不算有效回复。
+    private static func hasVisibleContent(_ text: String) -> Bool {
+        text.unicodeScalars.contains { CharacterSet.alphanumerics.contains($0) }
+    }
+}
 
 /// 分析请求的失败原因。文案给人看，不回显模型原文、API Key 或沙盒路径。
 enum RecognizedChatAnalysisError: Error, Equatable {
@@ -17,6 +78,10 @@ enum RecognizedChatAnalysisError: Error, Equatable {
     /// 上一次请求还没回来
     case alreadyRunning
     case ai(GoutouAIError)
+    /// 阶段 10：缺聊天分析或对方状态
+    case incompleteResult
+    /// 阶段 10：归一化之后不足 3 条有效回复
+    case notEnoughReplies(validCount: Int)
 
     var message: String {
         switch self {
@@ -30,6 +95,10 @@ enum RecognizedChatAnalysisError: Error, Equatable {
             return "军师人格没打进包，需要重新构建一次。"
         case .alreadyRunning:
             return "上一次分析还在进行中。"
+        case .incompleteResult:
+            return "分析结果不完整（缺少聊天分析或对方状态），请重新分析。"
+        case .notEnoughReplies(let validCount):
+            return "分析结果里只有 \(validCount) 条可用回复（需要 \(RecognizedChatResult.requiredReplies) 条），请重新分析。"
         case .ai(let error):
             return RecognizedChatAnalysisError.friendly(error)
         }
@@ -70,7 +139,7 @@ enum RecognizedChatAnalysisError: Error, Equatable {
 enum RecognizedChatAnalysisState: Equatable {
     case idle
     case loading
-    case success(String)
+    case success(RecognizedChatResult)
     case failure(RecognizedChatAnalysisError)
 }
 
@@ -125,12 +194,21 @@ struct RecognizedChatAnalysisSession: Equatable {
     }
 
     /// 请求回来了。代际号对不上（用户已经读了别的聊天、取消了使用或收起过面板）就直接丢掉。
-    mutating func complete(generation: Int, result: Result<String, RecognizedChatAnalysisError>) {
+    mutating func complete(generation: Int, result: Result<RecognizedChatResult, RecognizedChatAnalysisError>) {
         guard generation == self.generation else { return }
         switch result {
-        case .success(let text):
-            let trimmed = text.trimmed
-            state = trimmed.isEmpty ? .failure(.ai(.empty)) : .success(trimmed)
+        case .success(let value):
+            // 再兜一层，而且和归一化共用同一套规则：手写或脏值同样进不了 success。
+            switch RecognizedChatResult.normalized(GoutouAIClient.RecognizedChatFields(
+                analysis: value.analysis,
+                tone: value.tone,
+                replies: value.replies
+            )) {
+            case .success(let cleaned):
+                state = .success(cleaned)
+            case .failure(let error):
+                state = .failure(error)
+            }
         case .failure(let error):
             state = .failure(error)
         }
@@ -155,15 +233,19 @@ struct RecognizedChatAnalysisSession: Equatable {
 /// 手动上下文分析、推荐回复、记忆链路继续用它；这里只给「识别聊天分析」这一条链路用。
 enum RecognizedChatPrompt {
 
-    /// 追加在 skill 后面的最小约束：覆盖上面任何关于候选话术的要求，并且只认 `analysis` 一个字段。
+    /// 追加在 skill 后面的阶段 10 正式契约：覆盖上面任何关于候选话术、回复条数的要求。
+    /// 正式要求恰好 3 条回复，不是旧 manual 链路的 6～8 条。
     static let analysisContract = """
-    阶段 9 只做聊天分析（覆盖上面任何关于候选话术、回复条数的要求）：
-    - 本次任务仅分析这段聊天，不要输出任何待发送的句子。
-    - 「我」代表输入法用户本人，「对方」代表聊天对象；归属已经由用户人工确认，不要重新判断谁是谁。
-    - 保持消息顺序，不要改写正文。
+    阶段 10 正式结果（覆盖上面任何关于候选话术、回复条数的要求）：
+    - 只分析这一段聊天，不要重新判断谁是谁。
+    - 「我」代表输入法用户本人，「对方」代表聊天对象，归属已经由用户人工确认。
+    - 保持原始消息顺序，不要改写正文。
+    - 分析当前聊天的氛围和关键含义。
+    - 判断对方当前语气 / 态度 / 意图。
+    - 给出恰好 3 条可以直接回复的候选话术，三条要有区别（一条自然稳妥、一条稍微主动推进、一条轻松一点），不要只是换几个字。
     - 不写人设记忆、人物档案或长期记忆。
-    - 只返回聊天分析结果。
-    - 只返回 JSON 对象，不要 Markdown 或代码围栏：{"analysis": "完整聊天分析正文"}
+    - 只返回 JSON 对象，不要 Markdown 或代码围栏，格式：
+    {"analysis": "聊天分析正文", "tone": "对方语气 / 态度 / 意图", "replies": ["回复一", "回复二", "回复三"]}
     """
 
     static func systemPrompt(skill: String) -> String {
@@ -189,7 +271,7 @@ enum RecognizedChatPrompt {
         聊天内容：
         \(body)
 
-        本次只要求：分析这段聊天（对方的意思、关系与氛围、接下来可能的走向）。
+        本次要求：分析这段聊天，判断对方当前语气 / 态度 / 意图，并给出恰好 \(RecognizedChatResult.requiredReplies) 条可直接回复的候选话术。
         """
     }
 }

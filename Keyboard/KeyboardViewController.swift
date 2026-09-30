@@ -747,8 +747,12 @@ final class KeyboardViewController: UIInputViewController {
                 guard self.recognizedChatAnalysis.generation == generation else { return }
                 self.recognizedChatTask = nil
                 switch result {
-                case .success(let text):
-                    self.recognizedChatAnalysis.complete(generation: generation, result: .success(text))
+                case .success(let fields):
+                    // 宽容拆出来的字段在这里做阶段 10 的严格归一化：恰好 3 条、非空、去重、长度上限。
+                    self.recognizedChatAnalysis.complete(
+                        generation: generation,
+                        result: RecognizedChatResult.normalized(fields)
+                    )
                 case .failure(let error):
                     self.recognizedChatAnalysis.complete(generation: generation, result: .failure(.ai(error)))
                 }

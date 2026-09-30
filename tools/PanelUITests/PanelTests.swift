@@ -210,14 +210,31 @@ final class PanelTests: XCTestCase {
         XCTAssertFalse(titles(in: panel).contains { $0.hasPrefix("分析这段聊天") })
         assertBounded(panel)
 
-        // success：只展示这一份分析
-        snapshot.recognizedChatAnalysis = .success("对方在确认今晚的安排。")
+        // success：分析 / 对方状态 / 恰好三条候选卡片，且没有「发送」「插入」
+        let result = RecognizedChatResult(
+            analysis: "对方在确认今晚的安排。",
+            tone: "轻松、在推进",
+            replies: ["好啊，七点老地方", "你先定地方，我都行", "行，那我请客"]
+        )
+        snapshot.recognizedChatAnalysis = .success(result)
         panel.render(snapshot)
         panel.layoutIfNeeded()
+        XCTAssertTrue(labels(in: panel).contains("【聊天分析】"))
+        XCTAssertTrue(labels(in: panel).contains("【对方状态】"))
+        XCTAssertTrue(labels(in: panel).contains("【推荐回复】"))
         XCTAssertTrue(labels(in: panel).contains("对方在确认今晚的安排。"))
+        XCTAssertTrue(labels(in: panel).contains("轻松、在推进"))
+        XCTAssertTrue(labels(in: panel).contains("① 好啊，七点老地方"))
+        XCTAssertTrue(labels(in: panel).contains("② 你先定地方，我都行"))
+        XCTAssertTrue(labels(in: panel).contains("③ 行，那我请客"))
+        XCTAssertEqual(labels(in: panel).filter { ["①", "②", "③"].contains { mark in $0.hasPrefix(mark) } }.count, 3)
         XCTAssertTrue(titles(in: panel).contains { $0.hasPrefix("重新分析") })
         XCTAssertFalse(titles(in: panel).contains { $0.contains("插入") })
-        XCTAssertFalse(labels(in: panel).contains { $0.contains("推荐回复") })
+        XCTAssertFalse(titles(in: panel).contains { $0.contains("发送") })
+        XCTAssertFalse(labels(in: panel).contains { $0.contains("发送") })
+        XCTAssertFalse(labels(in: panel).contains { $0.contains("插入") })
+        // 候选卡片只是展示：渲染完不该多出任何面板动作
+        XCTAssertEqual(recorder.actions.count, 2)
         assertBounded(panel)
 
         // failure：给一个人能看懂的原因
