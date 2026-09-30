@@ -821,4 +821,7 @@ expect(
     "关掉包含判定后这两条都要留着（阈值必须真的可配），实际 \(substringDisabled.count)"
 )
 
+// 第二阶段：气泡扫描 / 对齐轨道 / 聊天区域过滤 / 表情乱码建议。
+runStageTwoChecks()
+
 print("ChatLayoutCheck passed")

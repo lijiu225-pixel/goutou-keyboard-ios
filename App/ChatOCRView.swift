@@ -8,8 +8,12 @@ import UIKit
 /// 这一页刻意只做四件事：选图 → 本机识别 → 人工检查修正 → 手动复制。
 /// - **不**自动写剪贴板（只有点「复制聊天文字」才写）；
 /// - **不**调用 AI；
-/// - **不**保存图片：`UIImage` 只作为局部变量活在识别过程中，`@State` 里只留文字和框；
+/// - **不**保存图片：UIImage 只作为局部变量活在识别过程中，@State 里只留文字和框；
 /// - **不**碰键盘：键盘那边的导入是后续阶段的事（本阶段还没做）。
+///
+/// 第二阶段新增的两点：
+/// 1. 顶部状态栏/标题、底部输入区/键盘这些**确定不是聊天**的内容直接不进列表，只报个数；
+/// 2. 居中的日期时间、系统提示、通话记录标成「非聊天候选」，**默认不复制**，用户可一键放回。
 struct ChatOCRView: View {
 
     /// 低于这个置信度就在那一条旁边标「可能认错」，提醒用户重点核对。
@@ -17,6 +21,8 @@ struct ChatOCRView: View {
 
     @State private var pickerItem: PhotosPickerItem?
     @State private var messages: [ChatLayoutMessage] = []
+    /// 被自动剔掉的内容按原因汇总（只有数字，没有文字）。
+    @State private var excludedCounts: [ChatLayoutExcludedCount] = []
     @State private var stage: Stage = .idle
     @State private var notice: String?
     /// 复制成功后的提示（只说条数和字数，不回显聊天内容）。
@@ -28,9 +34,9 @@ struct ChatOCRView: View {
     @State private var recognitionTask: Task<Void, Never>?
     /// 请求标识：每发起一次识别、每次清空或退出都 +1。
     ///
-    /// 任务在每一步 `await` 之后都要拿自己的标识和当前值比对，对不上就直接返回，
+    /// 任务在每一步 await 之后都要拿自己的标识和当前值比对，对不上就直接返回，
     /// 一个字节都不写回界面。这样「清空 / 换图 / 退出」之后，旧任务即使跑完也污染不了状态。
-    /// 只有**当前**标识对应的任务才允许改 `stage` 和 `messages`。
+    /// 只有**当前**标识对应的任务才允许改 stage 和 messages。
     @State private var recognitionRequestID = 0
 
     private enum Stage: Equatable {
@@ -47,7 +53,7 @@ struct ChatOCRView: View {
             case .loading:
                 return "正在本机识别…"
             case .done(let count):
-                return count > 0 ? "识别完成，整理出 \(count) 条。" : "识别完成，但这张图里没有文字。"
+                return count > 0 ? "识别完成，整理出 \(count) 条聊天消息。" : "识别完成，但这张图里没有可用的聊天文字。"
             case .cancelled:
                 return "已取消识别。"
             case .failed(let reason):
@@ -65,8 +71,24 @@ struct ChatOCRView: View {
         }
     }
 
+    // MARK: - 派生状态
+
+    private var chatIndexes: [Int] {
+        messages.indices.filter { messages[$0].kind.isChat }
+    }
+
+    private var candidateIndexes: [Int] {
+        messages.indices.filter { messages[$0].kind.isCandidate }
+    }
+
+    /// 真正会写进剪贴板的那些（用户保留 + 归属已定）。
+    private var keptIndexes: [Int] {
+        messages.indices.filter { messages[$0].isKept }
+    }
+
+    /// 只有「保留着、而且是聊天消息、归属还没定」的才需要用户定。
     private var unresolvedCount: Int {
-        messages.filter { $0.needsReview }.count
+        messages.filter { $0.isKept && $0.kind.isChat && $0.needsReview }.count
     }
 
     private var canCopy: Bool {
@@ -77,6 +99,9 @@ struct ChatOCRView: View {
         Form {
             pickerSection
             if !messages.isEmpty {
+                if !candidateIndexes.isEmpty {
+                    candidateSection
+                }
                 resultSection
             }
             actionSection
@@ -135,6 +160,12 @@ struct ChatOCRView: View {
                     .font(.footnote)
                     .foregroundStyle(.orange)
             }
+
+            if !excludedCounts.isEmpty {
+                Text(excludedSummary)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
         } header: {
             Text("截图")
         } footer: {
@@ -142,15 +173,38 @@ struct ChatOCRView: View {
         }
     }
 
+    /// 被自动剔掉的内容只说个数和类型，不回显文字。
+    private var excludedSummary: String {
+        let parts = excludedCounts.map { "\($0.reason.displayName) \($0.count) 条" }
+        return "已自动忽略：" + parts.joined(separator: "、") + "。"
+    }
+
+    // MARK: - 非聊天候选
+
+    private var candidateSection: some View {
+        Section {
+            ForEach(candidateIndexes, id: \.self) { index in
+                row(for: $messages[index], showsRolePicker: false)
+            }
+            Button("把这些都算进聊天") { setCandidates(kept: true) }
+            Button("全部删掉", role: .destructive) { removeCandidates() }
+        } header: {
+            Text("非聊天内容（默认不复制）")
+        } footer: {
+            Text("这些是居中的日期时间、系统提示或通话记录。版式上说得通，但同一个词也可能是真的聊天内容，所以默认不写进剪贴板 —— 确认是聊天就点上面的按钮放回来。")
+        }
+    }
+
     // MARK: - 可编辑结果
 
     private var resultSection: some View {
         Section {
-            ForEach($messages) { $message in
-                row(for: $message)
+            ForEach(chatIndexes, id: \.self) { index in
+                row(for: $messages[index], showsRolePicker: true)
             }
             .onDelete { offsets in
-                messages.remove(atOffsets: offsets)
+                let targets = offsets.map { chatIndexes[$0] }
+                messages.remove(atOffsets: IndexSet(targets))
             }
 
             Menu {
@@ -158,35 +212,43 @@ struct ChatOCRView: View {
                 Button("把未确定的都设为「我」") { setUnknown(to: .me) }
                 Divider()
                 Button("反转全部归属（我 ↔ 对方）") { flipAll() }
+                Divider()
+                Button("清掉末尾的表情乱码") { applySymbolNoiseSuggestions() }
             } label: {
-                Label("批量修正归属", systemImage: "wand.and.stars")
+                Label("批量修正", systemImage: "wand.and.stars")
             }
-            .disabled(messages.isEmpty)
+            .disabled(chatIndexes.isEmpty)
         } header: {
-            Text("识别结果（可编辑）")
+            Text("聊天消息（可编辑）")
         } footer: {
             Text(resultFooter)
         }
     }
 
-    /// 单独算成 String，避免 `Text(三元)` 在 String / LocalizedStringKey 之间打摆子。
+    /// 单独算成 String，避免 Text(三元) 在 String / LocalizedStringKey 之间打摆子。
     private var resultFooter: String {
         if unresolvedCount > 0 {
-            return "还有 \(unresolvedCount) 条是「未确定」，复制时会问你怎么算。左右可能判反了的话，用「批量修正归属 → 反转」。"
+            return "还有 \(unresolvedCount) 条是「未确定」，复制时会问你怎么算。左右可能判反了的话，用「批量修正 → 反转」。"
         }
-        return "每条都能改归属和文字；左滑可以删掉多余的行（比如状态栏时间和标题）。"
+        return "每条都能改归属和文字；左滑可以删掉多余的行。"
     }
 
-    private func row(for message: Binding<ChatLayoutMessage>) -> some View {
+    private func row(for message: Binding<ChatLayoutMessage>, showsRolePicker: Bool) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Picker("归属", selection: message.role) {
-                    ForEach(ChatLayoutRole.selectable, id: \.self) { role in
-                        Text(role.displayName).tag(role)
+                if showsRolePicker {
+                    Picker("归属", selection: message.role) {
+                        ForEach(ChatLayoutRole.selectable, id: \.self) { role in
+                            Text(role.displayName).tag(role)
+                        }
                     }
+                    .pickerStyle(.menu)
+                    .labelsHidden()
+                } else if let reason = message.wrappedValue.kind.reason {
+                    Text(reason.displayName)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .pickerStyle(.menu)
-                .labelsHidden()
 
                 Spacer()
 
@@ -201,6 +263,18 @@ struct ChatOCRView: View {
                 .lineLimit(1...8)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
+
+            if message.wrappedValue.hasSuggestedText, let suggestion = message.wrappedValue.suggestedText {
+                HStack(spacing: 8) {
+                    Text("末尾像是表情被认错了")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                    Button("去掉末尾杂字") {
+                        message.wrappedValue.text = suggestion
+                    }
+                    .font(.caption2)
+                }
+            }
         }
         .padding(.vertical, 2)
     }
@@ -227,7 +301,7 @@ struct ChatOCRView: View {
         } header: {
             Text("复制到剪贴板")
         } footer: {
-            Text("复制完全由你点：这里的代码不会自动写剪贴板，也不会自动覆盖你现在复制的东西。复制出来的 JSON 只带文本和 me/other 归属（format/version 标记：\(GoutouChatClipboardPayload.format)/v\(GoutouChatClipboardPayload.version)）。本阶段到「复制」为止：键盘那边的导入入口和 AI 分析都在后续阶段，现在键盘里点不到。")
+            Text("复制完全由你点：这里的代码不会自动写剪贴板，也不会自动覆盖你现在复制的东西。只复制你保留的聊天消息（非聊天候选默认不带）。复制出来的 JSON 只带文本和 me/other 归属（format/version 标记：\(GoutouChatClipboardPayload.format)/v\(GoutouChatClipboardPayload.version)）。本阶段到「复制」为止：键盘那边的导入入口和 AI 分析都在后续阶段，现在键盘里点不到。")
         }
     }
 
@@ -243,6 +317,7 @@ struct ChatOCRView: View {
         notice = nil
         copiedNote = nil
         messages = []
+        excludedCounts = []
         recognitionTask = Task { await recognize(item, requestID: requestID) }
     }
 
@@ -265,15 +340,16 @@ struct ChatOCRView: View {
     private func clearResults() {
         abandonRecognition()
         messages = []
+        excludedCounts = []
         pickerItem = nil
         stage = .idle
         notice = nil
         copiedNote = nil
     }
 
-    /// 显式回到主线程改界面；识别本身在 `ChatOCRService` 的后台队列里跑。
+    /// 显式回到主线程改界面；识别本身在 ChatOCRService 的后台队列里跑。
     ///
-    /// 每个 `await` 之后都会 `guard requestID == recognitionRequestID`：
+    /// 每个 await 之后都会 guard requestID == recognitionRequestID：
     /// 清空 / 换图 / 退出页面都会让标识对不上，任务就此收手。
     @MainActor
     private func recognize(_ item: PhotosPickerItem, requestID: Int) async {
@@ -291,24 +367,27 @@ struct ChatOCRView: View {
                 return
             }
 
-            // 这里开始是 Vision：`ChatOCRService.recognize` 内部还有一次后台线程切换，
-            // 片与片之间才检查取消（`perform` 本身打断不了）。
+            // 这里开始是 Vision：ChatOCRService.recognize 内部还有一次后台线程切换，
+            // 片与片之间才检查取消（perform 本身打断不了）。
             let result = try await ChatOCRService.recognize(image: image)
             try Task.checkCancellation()
             guard isCurrent(requestID) else { return }
 
             guard !result.isEmpty else {
                 stage = .done(count: 0)
+                excludedCounts = []
                 notice = result.strategy == .tiled
                     ? "这张长截图分片识别后也没找到文字。尽量只截聊天区域，别带太多空白和背景。"
                     : "这张图没识别到文字。尽量只截聊天区域，别带太多空白和背景。"
                 return
             }
 
-            let parsed = ChatLayoutParser.parse(lines: result.lines)
-            messages = parsed
-            stage = .done(count: parsed.count)
-            let unresolved = parsed.filter { $0.needsReview }.count
+            let analysis = ChatLayoutParser.analyze(lines: result.lines)
+            messages = analysis.messages
+            excludedCounts = analysis.excludedCounts
+            let chatCount = analysis.messages.filter { $0.kind.isChat }.count
+            stage = .done(count: chatCount)
+            let unresolved = analysis.messages.filter { $0.kind.isChat && $0.needsReview }.count
             // 长图走的是分片识别，用户有权知道「这次是按原图分辨率分片识的」。
             var notes: [String] = []
             if result.strategy == .tiled {
@@ -316,6 +395,10 @@ struct ChatOCRView: View {
             }
             if unresolved > 0 {
                 notes.append("有 \(unresolved) 条看不出是谁说的，先标成「未确定」了。")
+            }
+            let candidates = analysis.messages.filter { $0.kind.isCandidate }.count
+            if candidates > 0 {
+                notes.append("另有 \(candidates) 条像是系统内容，默认不复制。")
             }
             notice = notes.isEmpty ? nil : notes.joined(separator: " ")
         } catch is CancellationError {
@@ -350,24 +433,28 @@ struct ChatOCRView: View {
         performCopy(treatingUnknownAs: nil)
     }
 
-    /// `fallback` 为 nil 时表示「已经没有未确定了」。
+    /// fallback 为 nil 时表示「已经没有未确定了」。
     ///
     /// 分成「问」和「算 + 复制」两步：确认对话框里的按钮只负责用哪个 fallback 去复制，
-    /// 不顺手改 `@State`（在 ViewBuilder 里改状态容易出顺序问题）。
+    /// 不顺手改 @State（在 ViewBuilder 里改状态容易出顺序问题）。
     private func performCopy(treatingUnknownAs fallback: GoutouChatRole?) {
         if let fallback = fallback {
             applyUnknown(as: fallback)
         }
 
         var payloadMessages: [GoutouChatClipboardMessage] = []
-        payloadMessages.reserveCapacity(messages.count)
-        for message in messages {
+        for message in messages where message.isKept {
             guard let role = message.role.clipboardRole else {
                 // 走不到：上面已经补过了。真到了这里就退回去让用户决定，不要瞎写。
                 isShowingUnresolvedPrompt = true
                 return
             }
             payloadMessages.append(GoutouChatClipboardMessage(role: role, text: message.text))
+        }
+
+        guard !payloadMessages.isEmpty else {
+            notice = "没有要复制的内容：非聊天候选默认不带，确认要的话先把它们放回来。"
+            return
         }
 
         do {
@@ -389,14 +476,14 @@ struct ChatOCRView: View {
     }
 
     private func setUnknown(to role: ChatLayoutRole) {
-        for index in messages.indices where messages[index].needsReview {
+        for index in messages.indices where messages[index].isKept && messages[index].needsReview {
             messages[index].role = role
         }
         recomputeNotice()
     }
 
     private func flipAll() {
-        for index in messages.indices {
+        for index in messages.indices where messages[index].kind.isChat {
             switch messages[index].role {
             case .me: messages[index].role = .other
             case .other: messages[index].role = .me
@@ -404,6 +491,33 @@ struct ChatOCRView: View {
             }
         }
         recomputeNotice()
+    }
+
+    /// 把「末尾像是表情被认错」的那些一次改完（用户点了才动）。
+    private func applySymbolNoiseSuggestions() {
+        var changed = 0
+        for index in messages.indices {
+            guard messages[index].kind.isChat, let suggestion = messages[index].suggestedText else { continue }
+            guard messages[index].text != suggestion else { continue }
+            messages[index].text = suggestion
+            changed += 1
+        }
+        notice = changed > 0 ? "已清掉 \(changed) 条的末尾杂字，请再核对一遍。" : "没有可清理的末尾杂字。"
+    }
+
+    private func setCandidates(kept: Bool) {
+        for index in candidateIndexes {
+            messages[index].isKept = kept
+        }
+        copiedNote = nil
+        notice = kept ? "非聊天内容已放回，会一起复制。" : nil
+    }
+
+    private func removeCandidates() {
+        for index in candidateIndexes.reversed() {
+            messages.remove(at: index)
+        }
+        notice = nil
     }
 
     private func recomputeNotice() {

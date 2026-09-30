@@ -29,9 +29,16 @@
 本机 Vision OCR（不保存图片、不上传）→ 整理消息并按版式判断归属（判不出来标「未确定」）→
 你改文字 / 改归属 / 删无关行 → 点「复制聊天文字」写出带 `format`/`version` 标记的 JSON。
 
+**第二个增量（截图 OCR 第二阶段：结果清理与归属改进）**：归属改成看**气泡边缘**而不是文字框
+（真机上右侧 6 条绿气泡的右边缘是同一个常数 0.8646…0.8672，文字框边缘不是），
+顶部状态栏 / 聊天标题 / 底部输入区按内容边界自动剔掉，
+居中的日期时间与通话记录标成「非聊天候选」（默认不复制、一键可放回），
+表情被认成 `C`/`こ` 这类杂字时只给「去掉末尾杂字」的建议、不自动改正文。
+细节、判据和已知限制见 [截图 OCR 第二阶段说明](docs/phase-2-chat-ocr.md)，
+第一阶段的支持范围见 [截图 OCR 第一阶段说明](docs/phase-1-chat-ocr.md)。
+
 **本阶段到「复制」为止**：键盘侧的「导入识别聊天」入口**还没做**，AI 分析也不读这份 JSON，
-主 App 里不会指引你去点一个不存在的按钮。文件、长截图支持范围与限制见
-[截图 OCR 第一阶段说明](docs/phase-1-chat-ocr.md)。早期那套 App Group 共享缓存路线已废弃：
+主 App 里不会指引你去点一个不存在的按钮。早期那套 App Group 共享缓存路线已废弃：
 相关代码、状态行和两份 entitlement 都已删除，App 与键盘之间只剩剪贴板这一条通道。
 
 ## 工程结构
@@ -43,11 +50,12 @@ App/                                 宿主 App：配置接口 + 截图 OCR
   ContentView.swift                  入口：自测输入框 + 配置 + 「识别聊天截图」入口
   ChatOCRView.swift                  选图 / 可编辑结果 / 复制（识别任务带请求标识，可取消可作废）
   ChatOCRService.swift               本机 Vision OCR：长图按计划分片识别，坐标换算回原图归一化
-  ChatLayoutParser.swift             阅读顺序整理 + 按左右边缘/宽度判归属（纯 Foundation）
+  ChatLayoutParser.swift             阅读顺序整理 + 按气泡边缘轨道判归属 / 聊天区域过滤（纯 Foundation）
   Info.plist
 Shared/                              两端共用（只有剪贴板契约会被编进键盘）
   GoutouChatClipboard.swift          goutou-chat JSON 契约与编解码（含 version 严格校验与体量上限）
   GoutouChatOCRGeometry.swift        长图分片几何：缩放口径 / 切片 / 坐标换算 / 重叠去重（纯 Foundation）
+  GoutouChatBubbleScanner.swift      气泡边缘扫描：底色估计 / 行内色块 / 头像侧（纯 Foundation，有测试）
 Keyboard/                            键盘扩展：UIInputViewController + Auto Layout
   KeyboardViewController.swift       两种布局的控制器 + textDocumentProxy 上屏
   NineKeyKeyboardView.swift          中文九键界面（对标 Android 布局与配色）
@@ -71,7 +79,9 @@ Keyboard/                            键盘扩展：UIInputViewController + Auto
   GoutouSkill.md                     军师人格，从 Android 仓库原样拷来（口径只有一份）
   Info.plist                         NSExtension: com.apple.keyboard-service
 tools/NineKeyCheck/main.swift        九键逻辑冒烟测试（CI 上 swiftc 直接跑，不需要模拟器）
-tools/ChatLayoutCheck/main.swift      剪贴板契约 / 版式解析 / 长图分片几何冒烟测试（同样纯 Foundation）
+tools/ChatLayoutCheck/main.swift      剪贴板契约 / 版式解析 / 长图分片几何 / 气泡扫描冒烟测试（纯 Foundation）
+tools/ChatLayoutCheck/ScreenshotFixtures.swift  匿名化的真实版式回归样例（文字全是占位内容）
+tools/ChatVisionCheck/main.swift      真 Vision 的合成截图回归（只在 macOS runner 上跑）
 .github/workflows/build-ios.yml      无 Mac 构建流水线
 ```
 
@@ -256,8 +266,10 @@ git tag adhoc-v1.0.0 && git push origin adhoc-v1.0.0
 
 ## 下一阶段（现在没做）
 
-- **截图 OCR 第二半**：键盘侧「导入识别聊天」入口、把导入的聊天送进 AI 分析、回复插入。
+- **截图 OCR 第三阶段**：键盘侧「导入识别聊天」入口、把导入的聊天送进 AI 分析、回复插入。
   现在主 App 只做到「复制聊天 JSON」；键盘里点不到这个入口，页面上也没有这个按钮。
+- **表情/图片消息的留位**：现在整条只有一个表情的消息（Vision 认不出文字）**不会出现**在结果里，
+  要补上得把整张图的气泡做二维分割，这一阶段没做。
 - 整句输入 / 联想（现在是"数字串切拼音 + 词库命中"，没有再往上做整句模型；要更进一步就得考虑 RIME）
 - 任务/风格选择器（iOS 面板现在写死 Android 的两个默认值）
 - 宿主 App 里的完整面板 + 历史（现在是"键盘内面板 + 剪贴板传配置"）

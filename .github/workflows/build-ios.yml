@@ -80,10 +80,25 @@ jobs:
           swiftc -swift-version 5 \
             Shared/GoutouChatClipboard.swift \
             App/ChatLayoutParser.swift \
+            Shared/GoutouChatBubbleScanner.swift \
             Shared/GoutouChatOCRGeometry.swift \
             tools/ChatLayoutCheck/main.swift \
+            tools/ChatLayoutCheck/ScreenshotFixtures.swift \
             -o "$RUNNER_TEMP/chatlayoutcheck"
           "$RUNNER_TEMP/chatlayoutcheck"
+
+      # 真 Vision 的合成回归：现场画一张匿名聊天截图 → 走同一套识别 / 换算 / 气泡扫描 / 版式解析 → 断言归属。
+      # 和上面的纯逻辑测试**分开**：合成坐标过了不代表 OCR 也过了，这里才是真的过了一遍 Vision。
+      - name: Vision OCR synthetic regression (macOS)
+        run: |
+          swiftc -swift-version 5 \
+            Shared/GoutouChatBubbleScanner.swift \
+            App/ChatLayoutParser.swift \
+            Shared/GoutouChatOCRGeometry.swift \
+            App/ChatOCRService.swift \
+            tools/ChatVisionCheck/main.swift \
+            -o "$RUNNER_TEMP/chatvisioncheck"
+          "$RUNNER_TEMP/chatvisioncheck"
 
       - name: Generate Xcode project
         run: |

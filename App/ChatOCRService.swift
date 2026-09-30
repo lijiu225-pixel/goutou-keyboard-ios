@@ -1,10 +1,14 @@
 import CoreGraphics
-import UIKit
+import Foundation
 import Vision
+
+#if canImport(UIKit)
+import UIKit
+#endif
 
 // MARK: - 结果 / 错误
 
-/// 一次识别的结果。`lines` 的 `box` 一律是**原图归一化、左上原点**坐标
+/// 一次识别的结果。lines 的 box 一律是**原图归一化、左上原点**坐标
 /// （单次识别和分片识别出来的口径完全一样，后面的版式判断不需要关心走过哪条路线）。
 struct ChatOCRResult {
     let lines: [ChatOCRLine]
@@ -35,23 +39,89 @@ enum ChatOCRError: LocalizedError, Equatable {
     }
 }
 
+// MARK: - 气泡扫描用的低分辨率像素
+
+/// 给 ChatBubbleScanner 用的分析图：几百像素宽的 RGBA 采样。
+///
+/// 只为了量「气泡边缘在哪」，不为读字，所以可以缩得很小（1 像素约 0.3% 宽度）。
+/// 内存和长图高度无关地受控：宽 384 的分析图，最高的一张长图也才几 MB。
+struct ChatOCRScanContext {
+    let rows: ChatPixelRows
+    let background: ChatRGB
+
+    /// 从**工作图**（已经缩放、方向已摆正的那张）建分析图。
+    ///
+    /// 工作图归一化坐标和原图归一化坐标在均匀缩放下**完全相等**，
+    /// 所以扫描结果可以直接和换算后的文字框同口径使用，不需要再做一次坐标变换。
+    static func make(from image: CGImage, targetWidth: Int = ChatOCRService.analysisWidth) -> ChatOCRScanContext? {
+        guard image.width >= 1, image.height >= 1 else { return nil }
+        let width = max(1, min(targetWidth, image.width))
+        let ratio = Double(width) / Double(image.width)
+        let height = max(1, Int((Double(image.height) * ratio).rounded()))
+        // 护栏：分析图再大也不该超过这个像素数（正常最多 384 × 几千）。
+        guard width * height <= 8_000_000 else { return nil }
+
+        var buffer = [UInt8](repeating: 0, count: width * height * 4)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+        let drawn: Bool = buffer.withUnsafeMutableBytes { raw -> Bool in
+            guard let base = raw.baseAddress else { return false }
+            guard let context = CGContext(
+                data: base,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo
+            ) else { return false }
+            context.interpolationQuality = .medium
+            // 位图上下文的内存第 0 行就是图像顶行，所以不需要翻转：
+            // 直接 draw 出来的缓冲区行序和 ChatPixelRows 的左上原点口径一致。
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drawn else { return nil }
+
+        var pixels: [ChatRGB] = []
+        pixels.reserveCapacity(width * height)
+        var index = 0
+        while index + 3 < buffer.count {
+            pixels.append(
+                ChatRGB(
+                    byteRed: buffer[index],
+                    byteGreen: buffer[index + 1],
+                    byteBlue: buffer[index + 2]
+                )
+            )
+            index += 4
+        }
+        guard let rows = ChatPixelRows(width: width, height: height, pixels: pixels) else {
+            return nil
+        }
+        guard let background = ChatBubbleScanner.background(of: rows) else { return nil }
+        return ChatOCRScanContext(rows: rows, background: background)
+    }
+}
+
 // MARK: - 服务
 
-/// 本机 OCR：`VNRecognizeTextRequest` + `.accurate` + 简体中文/英文。
+/// 本机 OCR：VNRecognizeTextRequest + .accurate + 简体中文/英文。
 ///
 /// 隐私边界（本文件是唯一碰截图的地方）：
 /// - 图片只在内存里过一遍，**不落盘、不上传、不打印**；
-/// - 只返回文字、归一化框和置信度，不返回图片本身；
+/// - 只返回文字、归一化框、置信度和「气泡左右边缘」这类几何量，不返回图片本身；
 /// - 不读剪贴板，不写剪贴板。
 ///
 /// 长截图怎么处理（这是本文件的核心）：
 /// 整图把最长边压到 2400 像素时，1290×12000 的长截图宽度只剩 258 像素，
 /// 聊天文字会糊到认不出来。所以改成：
-/// 1. `ChatOCRTilingPlanner` 先按「最长边不超上限」算缩放，**如果宽度掉到不可读就退回按宽度定比例**；
+/// 1. ChatOCRTilingPlanner 先按「最长边不超上限」算缩放，**如果宽度掉到不可读就退回按宽度定比例**；
 /// 2. 高度还超上限时竖着切若干片，**一次只渲染并识别一片**（峰值内存 ≈ 一片）；
-/// 3. 每片的 Vision 结果用 `ChatOCRCoordinateMapper` 换算回原图归一化坐标；
-/// 4. 分片重叠区的重复文字用 `ChatOCRLineDeduplicator` 去掉。
-/// 路线判定的几何、换算和去重都在 `Shared/GoutouChatOCRGeometry.swift` 里，是纯 Foundation，有测试。
+/// 3. 每片的 Vision 结果用 ChatOCRCoordinateMapper 换算回原图归一化坐标；
+/// 4. 分片重叠区的重复文字用 ChatOCRLineDeduplicator 去掉；
+/// 5. 再从工作图采一张几百像素宽的分析图，给每一行补上**所在气泡**的左右边缘
+///    （角色判定靠它，不靠文字框宽度）。
 enum ChatOCRService {
 
     /// 简体中文 + 英文混排。
@@ -60,56 +130,29 @@ enum ChatOCRService {
     /// 缩放 / 分片的全部参数（唯一一处定义）。
     static let defaultTiling = ChatOCRTilingConfig.default
 
-    /// 同步版本。`Vision` 的 `perform` 是阻塞的，**不要在主线程调用它**。
+    /// 气泡扫描分析图的宽度。够定位边缘，又不会让内存跟着长图涨。
+    static let analysisWidth = 384
+
+    // MARK: 入口
+
+#if canImport(UIKit)
+    /// 同步版本。Vision 的 perform 是阻塞的，**不要在主线程调用它**。
     static func recognizeSync(
         image: UIImage,
         tiling: ChatOCRTilingConfig = ChatOCRService.defaultTiling,
         languageHints: [String] = ChatOCRService.defaultLanguageHints
     ) throws -> ChatOCRResult {
-        let pixelSize = orientedPixelSize(of: image)
-        let plan: ChatOCRTilingPlan
-        do {
-            plan = try ChatOCRTilingPlanner.plan(
-                pixelWidth: pixelSize.width,
-                pixelHeight: pixelSize.height,
-                config: tiling
-            )
-        } catch let error as ChatOCRGeometryError {
-            throw serviceError(from: error)
-        }
-
-        switch plan.strategy {
-        case .singlePass:
-            let prepared = redraw(image, to: CGSize(width: plan.workingWidth, height: plan.workingHeight))
-            guard let prepared else { throw ChatOCRError.invalidImage }
-            let lines = try recognizeLines(
-                cgImage: prepared,
-                languageHints: languageHints,
-                tileOrigin: .zero,
-                workingSize: CGSize(width: plan.workingWidth, height: plan.workingHeight)
-            )
-            let mapper = ChatOCRCoordinateMapper(plan: plan)
-            let mapped = lines.map { line in
-                ChatOCRLine(
-                    text: line.text,
-                    box: mapper.normalizedBox(fromWorkingNormalized: line.box),
-                    confidence: line.confidence
-                )
-            }
-            return ChatOCRResult(lines: mapped, strategy: .singlePass, originalPixelSize: pixelSize)
-
-        case .tiled:
-            return try recognizeTiled(
-                image: image,
-                plan: plan,
-                languageHints: languageHints
-            )
-        }
+        try recognizeSync(
+            pixelSize: orientedPixelSize(of: image),
+            render: { target in redraw(image, to: target) },
+            tiling: tiling,
+            languageHints: languageHints
+        )
     }
 
     /// 给 SwiftUI 用的异步版本：内部丢到后台队列，不占主线程。
     ///
-    /// 说明一处**诚实的限制**：`VNImageRequestHandler.perform` 是同步阻塞调用，
+    /// 说明一处**诚实的限制**：VNImageRequestHandler.perform 是同步阻塞调用，
     /// 中途没法打断；这里能保证的是「片与片之间可以取消」。
     /// 也就是说取消后最多再白跑完当前这一片，**不会**再更新任何界面状态。
     static func recognize(
@@ -132,20 +175,86 @@ enum ChatOCRService {
             }
         }
     }
+#endif
+
+    /// 已经摆正的位图入口。CI 上的真实 Vision 合成测试走这里，
+    /// 走的和 App 完全同一套识别 / 换算 / 扫描 / 去重代码。
+    static func recognizeSync(
+        cgImage: CGImage,
+        tiling: ChatOCRTilingConfig = ChatOCRService.defaultTiling,
+        languageHints: [String] = ChatOCRService.defaultLanguageHints
+    ) throws -> ChatOCRResult {
+        try recognizeSync(
+            pixelSize: CGSize(width: cgImage.width, height: cgImage.height),
+            render: { target in render(cgImage, to: target) },
+            tiling: tiling,
+            languageHints: languageHints
+        )
+    }
+
+    /// 唯一的实现：pixelSize 是原图像素尺寸，render 负责把原图渲染成指定尺寸的正立位图。
+    static func recognizeSync(
+        pixelSize: CGSize,
+        render: (CGSize) -> CGImage?,
+        tiling: ChatOCRTilingConfig = ChatOCRService.defaultTiling,
+        languageHints: [String] = ChatOCRService.defaultLanguageHints
+    ) throws -> ChatOCRResult {
+        let plan: ChatOCRTilingPlan
+        do {
+            plan = try ChatOCRTilingPlanner.plan(
+                pixelWidth: Double(pixelSize.width),
+                pixelHeight: Double(pixelSize.height),
+                config: tiling
+            )
+        } catch let error as ChatOCRGeometryError {
+            throw serviceError(from: error)
+        }
+
+        let workingSize = CGSize(width: plan.workingWidth, height: plan.workingHeight)
+        let mapper = ChatOCRCoordinateMapper(plan: plan)
+
+        switch plan.strategy {
+        case .singlePass:
+            guard let prepared = render(workingSize) else { throw ChatOCRError.invalidImage }
+            let scan = ChatOCRScanContext.make(from: prepared)
+            let lines = try recognizeLines(
+                cgImage: prepared,
+                languageHints: languageHints,
+                tileOrigin: .zero,
+                workingSize: workingSize
+            )
+            // 走 map（而不是另一套换算）：单次识别就是「原点在 0 的一片」，
+            // 这样单次和分片只有一条换算路径，不会各自漂。
+            let mapped = mapper.map(lines: lines, tileOrigin: .zero)
+            return ChatOCRResult(
+                lines: attachBubbleEvidence(to: mapped, scan: scan),
+                strategy: .singlePass,
+                originalPixelSize: pixelSize
+            )
+
+        case .tiled:
+            guard let workingImage = render(workingSize) else { throw ChatOCRError.invalidImage }
+            let scan = ChatOCRScanContext.make(from: workingImage)
+            return try recognizeTiled(
+                workingImage: workingImage,
+                plan: plan,
+                mapper: mapper,
+                scan: scan,
+                languageHints: languageHints
+            )
+        }
+    }
 
     // MARK: 分片路线
 
     private static func recognizeTiled(
-        image: UIImage,
+        workingImage: CGImage,
         plan: ChatOCRTilingPlan,
+        mapper: ChatOCRCoordinateMapper,
+        scan: ChatOCRScanContext?,
         languageHints: [String]
     ) throws -> ChatOCRResult {
         let workingSize = CGSize(width: plan.workingWidth, height: plan.workingHeight)
-        guard let workingImage = redraw(image, to: workingSize) else {
-            throw ChatOCRError.invalidImage
-        }
-
-        let mapper = ChatOCRCoordinateMapper(plan: plan)
         var collected: [ChatOCRLine] = []
 
         for (offset, tile) in plan.tiles.enumerated() {
@@ -179,19 +288,49 @@ enum ChatOCRService {
             )
         }
 
+        // 换算之后每一行都已经是**原图归一化**坐标，而分析图的归一化坐标和它相等，
+        // 所以气泡扫描可以直接用换算后的框，不需要再做一次变换。
+        let deduplicated = ChatOCRLineDeduplicator.removingOverlapDuplicates(collected)
         return ChatOCRResult(
-            lines: ChatOCRLineDeduplicator.removingOverlapDuplicates(collected),
+            lines: attachBubbleEvidence(to: deduplicated, scan: scan),
             strategy: .tiled,
             originalPixelSize: CGSize(width: plan.originalWidth, height: plan.originalHeight)
         )
+    }
+
+    // MARK: 气泡证据
+
+    /// 给每一行补上「这一行在哪个气泡里、气泡左右边缘在哪、头像在哪一侧」。
+    ///
+    /// 扫不出来就原样返回（那一行会退回「文字框贴边」的老口径），不会因为扫不到就瞎判。
+    private static func attachBubbleEvidence(
+        to lines: [ChatOCRLine],
+        scan: ChatOCRScanContext?
+    ) -> [ChatOCRLine] {
+        guard let scan = scan else { return lines }
+        return lines.map { line in
+            guard let evidence = ChatBubbleScanner.evidence(
+                forText: line.box,
+                rows: scan.rows,
+                background: scan.background
+            ) else {
+                return line
+            }
+            return ChatOCRLine(
+                text: line.text,
+                box: line.box,
+                confidence: line.confidence,
+                bubble: evidence
+            )
+        }
     }
 
     // MARK: Vision
 
     /// 识别一张（整图或一片）已经渲染好的位图。
     ///
-    /// `tileOrigin` 是这片在**工作图里的像素起点**，`workingSize` 是整张工作图的像素尺寸。
-    /// Vision 的 `boundingBox` 是相对传入位图的归一化坐标，这里要换算成
+    /// tileOrigin 是这片在**工作图里的像素起点**，workingSize 是整张工作图的像素尺寸。
+    /// Vision 的 boundingBox 是相对传入位图的归一化坐标，这里要换算成
     /// 「相对整张工作图、左上原点」的口径，所以片偏移和工作图尺寸都得传进来。
     private static func recognizeLines(
         cgImage: CGImage,
@@ -204,7 +343,7 @@ enum ChatOCRService {
         request.usesLanguageCorrection = true
         request.recognitionLanguages = languageHints
         // 我们本来就要中英混排，自动检测语言只会多花时间。
-        if #available(iOS 16.0, *) {
+        if #available(iOS 16.0, macOS 13.0, *) {
             request.automaticallyDetectsLanguage = false
         }
 
@@ -219,7 +358,7 @@ enum ChatOCRService {
         let observations = request.results ?? []
         return observations.compactMap { observation in
             guard let candidate = observation.topCandidates(1).first else { return nil }
-            let text = candidate.string.trimmed
+            let text = ocrTrimmed(candidate.string)
             guard !text.isEmpty else { return nil }
             return ChatOCRLine(
                 text: text,
@@ -238,7 +377,7 @@ enum ChatOCRService {
 
     /// Vision（左下原点，相对传进去的那张位图）→ 我们的口径（左上原点，**相对整张工作图归一化**）。
     ///
-    /// 关键：除以的是 `workingWidth/workingHeight`（整张工作图），不是单片的像素尺寸。
+    /// 关键：除以的是 workingWidth/workingHeight（整张工作图），不是单片的像素尺寸。
     /// 用片尺寸做分母会把每一片纵向拉伸（1200 高的片被当成整图高，结果整体偏下、行高翻几倍）。
     static func box(
         fromVisionBoundingBox rect: CGRect,
@@ -258,6 +397,30 @@ enum ChatOCRService {
 
     // MARK: 图片预处理
 
+    /// 把 CGImage 渲染成指定尺寸的正立位图（纯 CoreGraphics，macOS 上也能跑）。
+    private static func render(_ image: CGImage, to target: CGSize) -> CGImage? {
+        let width = max(1, Int(target.width.rounded()))
+        let height = max(1, Int(target.height.rounded()))
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
+        ) else { return nil }
+        context.interpolationQuality = .high
+        // 深色截图带透明通道时，垫白底比留黑底更接近人眼看到的对比。
+        context.setFillColor(red: 1, green: 1, blue: 1, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
+    }
+
+#if canImport(UIKit)
     /// 把 EXIF 方向烧进像素后的原始像素尺寸。
     private static func orientedPixelSize(of image: UIImage) -> CGSize {
         let size = image.size
@@ -267,7 +430,8 @@ enum ChatOCRService {
 
     /// 重画一遍：一次解决三件事 —— 缩放、把 EXIF 方向烧进像素、拿到确定的位图。
     ///
-    /// 缩放比例由 `ChatOCRTilingPlanner` 算好，这里只负责照做（不在这个文件里再定一套口径）。
+    /// 缩放比例由 ChatOCRTilingPlanner 算好，这里只负责照做（不在这个文件里再定一套口径）。
+    /// 直接画到目标尺寸、不经过全尺寸中间图，长截图的内存才守得住。
     private static func redraw(_ image: UIImage, to target: CGSize) -> CGImage? {
         let pixelTarget = CGSize(
             width: max(1, target.width.rounded()),
@@ -280,15 +444,15 @@ enum ChatOCRService {
         format.opaque = true
         let renderer = UIGraphicsImageRenderer(size: pixelTarget, format: format)
         let redrawn = renderer.image { context in
-            // 深色截图带透明通道时，垫白底比留黑底更接近人眼看到的对比。
             UIColor.white.setFill()
             context.fill(CGRect(origin: .zero, size: pixelTarget))
             image.draw(in: CGRect(origin: .zero, size: pixelTarget))
         }
         return redrawn.cgImage
     }
+#endif
 
-    /// 从工作图里裁一片。`tile` 是工作图像素坐标，已经保证落在图内。
+    /// 从工作图里裁一片。tile 是工作图像素坐标，已经保证落在图内。
     private static func crop(_ image: CGImage, to tile: ChatPixelRect) -> CGImage? {
         let rect = CGRect(
             x: tile.x.rounded(.down),
@@ -311,4 +475,10 @@ enum ChatOCRService {
             return .unsupportedImage(error.localizedDescription)
         }
     }
+}
+
+/// 自带一份 trim，不用 GoutouConfig.swift 里那份 String.trimmed：
+/// 那个文件不在 CI 的独立编译范围里，自己带着才能单飞。
+private func ocrTrimmed(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines)
 }

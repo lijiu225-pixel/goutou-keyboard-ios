@@ -270,16 +270,16 @@ struct ChatOCRCoordinateMapper: Equatable {
 
     /// 把工作图归一化坐标（0...1，左上原点）换成原图归一化坐标。
     ///
-    /// 两边都是「归一化」量纲时，缩放比可以直接相乘：
-    /// 原图归一化 = 工作图归一化 × (原图边长 / 工作图边长) = 工作图归一化 ÷ scale。
+    /// **系数是 1**：两边都是「相对自己边长的归一化」，均匀缩放不改变归一化坐标。
+    /// 推导：工作图 = 原图 × scale，所以
+    /// x_原图归一化 = x_工作图像素 / scale / 原图宽 = x_工作图像素 / 工作图宽 = x_工作图归一化。
+    ///
+    /// 这里曾经乘 1/scale —— 那是把「归一化」当成「像素」算了一遍，
+    /// 于是**任何被降采样的普通截图**（例如 1290×2796 缩到高 2400）整张图的内容
+    /// 都会被放大到右下角，贴边的框直接跑出 0...1。单次识别现在也走 map(lines:tileOrigin:.zero)，
+    /// 这条换算只作为口径说明保留。
     func normalizedBox(fromWorkingNormalized box: ChatLayoutBox) -> ChatLayoutBox {
-        let factor = inverseScale
-        return ChatLayoutBox(
-            minX: box.minX * factor,
-            minY: box.minY * factor,
-            maxX: box.maxX * factor,
-            maxY: box.maxY * factor
-        )
+        box
     }
 
     /// 把一片的识别结果换算回**原图归一化**坐标。
