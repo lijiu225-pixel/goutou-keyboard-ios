@@ -197,9 +197,11 @@ var gatedChat = SimulatedPipeline()
 gatedChat.reset(generation: 1)
 _ = gatedChat.ingest(chatScreen(), at: t0)
 _ = gatedChat.ingest(chatScreen(), at: t0.addingTimeInterval(0.8))
+_ = gatedChat.ingest(chatScreen(), at: t0.addingTimeInterval(1.6))
 let inChatMessages = gatedChat.system.snapshot().messages
+expect(!inChatMessages.isEmpty, "15b. 聊天界面里真的积累出了稳定消息")
 _ = autoSync.noteTimeline(messages: inChatMessages, now: t0.addingTimeInterval(1.6))
-expect(autoSync.pending != nil, "15b. 聊天界面里的稳定聊天会排队等待自动同步")
+expect(autoSync.pending != nil, "15c. 聊天界面里的稳定聊天会排队等待自动同步")
 
 // 离开聊天界面：控制器会调 noteLeftChatScene（＝取消排队），并且不再提交新消息
 _ = autoSync.clearLiveChat()
