@@ -81,6 +81,24 @@ struct LiveScreenCaptureView: View {
                 Text("只放在内存里，最多 \(LiveChatGeometryConfiguration.default.maxTimelineMessages) 条；不会自动送去 AI。「整理当前实时聊天」会把这一刻冻结成一份快照，让你改完再保存给键盘；清空只清这里的实时结果，不会停止屏幕捕获、也不会删除已经共享给键盘的聊天。")
             }
 
+            Section {
+                Toggle("自动同步给狗头军师", isOn: Binding(
+                    get: { manager.isAutoSyncEnabled },
+                    set: { manager.setAutoSyncEnabled($0) }
+                ))
+                LabeledContent("状态", value: manager.autoSyncState.title)
+                if let at = manager.autoSyncLastSyncAt {
+                    LabeledContent("最后成功同步", value: "\(manager.autoSyncLastCount) 条 · \(Self.timeFormatter.string(from: at))")
+                }
+                if case .pausedAfterManualSave = manager.autoSyncState {
+                    Button("继续自动同步") { manager.setAutoSyncEnabled(true) }
+                }
+            } header: {
+                Text("自动同步")
+            } footer: {
+                Text("开启后，角色明确且稳定的实时聊天会自动更新到共享聊天，你不用每次回来整理保存。不会自动分析、不会自动插入、也不会自动发送；每次重新开始捕获都要重新开启。有「未确定」的消息时会暂停自动同步并保留上一份成功结果；人工确认保存过之后也会暂停，需要你再次主动开启。")
+            }
+
             if manager.chat.showsDiscontinuity {
                 Section {
                     Label("检测到不连续聊天区域：这一屏和已记录的内容没有可靠重叠，先不拼接。", systemImage: "exclamationmark.triangle")

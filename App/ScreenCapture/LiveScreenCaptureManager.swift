@@ -42,10 +42,16 @@ final class LiveScreenCaptureManager: ObservableObject {
     @Published var reviewDraft: LiveChatReviewDraft?
     /// 保存结果提示（成功或失败），只给人看。
     @Published private(set) var reviewNote: String?
+    /// 阶段 12D：自动同步状态（默认关闭，只有用户主动开启才会写共享聊天）。
+    @Published private(set) var autoSyncState: LiveChatAutoSyncState = .disabled
+    @Published private(set) var autoSyncLastSyncAt: Date?
+    @Published private(set) var autoSyncLastCount = 0
 
     private let sampleQueue = DispatchQueue(label: "goutou.live.capture.samples")
     private let ocrQueue = DispatchQueue(label: "goutou.live.capture.ocr", qos: .utility)
     private let chatEngine = LiveChatEngineBox()
+    /// 阶段 12D 的自动同步：和聊天引擎同一条串行队列，不需要额外加锁。
+    private let autoSync: LiveChatAutoSyncCoordinator
     /// OCR 在跑时最多留一帧最新画面（SCStream / bridge 都是 Any，靠 availability 再转回来）。
     private var stream: AnyObject?
     private var pickerBridge: AnyObject?
@@ -54,6 +60,23 @@ final class LiveScreenCaptureManager: ObservableObject {
 
     init() {
         model = LiveScreenCaptureModel(isSupported: LiveScreenCaptureManager.isSystemSupported)
+        autoSync = LiveChatAutoSyncCoordinator(queue: ocrQueue)
+        autoSync.onStateChange = { [weak self] state, lastSyncAt, lastCount in
+            Task { @MainActor in
+                guard let self else { return }
+                self.autoSyncState = state
+                self.autoSyncLastSyncAt = lastSyncAt
+                self.autoSyncLastCount = lastCount
+            }
+        }
+    }
+
+    /// UI 开关：只有「关闭」和「人工保存后暂停」算没开。
+    var isAutoSyncEnabled: Bool {
+        switch autoSyncState {
+        case .disabled, .pausedAfterManualSave: return false
+        default: return true
+        }
     }
 
     /// 系统是否具备 iOS 版 ScreenCaptureKit（iOS 27+ 且 SDK 里有这个 framework）。
@@ -73,7 +96,12 @@ final class LiveScreenCaptureManager: ObservableObject {
         chat = .empty
         let engine = chatEngine
         let newGeneration = model.generation
-        ocrQueue.async { _ = engine.reset(generation: newGeneration) }
+        let sync = autoSync
+        ocrQueue.async {
+            _ = engine.reset(generation: newGeneration)
+            // 新 session：自动同步回到「关闭」，必须由用户重新主动开启
+            sync.resetForNewSession(generation: newGeneration)
+        }
         #if canImport(ScreenCaptureKit)
         if #available(iOS 27.0, *) {
             let bridge = LiveContentSharingPickerBridge(owner: self)
@@ -92,6 +120,8 @@ final class LiveScreenCaptureManager: ObservableObject {
     func stop() {
         guard model.beginStop() else { return }
         pendingFrame = nil
+        let sync = autoSync
+        ocrQueue.async { sync.stop() }      // 取消排队 + 关闭开关；已共享成功的聊天不动
         #if canImport(ScreenCaptureKit)
         if #available(iOS 27.0, *) {
             let current = stream as? SCStream
@@ -119,11 +149,20 @@ final class LiveScreenCaptureManager: ObservableObject {
     func clearLiveChat() {
         chat = .empty
         let engine = chatEngine
+        let sync = autoSync
         let generation = model.generation
         ocrQueue.async { [weak self] in
+            sync.clearLiveChat()            // 只取消排队，不删已共享出去的聊天
             let snapshot = engine.reset(generation: generation)
             Task { @MainActor in self?.chat = snapshot }
         }
+    }
+
+    /// 用户主动开关「自动同步给狗头军师」。默认关闭，而且要每个 capture session 重新授权。
+    func setAutoSyncEnabled(_ enabled: Bool) {
+        let messages = chat.messages          // 主线程上取一份当前时间线的快照
+        let sync = autoSync
+        ocrQueue.async { sync.setEnabled(enabled, messages: messages) }
     }
 
     // MARK: - 阶段 12C：实时聊天 → 用户确认 → 现有共享聊天
@@ -160,6 +199,9 @@ final class LiveScreenCaptureManager: ObservableObject {
         do {
             let snapshot = try LiveChatReviewSaver(store: SharedChatStore()).save(draft)
             reviewNote = "已保存 \(snapshot.messages.count) 条实时聊天，去键盘点『读取识别聊天』。"
+            // 人工确认的结果优先级最高：立刻暂停自动同步，别让未修正的时间线把它盖掉
+            let sync = autoSync
+            ocrQueue.async { sync.noteManualSaveSucceeded() }
         } catch {
             // 失败只显示原因，绝不显示成功提示
             reviewNote = error.localizedDescription
@@ -238,6 +280,7 @@ final class LiveScreenCaptureManager: ObservableObject {
         model.ocrDidStart(at: Date())
         let languages = ChatOCRService.defaultLanguageHints
         let engine = chatEngine
+        let sync = autoSync
         ocrQueue.async { [weak self] in
             let result: Result<LiveOCRSnapshot, LiveOCRFailure>
             do {
@@ -257,6 +300,10 @@ final class LiveScreenCaptureManager: ObservableObject {
                     timestamp: snapshot.timestamp,
                     generation: generation
                 )
+                // 阶段 12D：时间线更新后让自动同步（如果用户开着）判断要不要 debounce 写一次
+                if let chatSnapshot {
+                    sync.noteTimeline(chatSnapshot.messages, generation: generation)
+                }
             }
             Task { @MainActor in
                 self?.finishOCR(result, chat: chatSnapshot, generation: generation)

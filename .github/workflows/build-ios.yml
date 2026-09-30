@@ -191,6 +191,32 @@ jobs:
             -o "$RUNNER_TEMP/livechatreviewcheck"
           "$RUNNER_TEMP/livechatreviewcheck"
 
+      # 阶段 12D：用户主动开启的自动同步（授权 / 资格 / fingerprint / debounce / 并发 / 代际 / 人工防覆盖）。
+      - name: Live chat auto sync contract
+        run: |
+          swiftc -swift-version 5 \
+            Shared/SharedConstants.swift \
+            Shared/GoutouChatClipboard.swift \
+            Shared/SharedChatStore.swift \
+            Keyboard/GoutouConfig.swift \
+            App/ScreenCapture/LiveOCRObservation.swift \
+            App/ScreenCapture/LiveOCRSnapshot.swift \
+            App/ScreenCapture/LiveChatGeometryConfiguration.swift \
+            App/ScreenCapture/LiveChatCandidate.swift \
+            App/ScreenCapture/LiveChatRoleClassifier.swift \
+            App/ScreenCapture/LiveChatBlockGrouper.swift \
+            App/ScreenCapture/LiveChatStabilizer.swift \
+            App/ScreenCapture/LiveChatTimeline.swift \
+            App/ScreenCapture/LiveChatSystem.swift \
+            App/ScreenCapture/LiveChatReviewDraft.swift \
+            App/ScreenCapture/LiveChatAutoSyncConfiguration.swift \
+            App/ScreenCapture/LiveChatAutoSyncState.swift \
+            App/ScreenCapture/LiveChatAutoSyncSession.swift \
+            App/ScreenCapture/LiveChatAutoSyncCoordinator.swift \
+            tools/LiveChatAutoSyncCheck/main.swift \
+            -o "$RUNNER_TEMP/livechatautosynccheck"
+          "$RUNNER_TEMP/livechatautosynccheck"
+
       - name: Generate Xcode project
         run: |
           xcodegen generate
