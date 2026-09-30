@@ -263,6 +263,16 @@ func runVisionSyntheticCheck(dark: Bool) -> [String] {
         failures.append("\(label)：820x2900 应该走单次识别，实际 \(result.strategy)")
     }
 
+    print("[(label)] Vision 认出的原始行（含气泡证据）：")
+    for line in result.lines {
+        let bubble = line.bubble.map { "气泡=[(round($0.span.minX * 1000) / 1000),(round($0.span.maxX * 1000) / 1000)] 头像=($0.avatarSide.rawValue)" } ?? "无气泡"
+        print(
+            "    box=[(round(line.box.minX * 1000) / 1000),(round(line.box.minY * 1000) / 1000),"
+                + "(round(line.box.maxX * 1000) / 1000),(round(line.box.maxY * 1000) / 1000)] "
+                + "(bubble) (line.text)"
+        )
+    }
+
     let analysis = ChatLayoutParser.analyze(lines: result.lines)
 
     // 把这次真 OCR 认出来的每一行都写进日志（都是合成文字，不含任何真实内容），
