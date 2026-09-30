@@ -237,6 +237,24 @@ jobs:
             -o "$RUNNER_TEMP/sharedchatupdatecheck"
           "$RUNNER_TEMP/sharedchatupdatecheck"
 
+      - name: Shared chat automatic load contract
+        run: |
+          swiftc -swift-version 5 \
+            Shared/SharedConstants.swift \
+            Shared/GoutouChatClipboard.swift \
+            Shared/SharedChatStore.swift \
+            Shared/SharedChatFingerprint.swift \
+            Keyboard/GoutouConfig.swift \
+            Keyboard/GoutouPrompt.swift \
+            Keyboard/GoutouAIClient.swift \
+            Keyboard/RecognizedChatContext.swift \
+            Keyboard/RecognizedChatAnalysis.swift \
+            Keyboard/SharedChatUpdateDetector.swift \
+            Keyboard/SharedChatAutoLoader.swift \
+            tools/SharedChatAutoLoadCheck/main.swift \
+            -o "$RUNNER_TEMP/sharedchatautoloadcheck"
+          "$RUNNER_TEMP/sharedchatautoloadcheck"
+
       # 阶段 12E：聊天界面门控（只有稳定判定为聊天界面才允许 OCR → 时间线 → 自动同步）。
       - name: Chat screen detection contract
         run: |
@@ -259,6 +277,7 @@ jobs:
             App/ScreenCapture/LiveChatAutoSyncState.swift \
             App/ScreenCapture/LiveChatAutoSyncSession.swift \
             App/ScreenCapture/ChatSceneGate.swift \
+            App/ScreenCapture/LiveChatScenePipeline.swift \
             tools/ChatScreenDetectionCheck/main.swift \
             -o "$RUNNER_TEMP/chatscreendetectioncheck"
           "$RUNNER_TEMP/chatscreendetectioncheck"
@@ -293,6 +312,20 @@ jobs:
             tools/CaptureActivityCheck/main.swift \
             -o "$RUNNER_TEMP/captureactivitycheck"
           "$RUNNER_TEMP/captureactivitycheck"
+
+      - name: FINAL baseline regression proof
+        run: python3 tools/run-final-regressions.py
+
+      - name: Inspect actual iOS SDK framework interfaces
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          for framework in ActivityKit WidgetKit ScreenCaptureKit; do
+            test -d "$SDK/System/Library/Frameworks/$framework.framework"
+            echo "Verified SDK framework: $framework"
+          done
+          grep -m 3 -E 'func (request|update|end)|static func request' "$SDK/System/Library/Frameworks/ActivityKit.framework/Modules/ActivityKit.swiftmodule/arm64e-apple-ios.swiftinterface" || true
 
       - name: Generate Xcode project
         run: |
@@ -343,7 +376,7 @@ jobs:
 
       - name: Package unsigned IPA
         run: |
-          UNSIGNED_IPA="$(pwd)/$APP_NAME-unsigned-$BUILD_NUM.ipa"
+          UNSIGNED_IPA="$(pwd)/$APP_NAME-Final-unsigned-$BUILD_NUM.ipa"
           echo "UNSIGNED_IPA=$UNSIGNED_IPA" >> $GITHUB_ENV
           cd "$RUNNER_TEMP/unsigned"
           mkdir -p Payload
@@ -647,7 +680,7 @@ jobs:
             echo "## 构建结果"
             echo ""
             echo "- 版本: ${VERSION} (build ${BUILD_NUM})"
-            echo "- 未签名 IPA: \`${APP_NAME}-unsigned-${BUILD_NUM}.ipa\`（Artifacts，可侧载，不需要 Apple 开发者账号）"
+            echo "- 未签名 IPA: \`${APP_NAME}-Final-unsigned-${BUILD_NUM}.ipa\`（Artifacts，可侧载，不需要 Apple 开发者账号）"
             if [ "${{ steps.signing.outputs.enabled }}" = "true" ]; then
               echo "- 已签名 ad-hoc IPA: \`${IPA_NAME}\`"
               echo "- OTA 装机页（Safari 打开）: ${OTA_URL_BASE}/install.html"

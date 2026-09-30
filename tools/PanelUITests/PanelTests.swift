@@ -2,6 +2,27 @@ import XCTest
 import UIKit
 
 final class PanelTests: XCTestCase {
+    @MainActor
+    func testFinalAutomaticContextShowsAnalysisWithoutPreviewOrUse() throws {
+        let messages = [GoutouChatClipboardMessage(role: .other, text: "合成消息")]
+        var snapshot = GoutouPanelSnapshot(state: .empty(banner: nil), segments: [], memory: [],
+            profiles: [], activeProfileID: UUID(), lastResult: nil, configSummary: "", memoryNote: nil)
+        snapshot.activeRecognizedChat = RecognizedChatContext(messages: messages, updatedAt: Date())
+        snapshot.automaticChatNotice = "已自动载入最新聊天 · 1 条"
+        let panel = GoutouPanelView(frame: CGRect(x: 0, y: 0, width: 390, height: 302))
+        let recorder = PanelActionRecorder()
+        panel.delegate = recorder
+        panel.render(snapshot)
+        XCTAssertTrue(recorder.actions.isEmpty, "Rendering automatic context cannot request AI")
+        let titles = descendants(panel).compactMap { ($0 as? UIButton)?.title(for: .normal) }
+        XCTAssertTrue(titles.contains("分析这段聊天"))
+        XCTAssertFalse(titles.contains("使用这份聊天"))
+        XCTAssertFalse(titles.contains("使用最新聊天"))
+        try tap("分析这段聊天", in: panel)
+        XCTAssertEqual(recorder.actions.count, 1)
+        XCTAssertTrue(recorder.actions.contains { if case .analyzeRecognizedChat = $0 { return true }; return false })
+    }
+
     func testPaginationPreservesEveryCharacter() {
         let samples = [String(repeating: "合成测试", count: 4106),
                        String(repeating: "行\n", count: 900),

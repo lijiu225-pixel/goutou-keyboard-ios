@@ -9,10 +9,11 @@ import Foundation
 ///
 /// 只用于内存比较，**绝不写进正式 JSON**；也不用带随机 seed 的 Swift `Hasher`。
 enum SharedChatFingerprint {
-    static func make(messages: [GoutouChatClipboardMessage], version: String = "v1") -> String {
-        var text = version
+    static func make(messages: [GoutouChatClipboardMessage], version: String = "v2") -> String {
+        var text = "\(version.utf8.count):\(version)"
         for message in messages {
-            text += "\n\(message.role.rawValue)|\(message.text)"
+            let role = message.role.rawValue
+            text += "\(role.utf8.count):\(role)\(message.text.utf8.count):\(message.text)"
         }
         let digest = SHA256.hash(data: Data(text.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()

@@ -27,6 +27,8 @@ struct GoutouCaptureActivityAttributes: ActivityAttributes {
         var lastSyncAt: Date?
         /// 出错时的简短原因（不含正文 / 路径）
         var errorText: String?
+        var statusText: String
+        var compactText: String
     }
 
     /// 一轮 capture session 的标识：换了 session 就是新的 Activity

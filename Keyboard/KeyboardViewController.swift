@@ -76,6 +76,7 @@ final class KeyboardViewController: UIInputViewController {
     private var sharedChatUpdate = SharedChatUpdateState.idle
     /// 键盘当前已经预览过或使用过的共享聊天指纹：用来判断「是不是同一份聊天」。
     private var knownSharedChatFingerprint: String?
+    private var automaticChatNotice: String?
     /// 阶段 9：识别聊天分析的状态机 + 在途请求（只有用户点「分析这段聊天」才会赋值）
     private var recognizedChatAnalysis = RecognizedChatAnalysisSession()
     private var recognizedChatTask: URLSessionTask?
@@ -462,7 +463,7 @@ final class KeyboardViewController: UIInputViewController {
         nineKeyView?.isHidden = true
         mentorPanel?.isHidden = false
         mentorPanel?.resetScreen()
-        // 阶段 12E：面板打开时检查一次共享聊天有没有更新（只检查，不替换任何状态）
+        // FINAL：狗头入口事件自动读取并采用最新的合法聊天。
         checkForSharedChatUpdate()
         refreshPanel()
     }
@@ -528,6 +529,7 @@ final class KeyboardViewController: UIInputViewController {
             memoryEditDraft: memoryEditDraft,
             memoryPendingDeleteID: memoryPendingDeleteID,
             sharedChat: recognizedChat.preview,
+            automaticChatNotice: automaticChatNotice,
             sharedChatError: recognizedChat.errorMessage,
             activeRecognizedChat: recognizedChat.active,
             pendingSharedChat: sharedChatUpdate.pending,
@@ -717,24 +719,27 @@ final class KeyboardViewController: UIInputViewController {
         recognizedChatAnalysis.invalidate()
     }
 
-    /// 阶段 12E：检查共享聊天有没有比键盘当前这份更新。
-    ///
-    /// 只读文件、只记状态：不替换当前上下文、不动 AI、不发请求、不写任何东西。
-    /// 检查失败也是「非破坏性」的——当前 Active / 分析 / 回复一律保持原样。
+    /// FINAL: opening the dog entry reads validated local data and adopts new content.
+    /// No analysis request can originate here; failures preserve the existing context.
     private func checkForSharedChatUpdate() {
         guard hasFullAccess else {
             // App Group 读不到就别假装发现了更新（自动检查与网络 AI 的完全访问不是一回事，这里只按能否读容器判断）
             sharedChatUpdate = .idle
             return
         }
-        do {
-            let snapshot = try SharedChatStore().read()
-            sharedChatUpdate = SharedChatUpdateDetector.evaluate(
-                shared: snapshot,
-                knownFingerprint: knownSharedChatFingerprint
-            )
-        } catch {
-            sharedChatUpdate = .failedNonDestructive(error.localizedDescription)
+        let previousTask = recognizedChatTask
+        let loaded = SharedChatAutoLoader.load(read: { try SharedChatStore().read() },
+            chat: &recognizedChat, analysis: &recognizedChatAnalysis,
+            cancelPrevious: { previousTask?.cancel() })
+        switch loaded {
+        case .adopted(let count):
+            recognizedChatTask = nil
+            automaticChatNotice = "已自动载入最新聊天 · \(count) 条"
+            sharedChatUpdate = .upToDate
+        case .unchanged:
+            automaticChatNotice = recognizedChat.active.map { "当前聊天 · \($0.messageCount) 条" }
+        case .failed:
+            break
         }
     }
 
@@ -770,7 +775,7 @@ final class KeyboardViewController: UIInputViewController {
 
         #if DEBUG
         // 只记条数：不打印 Prompt、消息正文、API Key。
-        print("[RecognizedChatAnalysis] request: \(activeContext.messages.count) messages")
+
         #endif
 
         recognizedChatTask = GoutouAIClient.analyzeChat(
@@ -837,7 +842,7 @@ final class KeyboardViewController: UIInputViewController {
         lastMemorySelection = selection
         #if DEBUG
         print("[MemorySelector] 选中 \(chosen.count) 条 / \(selection.totalCharacters) 字（候选 \(memory.count) 条，其中 stale \(selection.staleCount) 条）")
-        selection.debugLines.forEach { print("  \($0)") }
+
         #endif
         // 近期状态标一下，免得模型把它当永久事实
         let memoryLines = chosen.map { $0.category.isStable ? $0.content : "（近期）\($0.content)" }

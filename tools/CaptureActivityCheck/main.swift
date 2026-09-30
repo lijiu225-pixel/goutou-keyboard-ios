@@ -165,7 +165,7 @@ let failedContent = GoutouCaptureActivityContentBuilder.make(
     syncedCount: 0,
     lastSyncAt: nil
 )
-expect(failedContent.errorText == "同步失败：写不进去", "13. 失败时带上错误状态")
+expect(failedContent.errorText == "自动同步失败", "13. 失败时带上错误状态")
 expect(!failedContent.capturing, "13b. 失败后不再是「捕获中」")
 expect(failer.captureStopped(failedContent, now: t0.addingTimeInterval(2)) == .end(failedContent),
        "13c. 失败后 Activity 正确结束（End 带着错误状态）")
@@ -262,5 +262,29 @@ guard let widgetInfo = try? String(contentsOfFile: "Widget/Info.plist", encoding
 }
 expect(widgetInfo.contains("com.apple.widgetkit-extension"), "19b. Widget 扩展的 point 正确")
 expect(!widgetInfo.contains("latest_chat"), "19c. Widget 扩展的 plist 里没有聊天文件")
+
+var trailing = GoutouCaptureActivityPlanner()
+_ = trailing.captureStarted(sessionID: "coalesce", content: content(), now: t0)
+_ = trailing.stateChanged(content(timeline: 9), now: t0.addingTimeInterval(0.2))
+expect(trailing.pendingDeadline == t0.addingTimeInterval(1), "coalesced update has a deadline")
+expect(trailing.flush(now: t0.addingTimeInterval(1)) == .update(content(timeline: 9)), "last change delivered without another frame")
+expect(trailing.captureStarted(sessionID: "coalesce", content: content(timeline: 9), now: t0.addingTimeInterval(2)) == .none,
+       "duplicate captureStarted never creates a second activity")
+_ = trailing.stateChanged(content(timeline: 10), now: t0.addingTimeInterval(1.1))
+_ = trailing.captureStopped(content(capturing: false), now: t0.addingTimeInterval(1.2))
+expect(trailing.flush(now: t0.addingTimeInterval(5)) == .none, "stop cancels pending update")
+let secretError = GoutouCaptureActivityContentBuilder.make(captureState: .capturing, verdict: .activeChat,
+    autoSync: .failed("fictional-private-body /private/path Authorization: SECRET"), timelineCount: 0,
+    unknownCount: 0, syncedCount: 0, lastSyncAt: nil)
+expect(!secretError.summary.contains("SECRET") && !secretError.summary.contains("private"), "errors cannot leak payload or paths")
+expect(content(unknown: 2).compactText == "!", "compact unknown signal")
+expect(content(gate: .inactive).compactText == "Ⅱ", "compact inactive pause")
+expect(content(gate: .inactive).statusText == "未在聊天界面 · 已暂停识别", "inactive is not described as recognizing")
+for state in [LiveChatAutoSyncState.disabled, .waitingForChat, .scheduled, .syncing,
+              .blockedUnknown(count: 2), .pausedAfterManualSave, .failed("synthetic")] {
+    let built = GoutouCaptureActivityContentBuilder.make(captureState: .capturing, verdict: .activeChat,
+        autoSync: state, timelineCount: 3, unknownCount: 0, syncedCount: 1, lastSyncAt: t0)
+    expect(!built.autoSyncText.isEmpty, "all sync states mapped")
+}
 
 print("CaptureActivityCheck passed (\(checks) assertions; pure logic + source contract; no network)")

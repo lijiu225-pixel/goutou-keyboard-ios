@@ -15,6 +15,8 @@ final class GoutouCaptureActivityController {
     private var planner = GoutouCaptureActivityPlanner()
     /// 用 AnyObject 存，让不支持 ActivityKit 的 SDK 也能编译（和 ScreenCaptureKit 同一套做法）
     private var activity: AnyObject?
+    private var scheduled: DispatchWorkItem?
+    private var updateChain: Task<Void, Never>?
     /// 上一次 ActivityKit 失败的简短原因（界面上只用来提示「状态没起来」）
     private(set) var lastError: String?
 
@@ -26,9 +28,22 @@ final class GoutouCaptureActivityController {
 
     func stateChanged(_ content: GoutouCaptureActivityContent, now: Date = Date()) {
         apply(planner.stateChanged(content, now: now))
+        scheduled?.cancel()
+        scheduled = nil
+        guard let deadline = planner.pendingDeadline else { return }
+        let sessionID = planner.sessionID
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, self.planner.sessionID == sessionID else { return }
+            self.scheduled = nil
+            self.apply(self.planner.flush())
+        }
+        scheduled = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, deadline.timeIntervalSince(now)), execute: item)
     }
 
     func captureStopped(_ content: GoutouCaptureActivityContent, now: Date = Date()) {
+        scheduled?.cancel()
+        scheduled = nil
         apply(planner.captureStopped(content, now: now))
     }
 
@@ -62,12 +77,18 @@ final class GoutouCaptureActivityController {
 
             case .update(let content):
                 guard let current = activity as? Activity<GoutouCaptureActivityAttributes> else { break }
-                Task { await current.update(ActivityContent(state: Self.state(from: content), staleDate: nil)) }
+                let previous = updateChain
+                updateChain = Task {
+                    await previous?.value
+                    await current.update(ActivityContent(state: Self.state(from: content), staleDate: nil))
+                }
 
             case .end(let content):
                 guard let current = activity as? Activity<GoutouCaptureActivityAttributes> else { break }
                 activity = nil
-                Task {
+                let previous = updateChain
+                updateChain = Task {
+                    await previous?.value
                     await current.end(
                         ActivityContent(state: Self.state(from: content), staleDate: nil),
                         dismissalPolicy: .immediate
@@ -94,6 +115,7 @@ final class GoutouCaptureActivityController {
             unknownCount: content.unknownCount,
             lastSyncAt: content.lastSyncAt,
             errorText: content.errorText
+            , statusText: content.statusText, compactText: content.compactText
         )
     }
     #endif

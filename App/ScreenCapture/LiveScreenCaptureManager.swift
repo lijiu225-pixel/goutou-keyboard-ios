@@ -9,58 +9,6 @@ import SwiftUI
 import ScreenCaptureKit
 #endif
 
-/// 阶段 12B 的聊天状态盒：只在 `ocrQueue` 上访问，避免和 MainActor 抢状态。
-/// 一帧的处理结果：时间线快照 + 场景判定 + 这一帧有没有真的提交给时间线。
-struct LiveChatFrameOutcome: Equatable {
-    var chat: LiveChatSnapshot
-    var verdict: ChatSceneVerdict
-    var startsNewSession: Bool
-    var submitted: Bool
-}
-
-private final class LiveChatEngineBox {
-    private var system = LiveChatSystem()
-    private var gate = ChatSceneGate()
-    private var geometry = LiveChatGeometryConfiguration.default
-    private var sceneConfig = ChatSceneGateConfiguration.default
-    private var sessionGeneration = 0
-
-    /// 先算候选块与场景证据；只有判定为「聊天界面」时，才把候选提交给时间线。
-    func ingest(observations: [LiveOCRObservation], timestamp: Date, generation: Int) -> LiveChatFrameOutcome {
-        let inViewport = LiveChatViewportFilter.filter(observations, config: geometry)
-        let candidates = LiveChatBlockGrouper.group(inViewport, config: geometry, timestamp: timestamp)
-        let evidence = ChatSceneDetector.evidence(observations: observations, candidates: candidates, config: sceneConfig)
-        let decision = gate.update(
-            isChatFrame: ChatSceneDetector.isChatScene(evidence, config: sceneConfig),
-            titleFingerprint: evidence.topBarFingerprint,
-            config: sceneConfig
-        )
-
-        // 重新进入聊天 / 换了聊天对象 / 换了 capture：时间线重开，绝不混两个人的聊天
-        if generation != sessionGeneration || decision.startsNewSession {
-            sessionGeneration = generation
-            _ = system.reset(generation: generation)
-        }
-
-        guard decision.verdict == .activeChat else {
-            // 不在聊天界面：不向时间线提交任何东西
-            return LiveChatFrameOutcome(chat: system.snapshot(), verdict: decision.verdict,
-                                        startsNewSession: decision.startsNewSession, submitted: false)
-        }
-        let snapshot = system.ingest(candidates: candidates, timestamp: timestamp,
-                                     generation: generation, config: geometry)
-        return LiveChatFrameOutcome(chat: snapshot, verdict: decision.verdict,
-                                    startsNewSession: decision.startsNewSession, submitted: true)
-    }
-
-    func reset(generation: Int) -> LiveChatSnapshot {
-        sessionGeneration = generation
-        gate.reset()
-        system.reset(generation: generation)
-        return system.snapshot()
-    }
-}
-
 /// 阶段 12A：整屏捕获管理器。
 ///
 /// 只在主 App 里：键盘扩展绝不碰屏幕捕获。
@@ -90,6 +38,7 @@ final class LiveScreenCaptureManager: ObservableObject {
     private let sampleQueue = DispatchQueue(label: "goutou.live.capture.samples")
     private let ocrQueue = DispatchQueue(label: "goutou.live.capture.ocr", qos: .utility)
     private let chatEngine = LiveChatEngineBox()
+    private let captureFence = LiveCaptureFence()
     /// 阶段 12D 的自动同步：和聊天引擎同一条串行队列，不需要额外加锁。
     private let autoSync: LiveChatAutoSyncCoordinator
     /// 灵动岛 / 锁屏状态（ActivityKit 失败只记原因，绝不影响识别链路）
@@ -105,9 +54,13 @@ final class LiveScreenCaptureManager: ObservableObject {
     init() {
         model = LiveScreenCaptureModel(isSupported: LiveScreenCaptureManager.isSystemSupported)
         autoSync = LiveChatAutoSyncCoordinator(queue: ocrQueue)
+        let fence = captureFence
+        autoSync.canSave = { fence.isActive }
+        autoSync.saveSafely = { try fence.whileActive($0) }
         autoSync.onStateChange = { [weak self] state, lastSyncAt, lastCount in
+            let token = fence.currentToken
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, token == self.model.generation else { return }
                 self.autoSyncState = state
                 self.autoSyncLastSyncAt = lastSyncAt
                 self.autoSyncLastCount = lastCount
@@ -157,6 +110,9 @@ final class LiveScreenCaptureManager: ObservableObject {
 
     /// 捕获失败：进 `failed` 并收掉灵动岛状态（End 时带上错误文案，但不含正文 / 路径）。
     private func markCaptureDidFail(_ reason: String) {
+        captureFence.invalidate()
+        let sync = autoSync
+        ocrQueue.async { sync.stop() }
         model.captureDidFail(reason)
         noteCaptureActivityStopped()
     }
@@ -179,8 +135,13 @@ final class LiveScreenCaptureManager: ObservableObject {
         captureSessionID = UUID().uuidString
         // 阶段 12B：重新开始 = 新 session，实时聊天与稳定化状态一起清零，避免跨会话误拼。
         chat = .empty
+        sceneVerdict = .unknown
+        autoSyncState = .disabled
+        autoSyncLastSyncAt = nil
+        autoSyncLastCount = 0
         let engine = chatEngine
         let newGeneration = model.generation
+        captureFence.activate(newGeneration)
         let sync = autoSync
         ocrQueue.async {
             _ = engine.reset(generation: newGeneration)
@@ -204,6 +165,7 @@ final class LiveScreenCaptureManager: ObservableObject {
     /// 点「停止动态识别」：停 stream、移除输出、清观察者。多次点安全。
     func stop() {
         guard model.beginStop() else { return }
+        captureFence.invalidate()
         pendingFrame = nil
         let sync = autoSync
         ocrQueue.async { sync.stop() }      // 取消排队 + 关闭开关；已共享成功的聊天不动
@@ -249,9 +211,13 @@ final class LiveScreenCaptureManager: ObservableObject {
 
     /// 用户主动开关「自动同步给狗头军师」。默认关闭，而且要每个 capture session 重新授权。
     func setAutoSyncEnabled(_ enabled: Bool) {
-        let messages = chat.messages          // 主线程上取一份当前时间线的快照
+        guard model.state.isCapturing else { return }
         let sync = autoSync
-        ocrQueue.async { sync.setEnabled(enabled, messages: messages) }
+        let engine = chatEngine
+        ocrQueue.async {
+            sync.setEnabled(enabled, messages: engine.pipeline.allowsFullRecognition ? engine.pipeline.snapshot().messages : [])
+            if !engine.pipeline.allowsFullRecognition { sync.noteLeftChatScene() }
+        }
     }
 
     // MARK: - 阶段 12C：实时聊天 → 用户确认 → 现有共享聊天
@@ -285,15 +251,17 @@ final class LiveScreenCaptureManager: ObservableObject {
     /// 「保存给狗头军师」：只有用户点才写，走的还是现有 SharedChatStore（校验 / 原子写 / 错误模型都不变）。
     func saveLiveChatReview() {
         guard let draft = reviewDraft else { return }
-        do {
-            let snapshot = try LiveChatReviewSaver(store: SharedChatStore()).save(draft)
-            reviewNote = "已保存 \(snapshot.messages.count) 条实时聊天，去键盘点『读取识别聊天』。"
-            // 人工确认的结果优先级最高：立刻暂停自动同步，别让未修正的时间线把它盖掉
-            let sync = autoSync
-            ocrQueue.async { sync.noteManualSaveSucceeded() }
-        } catch {
-            // 失败只显示原因，绝不显示成功提示
-            reviewNote = error.localizedDescription
+        let sync = autoSync
+        ocrQueue.async { [weak self] in
+            do {
+                let snapshot = try LiveChatReviewSaver(store: SharedChatStore()).save(draft)
+                sync.noteManualSaveSucceeded()
+                Task { @MainActor in
+                    self?.reviewNote = "已保存 \(snapshot.messages.count) 条实时聊天，点击键盘狗头即可载入。"
+                }
+            } catch {
+                Task { @MainActor in self?.reviewNote = error.localizedDescription }
+            }
         }
     }
 
@@ -303,19 +271,24 @@ final class LiveScreenCaptureManager: ObservableObject {
         guard model.pickerDidSelectContent() else { return }
         #if canImport(ScreenCaptureKit)
         if #available(iOS 27.0, *), let contentFilter = filter as? SCContentFilter {
-            let bridge = LiveScreenStreamBridge(owner: self)
+            let bridge = LiveScreenStreamBridge(owner: self, generation: model.generation)
             streamBridge = bridge
             let configuration = SCStreamConfiguration()
             configuration.capturesAudio = false      // 只要画面，不要麦克风 / 系统声音
             let newStream = SCStream(filter: contentFilter, configuration: configuration, delegate: bridge)
             stream = newStream
+            let startedGeneration = model.generation
             Task { [weak self] in
                 do {
                     try newStream.addStreamOutput(bridge, type: .screen, sampleHandlerQueue: self?.sampleQueue)
                     try await newStream.startCapture()
-                    await MainActor.run { self?.markCaptureDidStart() }
+                    guard let self, self.model.generation == startedGeneration else {
+                        try? await newStream.stopCapture(); return
+                    }
+                    self.markCaptureDidStart()
                 } catch {
-                    await MainActor.run { self?.markCaptureDidFail("启动屏幕捕获失败") }
+                    guard let self, self.model.generation == startedGeneration else { return }
+                    self.markCaptureDidFail("启动屏幕捕获失败")
                 }
             }
             return
@@ -335,10 +308,14 @@ final class LiveScreenCaptureManager: ObservableObject {
         noteCaptureActivityStopped()
     }
 
-    func streamDidStopWithError(_ reason: String) {
+    func streamDidStopWithError(_ reason: String, generation: Int) {
+        guard generation == model.generation else { return }
         stream = nil
         streamBridge = nil
         pendingFrame = nil
+        captureFence.invalidate()
+        let sync = autoSync
+        ocrQueue.async { sync.stop() }
         model.captureDidStopWithError(reason)
         noteCaptureActivityStopped()   // 系统结束了共享：把灵动岛状态也收掉
     }
@@ -346,11 +323,12 @@ final class LiveScreenCaptureManager: ObservableObject {
     // MARK: - 帧 → OCR
 
     /// 由 stream 桥在 **sample 队列**上调用：只做便宜的校验与像素缓冲提取，主线程不碰 CMSampleBuffer。
-    nonisolated func handleSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
+    nonisolated func handleSampleBuffer(_ sampleBuffer: CMSampleBuffer, generation: Int) {
         guard CMSampleBufferIsValid(sampleBuffer),
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let orientation = LiveScreenCaptureManager.frameOrientation(sampleBuffer)
         Task { @MainActor in
+            guard generation == self.model.generation else { return }
             self.handleScreenFrame(pixelBuffer: pixelBuffer, orientation: orientation)
         }
     }
@@ -372,38 +350,37 @@ final class LiveScreenCaptureManager: ObservableObject {
         let languages = ChatOCRService.defaultLanguageHints
         let engine = chatEngine
         let sync = autoSync
+        let fence = captureFence
         ocrQueue.async { [weak self] in
-            let result: Result<LiveOCRSnapshot, LiveOCRFailure>
+            guard fence.isCurrent(generation) else { return }
+            var result: Result<LiveOCRSnapshot, LiveOCRFailure>
             do {
-                result = .success(try LiveScreenOCRProcessor.recognize(
-                    pixelBuffer: pixelBuffer,
-                    orientation: orientation,
-                    languages: languages
-                ))
+                let evidence = try ChatSceneProbe.recognize(pixelBuffer: pixelBuffer,
+                    orientation: orientation, languages: languages)
+                guard fence.isCurrent(generation) else { return }
+                engine.pipeline.detect(evidence)
+                if engine.pipeline.startsNewSession { sync.beginChatGeneration(engine.pipeline.chatGeneration) }
+                if engine.pipeline.allowsFullRecognition {
+                    let snapshot = try LiveScreenOCRProcessor.recognize(pixelBuffer: pixelBuffer,
+                        orientation: orientation, languages: languages)
+                    guard fence.isCurrent(generation) else { return }
+                    let before = engine.pipeline.chatGeneration
+                    let chat = engine.pipeline.ingest(snapshot.observations, at: snapshot.timestamp)
+                    if engine.pipeline.chatGeneration != before { sync.beginChatGeneration(engine.pipeline.chatGeneration) }
+                    sync.noteTimeline(chat.messages, generation: engine.pipeline.chatGeneration)
+                    result = .success(snapshot)
+                } else {
+                    sync.noteLeftChatScene()
+                    result = .success(LiveOCRSnapshot(timestamp: Date(), strings: [], observations: []))
+                }
             } catch {
+                sync.noteLeftChatScene()
                 result = .failure(LiveOCRFailure("这一帧识别失败"))
             }
-            var chatSnapshot: LiveChatSnapshot?
-            var sceneVerdict: ChatSceneVerdict?
-            if case .success(let snapshot) = result {
-                // 阶段 12B/12E：分组、场景判定、编辑距离、overlap 都在这个串行队列上做，不占主线程。
-                let outcome = engine.ingest(
-                    observations: snapshot.observations,
-                    timestamp: snapshot.timestamp,
-                    generation: generation
-                )
-                chatSnapshot = outcome.chat
-                sceneVerdict = outcome.verdict
-                if outcome.submitted {
-                    // 阶段 12D：时间线更新后让自动同步（如果用户开着）判断要不要 debounce 写一次
-                    sync.noteTimeline(outcome.chat.messages, generation: generation)
-                } else {
-                    // 阶段 12E：不在聊天界面 —— 不提交消息，也不让排队的自动同步写盘
-                    sync.noteLeftChatScene()
-                }
-            }
+            let chatSnapshot = engine.pipeline.snapshot()
+            let verdict = engine.pipeline.verdict
             Task { @MainActor in
-                self?.finishOCR(result, chat: chatSnapshot, verdict: sceneVerdict, generation: generation)
+                self?.finishOCR(result, chat: chatSnapshot, verdict: verdict, generation: generation)
             }
         }
     }
@@ -414,6 +391,7 @@ final class LiveScreenCaptureManager: ObservableObject {
         verdict: ChatSceneVerdict?,
         generation: Int
     ) {
+        guard generation == model.generation, model.state.isCapturing else { return }
         if let chatSnapshot { chat = chatSnapshot }
         if let verdict { sceneVerdict = verdict }
         // 灵动岛 / 锁屏只要「状态 + 计数」：规划器会去重 + 节流，不会每帧都推。
@@ -488,19 +466,50 @@ private final class LiveContentSharingPickerBridge: NSObject, SCContentSharingPi
 private final class LiveScreenStreamBridge: NSObject, SCStreamOutput, SCStreamDelegate {
     private weak var owner: LiveScreenCaptureManager?
 
-    init(owner: LiveScreenCaptureManager) {
+    private let generation: Int
+
+    init(owner: LiveScreenCaptureManager, generation: Int) {
+        self.generation = generation
         self.owner = owner
         super.init()
     }
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
         guard outputType == .screen else { return }      // 音频 / 其它类型一律不处理
-        owner?.handleSampleBuffer(sampleBuffer)
+        owner?.handleSampleBuffer(sampleBuffer, generation: generation)
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        Task { @MainActor [weak owner] in owner?.streamDidStopWithError("屏幕共享被系统结束") }
+        let token = generation
+        Task { @MainActor [weak owner] in owner?.streamDidStopWithError("屏幕共享被系统结束", generation: token) }
     }
 }
 
 #endif
+
+/// Access confined to the serial OCR queue.
+private final class LiveChatEngineBox {
+    var pipeline = LiveChatScenePipeline()
+    func reset(generation: Int) -> LiveChatSnapshot {
+        pipeline.reset()
+        return pipeline.snapshot()
+    }
+}
+
+/// Stop invalidates queued/in-flight work without waiting for expensive Vision processing.
+private final class LiveCaptureFence {
+    private let lock = NSLock()
+    private var generation: Int?
+    var isActive: Bool { lock.lock(); defer { lock.unlock() }; return generation != nil }
+    var currentToken: Int? { lock.lock(); defer { lock.unlock() }; return generation }
+    func whileActive(_ operation: () throws -> SharedChatSnapshot) rethrows -> SharedChatSnapshot? {
+        lock.lock(); defer { lock.unlock() }
+        guard generation != nil else { return nil }
+        return try operation()
+    }
+    func activate(_ token: Int) { lock.lock(); defer { lock.unlock() }; generation = token }
+    func invalidate() { lock.lock(); defer { lock.unlock() }; generation = nil }
+    func isCurrent(_ token: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }; return generation == token
+    }
+}

@@ -12,6 +12,9 @@ final class LiveChatAutoSyncCoordinator {
     private let queue: DispatchQueue
     private var session = LiveChatAutoSyncSession()
     private var scheduled: DispatchWorkItem?
+    private var scheduleRevision = 0
+    var canSave: () -> Bool = { true }
+    var saveSafely: (() throws -> SharedChatSnapshot) throws -> SharedChatSnapshot? = { try $0() }
 
     /// 状态变化回调：(状态, 最后成功同步时间, 最后成功条数)
     var onStateChange: ((LiveChatAutoSyncState, Date?, Int) -> Void)?
@@ -49,7 +52,13 @@ final class LiveChatAutoSyncCoordinator {
 
     /// 时间线每次更新都进来一次。
     func noteTimeline(_ messages: [LiveChatCandidate], generation: Int, now: Date = Date()) {
+        guard generation == session.generation else { return }
         apply(session.noteTimeline(messages: messages, now: now, config: config), now: now)
+    }
+
+    func beginChatGeneration(_ generation: Int) {
+        cancelScheduled()
+        apply(session.beginChatGeneration(generation), now: Date())
     }
 
     /// 用户 Stop：取消排队、回到关闭，但**不**删除已经共享成功的聊天。
@@ -89,8 +98,9 @@ final class LiveChatAutoSyncCoordinator {
 
         case .schedule(let deadline):
             cancelScheduled()
+            let revision = scheduleRevision
             let item = DispatchWorkItem { [weak self] in
-                guard let self else { return }
+                guard let self, self.scheduleRevision == revision, self.canSave() else { return }
                 self.scheduled = nil
                 self.apply(self.session.fireDue(now: Date(), config: self.config), now: Date())
             }
@@ -105,10 +115,11 @@ final class LiveChatAutoSyncCoordinator {
     }
 
     private func performSave(_ snapshot: LiveChatAutoSyncSnapshot) {
+        guard canSave(), snapshot.generation == session.generation else { return }
         let result: Result<LiveChatAutoSyncSnapshot, LiveChatAutoSyncFailure>
         do {
             // updatedAt 用 SharedChatStore 的默认值 = 本次真正写入的时刻
-            let saved = try store.save(GoutouChatClipboardPayload(messages: snapshot.messages))
+            guard let saved = try saveSafely({ try store.save(GoutouChatClipboardPayload(messages: snapshot.messages)) }) else { return }
             result = .success(LiveChatAutoSyncSnapshot(
                 messages: saved.messages,
                 fingerprint: snapshot.fingerprint,
@@ -134,6 +145,7 @@ final class LiveChatAutoSyncCoordinator {
     }
 
     private func cancelScheduled() {
+        scheduleRevision += 1
         scheduled?.cancel()
         scheduled = nil
     }

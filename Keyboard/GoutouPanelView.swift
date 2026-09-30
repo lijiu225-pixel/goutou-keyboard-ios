@@ -41,6 +41,7 @@ struct GoutouPanelSnapshot {
     /// 正在等二次确认的那条删除；nil = 没在确认
     var memoryPendingDeleteID: UUID? = nil
     var sharedChat: SharedChatSnapshot? = nil
+    var automaticChatNotice: String? = nil
     var sharedChatError: String? = nil
     /// 键盘正在使用的识别聊天临时上下文；nil = 只是看过预览，没在使用。
     var activeRecognizedChat: RecognizedChatContext? = nil
@@ -169,6 +170,7 @@ final class GoutouPanelView: UIView {
     /// 删除要二次确认
     private var confirmingDelete = false
     private var sharedChat: SharedChatSnapshot?
+    private var automaticChatNotice: String?
     private var sharedChatError: String?
     private var activeRecognizedChat: RecognizedChatContext?
     private var pendingSharedChat: PendingSharedChatUpdate?
@@ -350,6 +352,7 @@ final class GoutouPanelView: UIView {
 
     func render(_ snapshot: GoutouPanelSnapshot) {
         self.sharedChat = snapshot.sharedChat
+        self.automaticChatNotice = snapshot.automaticChatNotice
         self.sharedChatError = snapshot.sharedChatError
         self.activeRecognizedChat = snapshot.activeRecognizedChat
         self.pendingSharedChat = snapshot.pendingSharedChat
@@ -377,6 +380,7 @@ final class GoutouPanelView: UIView {
 
     /// 顶部入口 + 归属键的状态：停在那一屏显示「返回」、已有内容的键打勾、没内容的淡一点。
     private func updateButtons() {
+        analyzeButton.isHidden = activeRecognizedChat != nil
         settingsButton.setTitle(screen == .settings ? "⬅ 返回" : "⚙ 设置", for: .normal)
         memoryButton.setTitle(screen == .memory ? "⬅ 返回" : memoryButtonTitle, for: .normal)
         let name = profiles.first { $0.id == activeProfileID }?.name ?? "当前人物"
@@ -443,14 +447,17 @@ final class GoutouPanelView: UIView {
             return
         }
         if screen == .profiles { buildProfilesBody(); return }
-        bodyStack.addArrangedSubview(makeReadChatButton())
         if let pending = pendingSharedChat {
             buildPendingSharedChatBanner(pending)
         }
         if let active = activeRecognizedChat {
             // 主屏也要看得出「正在使用识别聊天」，别和「只是看过预览」混起来。
-            bodyStack.addArrangedSubview(makeNoticeLabel("已使用识别聊天 · \(active.messageCount) 条", color: GoutouTheme.secondary))
+            bodyStack.addArrangedSubview(makeNoticeLabel(automaticChatNotice ?? "当前聊天 · \(active.messageCount) 条", color: GoutouTheme.secondary))
+            buildRecognizedChatAnalysis()
+            bodyStack.addArrangedSubview(makeReadChatButton())
+            return
         }
+        bodyStack.addArrangedSubview(makeReadChatButton())
         if showsContextDetail {
             buildContextDetailBody()
         } else {
@@ -534,7 +541,7 @@ final class GoutouPanelView: UIView {
     }
 
     private func makeReadChatButton() -> NineKeyButton {
-        makeActionButton(title: "读取识别聊天", background: GoutouTheme.function, fontSize: 14) {
+        makeActionButton(title: "读取识别聊天（手动诊断）", background: GoutouTheme.function, fontSize: 12) {
             self.delegate?.goutouPanel(self, didTrigger: .readRecognizedChat)
         }
     }

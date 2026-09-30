@@ -11,6 +11,22 @@ struct GoutouCaptureActivityContent: Equatable {
     var lastSyncAt: Date?
     var errorText: String?
 
+    var statusText: String {
+        guard capturing else { return "已停止" }
+        if gateText == ChatSceneVerdict.inactive.shortTitle { return "未在聊天界面 · 已暂停识别" }
+        if unknownCount > 0 { return "\(unknownCount) 条未确定 · 同步暂停" }
+        if gateText == ChatSceneVerdict.activeChat.shortTitle { return "已进入聊天 · 识别中" }
+        return gateText
+    }
+
+    var compactText: String {
+        guard capturing else { return "Ⅱ" }
+        if unknownCount > 0 { return "!" }
+        if gateText != ChatSceneVerdict.activeChat.shortTitle || autoSyncText.contains("暂停") { return "Ⅱ" }
+        if autoSyncText == "自动同步未开启" { return "Ⅱ" }
+        return timelineCount > 0 ? "\(min(timelineCount, 200))" : "●"
+    }
+
     /// 自检用的人类可读描述（测试拿它证明「没有正文」）。
     var summary: String {
         var parts = ["capturing=\(capturing)", "gate=\(gateText)", "autoSync=\(autoSyncText)",
@@ -33,13 +49,19 @@ enum GoutouCaptureActivityContentBuilder {
         lastSyncAt: Date?
     ) -> GoutouCaptureActivityContent {
         var errorText: String?
-        if case .failed(let reason) = captureState { errorText = reason }
-        if case .failed(let reason) = autoSync { errorText = reason }
+        if case .failed = captureState { errorText = "屏幕捕获失败" }
+        if case .failed = autoSync { errorText = "自动同步失败" }
+        let syncText: String
+        switch autoSync {
+        case .failed: syncText = "自动同步失败"
+        case .disabled: syncText = "自动同步未开启"
+        default: syncText = autoSync.title
+        }
 
         return GoutouCaptureActivityContent(
             capturing: captureState.isCapturing,
             gateText: verdict.shortTitle,
-            autoSyncText: autoSync.title,
+            autoSyncText: syncText,
             timelineCount: timelineCount,
             syncedCount: syncedCount,
             unknownCount: unknownCount,
@@ -71,13 +93,21 @@ struct GoutouCaptureActivityPlanner {
     private(set) var sessionID: String?
     /// 被节流 / 去重挡掉的次数（只用于统计）
     private(set) var skippedUpdates = 0
+    private(set) var pending: GoutouCaptureActivityContent?
+    var pendingDeadline: Date? {
+        guard pending != nil, let lastPushAt else { return nil }
+        return lastPushAt.addingTimeInterval(minimumUpdateInterval)
+    }
 
     mutating func captureStarted(
         sessionID: String,
         content: GoutouCaptureActivityContent,
         now: Date = Date()
     ) -> GoutouCaptureActivityAction {
+        guard content.capturing else { return .none }
+        if isRunning && self.sessionID == sessionID { return stateChanged(content, now: now) }
         self.sessionID = sessionID
+        pending = nil
         isRunning = true
         lastPushed = content
         lastPushAt = now
@@ -95,17 +125,25 @@ struct GoutouCaptureActivityPlanner {
         }
         // 相同状态不重复 update
         guard content != lastPushed else {
+            pending = nil
             skippedUpdates += 1
             return .none
         }
         // 节流：短时间内连续变化只保留最后一次会推的
         if let lastPushAt, now.timeIntervalSince(lastPushAt) < minimumUpdateInterval {
+            pending = content
             skippedUpdates += 1
             return .none
         }
         lastPushed = content
         lastPushAt = now
+        pending = nil
         return .update(content)
+    }
+
+    mutating func flush(now: Date = Date()) -> GoutouCaptureActivityAction {
+        guard let pending else { return .none }
+        return stateChanged(pending, now: now)
     }
 
     mutating func captureStopped(
@@ -114,6 +152,7 @@ struct GoutouCaptureActivityPlanner {
     ) -> GoutouCaptureActivityAction {
         guard isRunning else { return .none }
         isRunning = false
+        pending = nil
         lastPushed = content
         lastPushAt = now
         sessionID = nil

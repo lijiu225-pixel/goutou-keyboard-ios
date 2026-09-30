@@ -25,18 +25,21 @@ struct GoutouCaptureActivityWidget: Widget {
                         .foregroundStyle(.secondary)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    counts(context.state)
-                        .font(.caption2)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(context.state.autoSyncText)
+                        counts(context.state)
+                        syncTime(context.state)
+                    }.font(.caption2)
                 }
             } compactLeading: {
                 Image(systemName: "pawprint.fill")
                     .foregroundStyle(.tint)
             } compactTrailing: {
-                Text(context.state.capturing ? "\(context.state.timelineCount)" : "⏸")
+                Text(context.state.compactText)
                     .font(.caption2)
             } minimal: {
-                Image(systemName: "pawprint.fill")
-                    .foregroundStyle(.tint)
+                Text(context.state.compactText)
+                    .font(.caption2).foregroundStyle(.tint)
             }
             .keylineTint(.blue)
         }
@@ -55,28 +58,35 @@ struct GoutouCaptureActivityWidget: Widget {
                 .foregroundStyle(.secondary)
             counts(state)
                 .font(.caption2)
+            Text(state.autoSyncText).font(.caption2)
+            syncTime(state).font(.caption2)
             if let errorText = state.errorText {
                 Text(errorText)
                     .font(.caption2)
                     .foregroundStyle(.orange)
             }
         }
-        .padding(2)
+        .padding(12)
     }
 
     /// 只描述状态：识别中 / 已暂停 / 未在聊天界面…
     private func statusText(_ state: GoutouCaptureActivityAttributes.ContentState) -> String {
-        state.capturing ? "识别中 · \(state.gateText)" : "已停止 · \(state.gateText)"
+        state.statusText
+    }
+
+    @ViewBuilder
+    private func syncTime(_ state: GoutouCaptureActivityAttributes.ContentState) -> some View {
+        if let date = state.lastSyncAt {
+            HStack { Text("最近同步"); Text(date, style: .time) }
+        } else { Text("尚未同步") }
     }
 
     private func counts(_ state: GoutouCaptureActivityAttributes.ContentState) -> some View {
         HStack(spacing: 10) {
             Text("实时聊天 \(state.timelineCount) 条")
             Text("已同步 \(state.syncedCount) 条")
-            if state.unknownCount > 0 {
-                Text("未确定 \(state.unknownCount) 条")
-                    .foregroundStyle(.orange)
-            }
+            Text("未确定 \(state.unknownCount) 条")
+                .foregroundStyle(state.unknownCount > 0 ? .orange : .secondary)
         }
     }
 }

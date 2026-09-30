@@ -7,7 +7,7 @@ struct LiveChatAutoSyncConfiguration: Equatable {
     /// 两次真正写盘之间至少隔这么久，避免极端情况下频繁原子替换。
     var minimumSaveInterval: TimeInterval = 2.0
     /// 指纹算法版本：改了拼法就把它一起改掉，免得把旧指纹当成同一份内容。
-    var fingerprintVersion = "v1"
+    var fingerprintVersion = "v2"
 
     static let `default` = LiveChatAutoSyncConfiguration()
 }

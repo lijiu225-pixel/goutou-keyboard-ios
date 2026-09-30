@@ -38,6 +38,17 @@ struct LiveChatAutoSyncSession {
 
     var isSaving: Bool { inFlightFingerprint != nil }
 
+    mutating func beginChatGeneration(_ generation: Int) -> LiveChatAutoSyncEffect {
+        self.generation = generation
+        pending = nil
+        inFlightFingerprint = nil
+        lastSuccessfulFingerprint = nil
+        lastFailedFingerprint = nil
+        // Capture-level authorization, manual pause and minimum write interval survive.
+        state = manualPause ? .pausedAfterManualSave : (enabled ? .waitingForChat : .disabled)
+        return .cancelScheduled
+    }
+
     // MARK: - 用户动作
 
     /// 新的 capture session：一切清零。自动同步回到「关闭」，上一轮的 fingerprint / pending 都不带过来。
@@ -121,6 +132,7 @@ struct LiveChatAutoSyncSession {
         // 旧代际 / 旧任务的迟到回报：一概不认，更不许污染新 session 的统计
         guard fingerprint == inFlightFingerprint else { return .idle }
         inFlightFingerprint = nil
+        if pending?.snapshot.fingerprint == fingerprint { pending = nil }
 
         switch result {
         case .success(let snapshot):
@@ -186,6 +198,9 @@ struct LiveChatAutoSyncSession {
             return .cancelScheduled
 
         case .ready(let snapshot):
+            if pending?.snapshot.fingerprint == snapshot.fingerprint {
+                return .idle // Repeated frames cannot keep postponing the same save.
+            }
             if snapshot.fingerprint == lastSuccessfulFingerprint {
                 pending = nil
                 state = .synced(messageCount: lastMessageCount, at: lastSyncAt ?? now)

@@ -47,33 +47,15 @@ func nonChatScreen(_ label: String) -> [LiveOCRObservation] {
 
 /// 和控制器里那条规则一致的判定：先算候选块，再看门控；只有 activeChat 才提交给时间线。
 struct SimulatedPipeline {
-    var system = LiveChatSystem()
-    var gate = ChatSceneGate()
-    let geometry = LiveChatGeometryConfiguration.default
-    var sceneConfig = ChatSceneGateConfiguration.default
-    var generation = 1
-    var timelineCount: Int { system.snapshot().messages.count }
-
-    mutating func reset(generation: Int) {
-        self.generation = generation
-        gate.reset()
-        system.reset(generation: generation)
-    }
-
-    /// 返回 (是否提交给时间线, 门控结论)。
+    var core = LiveChatScenePipeline()
+    var gate: LiveChatScenePipeline { core }
+    var system: LiveChatScenePipeline { core }
+    var timelineCount: Int { core.snapshot().messages.count }
+    mutating func reset(generation: Int) { core.reset() }
     mutating func ingest(_ observations: [LiveOCRObservation], at now: Date) -> (submitted: Bool, verdict: ChatSceneVerdict) {
-        let inViewport = LiveChatViewportFilter.filter(observations, config: geometry)
-        let candidates = LiveChatBlockGrouper.group(inViewport, config: geometry, timestamp: now)
-        let evidence = ChatSceneDetector.evidence(observations: observations, candidates: candidates, config: sceneConfig)
-        let decision = gate.update(
-            isChatFrame: ChatSceneDetector.isChatScene(evidence, config: sceneConfig),
-            titleFingerprint: evidence.topBarFingerprint,
-            config: sceneConfig
-        )
-        if decision.startsNewSession { system.reset(generation: generation) }
-        guard decision.verdict == .activeChat else { return (false, decision.verdict) }
-        _ = system.ingest(candidates: candidates, timestamp: now, generation: generation, config: geometry)
-        return (true, decision.verdict)
+        core.detect(ChatSceneDetector.probeEvidence(observations: observations, rectangles: []))
+        _ = core.ingest(observations, at: now)
+        return (core.allowsFullRecognition, core.verdict)
     }
 }
 
@@ -227,8 +209,36 @@ for token in ["UIColor", "colorOf", "bubbleColor", "screenScale", "UIScreen"] {
 guard let managerSource = try? String(contentsOfFile: "App/ScreenCapture/LiveScreenCaptureManager.swift", encoding: .utf8) else {
     fatalError("ChatScreenDetectionCheck: 读不到 LiveScreenCaptureManager.swift")
 }
-expect(managerSource.contains("ChatSceneDetector.isChatScene"), "控制器真的接上了门控")
+expect(managerSource.contains("engine.pipeline.detect(evidence)"), "控制器真的接上了门控")
 expect(managerSource.contains("sync.noteLeftChatScene()"), "离开聊天界面会暂停自动同步")
 expect(!managerSource.contains("insertText"), "主 App 不碰输入代理")
+
+// Text-free media: rectangles represent bubbles and the input field, not fictional OCR labels.
+for media in ["image", "video", "voice"] {
+    let nav = [observation("合成会话", x: 0.4, y: 0.06, width: 0.2)]
+    let boxes = [CGRect(x: 0.08, y: 0.25, width: 0.4, height: 0.08),
+                 CGRect(x: 0.55, y: 0.45, width: 0.4, height: 0.08),
+                 CGRect(x: 0.18, y: 0.90, width: 0.62, height: 0.045)]
+    var real = LiveChatScenePipeline()
+    let evidence = ChatSceneDetector.probeEvidence(observations: nav, rectangles: boxes)
+    real.detect(evidence); real.detect(evidence)
+    expect(real.allowsFullRecognition, "text-free media geometry: \(media)")
+}
+var titleGate = ChatSceneGate()
+_ = titleGate.update(isChatFrame: true, titleFingerprint: "A")
+_ = titleGate.update(isChatFrame: true, titleFingerprint: "A")
+_ = titleGate.update(isChatFrame: true, titleFingerprint: "B")
+expect(!titleGate.allowsSubmission, "quarantine first different title frame")
+expect(titleGate.update(isChatFrame: true, titleFingerprint: "B").startsNewSession, "confirmed title switches generation")
+_ = titleGate.update(isChatFrame: false)
+expect(!titleGate.allowsSubmission && titleGate.verdict == .activeChat, "UI hysteresis never permits suspicious writes")
+var isolation = SimulatedPipeline()
+for frame in 0..<3 { _ = isolation.ingest(chatScreen(), at: t0.addingTimeInterval(Double(frame))) }
+let oldGeneration = isolation.core.chatGeneration
+for frame in 0..<4 {
+    _ = isolation.ingest(chatScreen(top: "合成新联系人", mine: 1, theirs: 1), at: t0.addingTimeInterval(Double(frame + 3)))
+}
+expect(isolation.core.chatGeneration > oldGeneration, "production pipeline rotates generation")
+expect(isolation.timelineCount == 2, "production pipeline contains only new contact messages")
 
 print("ChatScreenDetectionCheck passed (\(checks) assertions; pure logic only; synthetic screens; no network)")

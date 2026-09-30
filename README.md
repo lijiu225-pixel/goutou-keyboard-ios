@@ -1,3 +1,17 @@
+# FINAL 使用路径
+
+用户在主 App 主动启动动态识别，选择系统整屏共享，并在本次 capture session 开启自动同步。随后进入聊天页面：轻量场景门控 → 完整 Vision OCR → 稳定化 / 去重 Timeline → 自动同步 SharedChatStore / App Group。离开聊天自动暂停，再进入自动恢复。
+
+点击 **Keyboard 键盘上的狗头入口** 自动读取并直接使用最新合法聊天；相同内容不清分析，读取失败保留现有结果。仅手动点击 **分析这段聊天** 才请求 AI，返回聊天分析、对方状态与恰好 3 条回复。点击回复只插入输入框，由用户决定发送。
+
+Live Activity / Dynamic Island 显示识别、暂停、同步、unknown 计数与最后同步时间，不展示正文。minimal 使用状态符号，compact 使用 paw + 状态，expanded / 锁屏显示详细计数。截图 OCR、人工修正、人工 Review、手动读取诊断继续保留。
+
+动态识别需要用户主动整屏共享；不是偷偷读取微信。每次启动须重新开启 Auto Sync；unknown 阻止整次同步，人工保存后暂停自动同步。没有自动 AI、自动 Token 消耗或自动发送。
+
+构建和签名边界、验收步骤见 [FINAL 验收说明](docs/FINAL.md)。历史阶段说明仅用于追溯，当前正常操作以此节为准。
+
+---
+
 # 狗头军师输入法 · iOS 键盘扩展
 
 基于 [tiantianlaolao/ios-cicd-no-mac](https://github.com/tiantianlaolao/ios-cicd-no-mac) 的 example 工程改造的**最小可运行 iOS 键盘扩展**：Windows 上写代码 → push GitHub → Actions 的 macOS runner 云端编译签名 → 出可安装 IPA。全程不碰 Mac。

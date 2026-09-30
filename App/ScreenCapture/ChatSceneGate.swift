@@ -40,7 +40,7 @@ extension ChatSceneVerdict {
 /// 门控的全部阈值：集中一处，方便调参也方便测试。
 struct ChatSceneGateConfiguration: Equatable {
     /// 顶部导航 / 状态栏比例（聊天标题在这儿）
-    var topInsetRatio: CGFloat = 0.10
+    var topInsetRatio: CGFloat = 0.16
     /// 底部输入栏 / 键盘比例
     var bottomInsetRatio: CGFloat = 0.28
     /// 中部消息区至少要有几条像消息的块
@@ -77,6 +77,37 @@ struct ChatSceneEvidence: Equatable {
 /// 从一帧的 observations + 候选块里收集证据（纯函数）。
 enum ChatSceneDetector {
 
+    /// Geometry from fast OCR and rectangle detection supports text-free media bubbles.
+    static func probeEvidence(observations: [LiveOCRObservation], rectangles: [CGRect],
+                              config: ChatSceneGateConfiguration = .default) -> ChatSceneEvidence {
+        var result = evidence(observations: observations, candidates: [], config: config)
+        let bottom = 1 - config.bottomInsetRatio
+        let body = observations.map(\.box) + rectangles
+        let anchored = body.filter {
+            $0.minY > config.topInsetRatio && $0.maxY < bottom
+                && $0.width >= config.minimumBlockWidth && $0.width < 0.80
+                && $0.height >= config.minimumBlockHeight
+                && (($0.minX < 0.20 && $0.maxX < 0.80) || ($0.maxX > 0.80 && $0.minX > 0.20))
+        }
+        // Count distinct vertical rows; nested rectangles must not manufacture messages.
+        var rows: [CGFloat] = []
+        for box in anchored where !rows.contains(where: { abs($0 - box.midY) < 0.025 }) {
+            rows.append(box.midY)
+        }
+        result.messageBlockCount = rows.count
+        result.anchoredBlockCount = rows.count
+        result.hasInputBarText = observations.contains {
+            $0.box.midY >= bottom && ($0.text.contains("输入") || $0.text.contains("按住") || $0.text == "发送")
+        } || rectangles.contains {
+            $0.midY >= bottom && $0.width > 0.35 && $0.width < 0.9 && $0.height < 0.09
+        }
+        let tabLabels = Set(observations.filter { $0.box.midY > 0.85 }.map { $0.text.trimmed })
+        if tabLabels.intersection(["微信", "通讯录", "发现", "我"]).count >= 2 {
+            result.hasInputBarText = false
+        }
+        return result
+    }
+
     static func evidence(
         observations: [LiveOCRObservation],
         candidates: [LiveChatCandidate],
@@ -85,12 +116,15 @@ enum ChatSceneDetector {
         var evidence = ChatSceneEvidence()
 
         let bottomStart = 1 - config.bottomInsetRatio
-        let topText = observations
-            .filter { $0.box.midY <= config.topInsetRatio && !LiveChatText.normalize($0.text).isEmpty }
-            .map { $0.text.trimmed }
-        evidence.hasTopBarText = !topText.isEmpty
-        // 顶部文字本身就是最好的「换人聊天」信号；只做内存比较，不需要哈希
-        evidence.topBarFingerprint = topText.isEmpty ? nil : topText.joined(separator: "|")
+        let title = observations.filter {
+            $0.box.midY >= 0.035 && $0.box.midY <= config.topInsetRatio
+                && $0.box.midX >= 0.25 && $0.box.midX <= 0.75
+                && !LiveChatText.normalize($0.text).isEmpty
+        }.sorted { $0.box.minY < $1.box.minY }
+        evidence.hasTopBarText = !title.isEmpty
+        evidence.topBarFingerprint = title.isEmpty ? nil : title.map {
+            LiveChatText.normalize($0.text)
+        }.joined(separator: "|")
 
         evidence.hasInputBarText = observations.contains {
             $0.box.midY >= bottomStart && !LiveChatText.normalize($0.text).isEmpty
@@ -121,62 +155,63 @@ enum ChatSceneDetector {
 /// 连续帧确认（hysteresis）：避免滚动、动画、键盘弹出、图片/视频/语音消息造成反复启停。
 struct ChatSceneGate {
     private(set) var verdict: ChatSceneVerdict = .unknown
+    private var stableVerdict: ChatSceneVerdict = .unknown
     private var activeStreak = 0
     private var inactiveStreak = 0
     private var observedTitle: String?
+    private var pendingTitle: String?
     private var titleChangeStreak = 0
+    private(set) var allowsSubmission = false
 
-    /// 返回的第二个值表示「要不要开一个新的聊天 session」——进入聊天界面、
-    /// 或者确认顶部标题变了（换人聊天）时为 true。宁可新开一轮 timeline，也不混两个人的聊天。
     mutating func update(
         isChatFrame: Bool,
         titleFingerprint: String? = nil,
         config: ChatSceneGateConfiguration = .default
     ) -> (verdict: ChatSceneVerdict, startsNewSession: Bool) {
-        var startsNewSession = false
-
-        if isChatFrame {
-            activeStreak += 1
-            inactiveStreak = 0
-        } else {
-            inactiveStreak += 1
+        allowsSubmission = false
+        if !isChatFrame {
             activeStreak = 0
-        }
-
-        // 标题变化：连续几帧都不同才算「换了聊天」，避免 OCR 抖动误判
-        if let titleFingerprint, let observedTitle, titleFingerprint != observedTitle {
-            titleChangeStreak += 1
-        } else {
+            inactiveStreak = min(inactiveStreak + 1, config.requiredInactiveFrames)
             titleChangeStreak = 0
-        }
-
-        let wasActive = verdict == .activeChat
-        if activeStreak >= config.requiredActiveFrames {
-            verdict = .activeChat
-            if !wasActive {
-                startsNewSession = true          // 重新进入聊天页面：开新的一轮
+            if inactiveStreak >= config.requiredInactiveFrames {
+                stableVerdict = .inactive
+                observedTitle = nil
             }
-            if titleChangeStreak >= config.requiredTitleChangeFrames {
-                startsNewSession = true          // 顶部标题变了：按「换了聊天」处理
+            verdict = stableVerdict == .unknown ? .candidate : stableVerdict
+            return (verdict, false)
+        }
+        inactiveStreak = 0
+        activeStreak = min(activeStreak + 1, config.requiredActiveFrames)
+        if stableVerdict != .activeChat {
+            guard activeStreak >= config.requiredActiveFrames else {
+                verdict = stableVerdict == .unknown ? .candidate : stableVerdict
+                return (verdict, false)
+            }
+            stableVerdict = .activeChat
+            verdict = .activeChat
+            observedTitle = titleFingerprint
+            titleChangeStreak = 0
+            allowsSubmission = true
+            return (verdict, true)
+        }
+        verdict = .activeChat
+        if titleFingerprint != observedTitle {
+            // Do not overwrite the confirmed title on the first differing frame.
+            if pendingTitle == titleFingerprint { titleChangeStreak += 1 }
+            else { pendingTitle = titleFingerprint; titleChangeStreak = 1 }
+            guard titleChangeStreak >= config.requiredTitleChangeFrames else {
+                return (verdict, false) // Hold UI state but quarantine this frame.
             }
             observedTitle = titleFingerprint
             titleChangeStreak = 0
-        } else if inactiveStreak >= config.requiredInactiveFrames {
-            verdict = .inactive
-            observedTitle = nil
-            titleChangeStreak = 0
-        } else if verdict != .activeChat {
-            verdict = .candidate
+            allowsSubmission = true
+            return (verdict, true)
         }
-        // 已经是 activeChat、又只是零星几帧不满足：保持 activeChat（迟钝退出）
-        return (verdict, startsNewSession)
+        titleChangeStreak = 0
+        pendingTitle = nil
+        allowsSubmission = true
+        return (verdict, false)
     }
 
-    mutating func reset() {
-        verdict = .unknown
-        activeStreak = 0
-        inactiveStreak = 0
-        observedTitle = nil
-        titleChangeStreak = 0
-    }
+    mutating func reset() { self = ChatSceneGate() }
 }
