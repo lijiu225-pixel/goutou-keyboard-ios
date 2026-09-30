@@ -7,7 +7,7 @@ import Foundation
 /// 本文件纯 Foundation、不联网：网络由控制器调用现有 `GoutouAIClient` 完成。
 
 /// 分析请求的失败原因。文案给人看，不回显模型原文、API Key 或沙盒路径。
-enum RecognizedChatAnalysisError: Equatable {
+enum RecognizedChatAnalysisError: Error, Equatable {
     /// 没有正在使用的识别聊天（预览不算）
     case noActiveContext
     case noFullAccess
