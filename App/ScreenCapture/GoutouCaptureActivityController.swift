@@ -116,7 +116,8 @@ final class GoutouCaptureActivityController {
             lastSyncAt: content.lastSyncAt,
             errorText: content.errorText,
             statusText: content.statusText,
-            compactText: content.compactText
+            compactText: content.compactText,
+            minimalText: content.minimalText
         )
     }
     #endif

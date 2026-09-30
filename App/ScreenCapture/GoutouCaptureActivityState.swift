@@ -19,12 +19,25 @@ struct GoutouCaptureActivityContent: Equatable {
         return gateText
     }
 
+    /// 紧凑态右侧：**正常识别时优先显示实时聊天条数**（🐾 8条），不用长按灵动岛。
+    ///
+    /// - 正在识别：`N条`
+    /// - 有未确定：`N·!M`（实时 N 条，其中 M 条未确定）
+    /// - 不在聊天界面：`暂停`
+    /// - 捕获停止：`停止`（随后按既有生命周期结束 Activity）
     var compactText: String {
-        guard capturing else { return "Ⅱ" }
-        if unknownCount > 0 { return "!" }
-        if gateText != ChatSceneVerdict.activeChat.shortTitle || autoSyncText.contains("暂停") { return "Ⅱ" }
-        if autoSyncText == "自动同步未开启" { return "Ⅱ" }
-        return timelineCount > 0 ? "\(min(timelineCount, 200))" : "●"
+        guard capturing else { return "停止" }
+        guard gateText == ChatSceneVerdict.activeChat.shortTitle else { return "暂停" }
+        if unknownCount > 0 { return "\(min(timelineCount, 999))·!\(min(unknownCount, 99))" }
+        return "\(min(timelineCount, 999))条"
+    }
+
+    /// minimal 比 compact 更窄：只给数字或很短的符号，宁可少写字也不要被系统截断。
+    var minimalText: String {
+        guard capturing else { return "停" }
+        guard gateText == ChatSceneVerdict.activeChat.shortTitle else { return "Ⅱ" }
+        if unknownCount > 0 { return "!\(min(unknownCount, 9))" }
+        return "\(min(timelineCount, 99))"
     }
 
     /// 自检用的人类可读描述（测试拿它证明「没有正文」）。

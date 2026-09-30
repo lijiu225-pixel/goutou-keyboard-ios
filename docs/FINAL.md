@@ -22,7 +22,7 @@ Auto Sync 默认关闭，每次 capture 重新授权。system 排除，unknown �
 
 现有 Widget Target 复用。捕获真正成功后创建 Activity；相同状态不更新，短时间变化合并，至少 1 秒更新间隔，尾随定时器确保最后一次状态交付。停止结束 Activity，重复启动事件不重复创建，ActivityKit 失败不影响主链路。
 
-Compact：paw + 条数 / ● / ! / Ⅱ。Minimal：短状态符号，避免系统选择 minimal 时只显示 paw。Expanded 和锁屏：聊天状态、自动同步状态、实时/已同步/unknown 数量、最近同步时间。ContentState 只含状态与数字；失败原因映射为固定提示，不传任意错误原文。
+Compact：左侧 paw，右侧**优先显示实时聊天条数**（`8条`）——用户不用长按灵动岛就能看到识别到多少条；有未确定时用 `8·!2`（实时 8 条、其中 2 条未确定），不在聊天界面显示 `暂停`，捕获停止显示 `停止`。Minimal 比 compact 更窄，只给数字或 `Ⅱ`，宁可少写字也不让系统截断。Expanded 和锁屏：聊天状态、自动同步状态、实时/已同步/unknown 数量、最近同步时间。ContentState 只含状态与数字；失败原因映射为固定提示，不传任意错误原文。条数或状态没有真实变化时不会 update Activity。
 
 Apple 系统决定何时采用 minimal、compact 或 expanded；长按可查看 expanded。代码和模拟器构建不等于真实 Dynamic Island 展示验收。
 

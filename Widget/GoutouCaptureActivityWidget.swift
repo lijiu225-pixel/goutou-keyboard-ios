@@ -38,7 +38,7 @@ struct GoutouCaptureActivityWidget: Widget {
                 Text(context.state.compactText)
                     .font(.caption2)
             } minimal: {
-                Text(context.state.compactText)
+                Text(context.state.minimalText)
                     .font(.caption2).foregroundStyle(.tint)
             }
             .keylineTint(.blue)

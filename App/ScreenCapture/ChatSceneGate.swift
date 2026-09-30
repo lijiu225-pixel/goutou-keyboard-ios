@@ -52,8 +52,10 @@ struct ChatSceneGateConfiguration: Equatable {
     var bodyBottomRatio: CGFloat = 0.72
     /// 底部输入区：至少从这个高度往下找
     var inputBandStart: CGFloat = 0.45
+    var minimumInputHeight: CGFloat = 0.012
     var maximumInputHeight: CGFloat = 0.09
-    var minimumInputWidth: CGFloat = 0.30
+    /// 输入框比气泡宽得多：低于这个宽度的扁平矩形按消息气泡处理，不算输入栏
+    var minimumInputWidth: CGFloat = 0.40
     var maximumInputWidth: CGFloat = 0.94
     /// 一条消息块至少要这么宽 / 这么高才算「像消息」（滤掉噪声）
     var minimumBlockWidth: CGFloat = 0.06
@@ -167,7 +169,7 @@ enum ChatSceneDetector {
         let inputBoxes = rectangles.filter {
             $0.minY >= config.inputBandStart
                 && $0.width >= config.minimumInputWidth && $0.width <= config.maximumInputWidth
-                && $0.height <= config.maximumInputHeight
+                && $0.height >= config.minimumInputHeight && $0.height <= config.maximumInputHeight
                 && $0.minX >= 0.02 && $0.maxX <= 0.98
         }
         evidence.inputTopRatio = (placeholder + inputBoxes).map(\.minY).min()

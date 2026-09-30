@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// At most one screen buffer may wait for MainActor delivery; no frame task backlog.

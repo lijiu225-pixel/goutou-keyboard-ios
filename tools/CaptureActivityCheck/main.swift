@@ -277,8 +277,21 @@ let secretError = GoutouCaptureActivityContentBuilder.make(captureState: .captur
     autoSync: .failed("fictional-private-body /private/path Authorization: SECRET"), timelineCount: 0,
     unknownCount: 0, syncedCount: 0, lastSyncAt: nil)
 expect(!secretError.summary.contains("SECRET") && !secretError.summary.contains("private"), "errors cannot leak payload or paths")
-expect(content(unknown: 2).compactText == "!", "compact unknown signal")
-expect(content(gate: .inactive).compactText == "Ⅱ", "compact inactive pause")
+// 紧凑态：正常识别时直接显示实时聊天条数，不用长按灵动岛
+expect(content(timeline: 0).compactText == "0条", "compact 0 messages")
+expect(content(timeline: 1).compactText == "1条", "compact 1 message")
+expect(content(timeline: 8).compactText == "8条", "compact 8 messages")
+expect(content(timeline: 99).compactText == "99条", "compact 99 messages")
+expect(content(timeline: 8, unknown: 2).compactText == "8·!2", "compact unknown uses N·!M form")
+expect(content(timeline: 0, unknown: 2).compactText == "0·!2", "compact unknown without messages")
+expect(content(gate: .inactive).compactText == "暂停", "compact inactive pause")
+expect(content(gate: .candidate).compactText == "暂停", "compact candidate pause")
+expect(content(capturing: false).compactText == "停止", "compact stopped")
+// minimal 比 compact 更窄：只给数字或短符号，避免被系统截断
+expect(content(timeline: 8).minimalText == "8", "minimal shows the count")
+expect(content(timeline: 8, unknown: 2).minimalText == "!2", "minimal shows the unknown count")
+expect(content(gate: .inactive).minimalText == "Ⅱ", "minimal paused symbol")
+expect(content(capturing: false).minimalText == "停", "minimal stopped symbol")
 expect(content(gate: .inactive).statusText == "未在聊天界面 · 已暂停识别", "inactive is not described as recognizing")
 for state in [LiveChatAutoSyncState.disabled, .waitingForChat, .scheduled, .syncing,
               .blockedUnknown(count: 2), .pausedAfterManualSave, .failed("synthetic")] {
@@ -286,5 +299,24 @@ for state in [LiveChatAutoSyncState.disabled, .waitingForChat, .scheduled, .sync
         autoSync: state, timelineCount: 3, unknownCount: 0, syncedCount: 1, lastSyncAt: t0)
     expect(!built.autoSyncText.isEmpty, "all sync states mapped")
 }
+
+// 条数变化才推一次：相同计数不重复 update，同一秒内的连续变化合并后仍会交付
+var counter = GoutouCaptureActivityPlanner()
+_ = counter.captureStarted(sessionID: "counts", content: content(timeline: 0), now: t0)
+expect(counter.stateChanged(content(timeline: 1), now: t0.addingTimeInterval(0.2)) == .none,
+       "rapid count changes are coalesced")
+expect(counter.stateChanged(content(timeline: 2), now: t0.addingTimeInterval(0.4)) == .none,
+       "still coalescing inside the window")
+expect(counter.stateChanged(content(timeline: 2), now: t0.addingTimeInterval(0.6)) == .none,
+       "same count inside the window stays silent")
+expect(counter.flush(now: t0.addingTimeInterval(1)) == .update(content(timeline: 2)),
+       "coalesced count change is delivered once")
+expect(counter.flush(now: t0.addingTimeInterval(2)) == .none, "flush is idempotent")
+expect(counter.stateChanged(content(timeline: 3), now: t0.addingTimeInterval(2.5)) == .update(content(timeline: 3)),
+       "a later count change updates again")
+expect(counter.stateChanged(content(timeline: 3), now: t0.addingTimeInterval(6)) == .none,
+       "unchanged count after the update stays silent")
+expect(!content(timeline: 8, unknown: 2).summary.contains(sensitiveLine),
+       "compact state never carries chat text")
 
 print("CaptureActivityCheck passed (\(checks) assertions; pure logic + source contract; no network)")

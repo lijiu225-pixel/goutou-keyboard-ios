@@ -327,13 +327,13 @@ expect(runRealLayout(avatarTitle).verdict == .activeChat, "26b. 带头像 + 在�
 let covered = weChatChatScreen()
 let coveredEvidence = ChatSceneDetector.probeEvidence(
     observations: covered.observations.filter { $0.box.midY > 0.20 },
-    rectangles: covered.rectangles.filter { $0.minY < 0.90 })
+    rectangles: [])                       // 这一帧矩形检测什么都没找到（输入框没被认出来）
 expect(!coveredEvidence.hasInputBar, "27. 这一帧确实没有检测到输入栏")
 expect(!coveredEvidence.hasNavigationBar, "27b. 这一帧确实没有导航文字（被灵动岛挡住了）")
 expect(ChatSceneDetector.isChatScene(coveredEvidence, config: config),
        "27c. 导航被挡 + 输入栏没识别到，只要左右气泡都在就仍然判聊天（修掉真机假阴性）")
 expect(runRealLayout((observations: covered.observations.filter { $0.box.midY > 0.20 },
-                      rectangles: covered.rectangles.filter { $0.minY < 0.90 })).verdict == .activeChat,
+                      rectangles: [])).verdict == .activeChat,
        "27d. 这种帧连续出现也要进 activeChat")
 
 // MARK: - 真实版式回归：非聊天页面必须保持 inactive
