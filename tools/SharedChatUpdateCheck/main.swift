@@ -92,7 +92,7 @@ expect(recognizedChat.preview?.messages.map(\.text) == ["晚上吃什么", "都�
 // MARK: - 19~22：使用新聊天要清掉旧分析（tone / replies 在同一个结构化结果里）
 
 var analysis = RecognizedChatAnalysisSession()
-analysis.reset(generation: 1)
+analysis.invalidate()
 guard case .started(let generation) = analysis.begin(
     hasFullAccess: true,
     config: GoutouConfig(baseURL: "https://example.invalid/v1", model: "test-model", apiKey: ""),
@@ -114,7 +114,7 @@ expect(!analysis.isAnalyzing, "22. 旧的在途分析也一并作废")
 // MARK: - 23~25：仅仅「发现」新聊天不许动任何东西
 
 var untouchedAnalysis = RecognizedChatAnalysisSession()
-untouchedAnalysis.reset(generation: 1)
+untouchedAnalysis.invalidate()
 guard case .started(let keepGeneration) = untouchedAnalysis.begin(
     hasFullAccess: true,
     config: GoutouConfig(baseURL: "https://example.invalid/v1", model: "test-model", apiKey: ""),
@@ -130,7 +130,7 @@ _ = SharedChatUpdateDetector.evaluate(shared: snapshot(chatC), knownFingerprint:
 expect(untouchedAnalysis.state == beforeDiscovery, "24. 只是发现新聊天：当前 analysis 不变")
 expect(untouchedAnalysis.isAnalyzing, "23. 只是发现新聊天：不会取消在跑的 AI 请求")
 expect(chatBeforeDiscovery.active?.messages.map(\.text) == ["今晚有空吗", "有啊"], "25. 只是发现新聊天：Active Context 不被替换")
-_ = untouchedAnalysis.complete(generation: keepGeneration, result: .failure(.ai(.timeout)))
+untouchedAnalysis.complete(generation: keepGeneration, result: .failure(.ai(.timeout)))
 
 // MARK: - 29~31：自动检查失败是非破坏性的
 
