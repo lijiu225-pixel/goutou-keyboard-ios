@@ -239,6 +239,7 @@ for end in 1...capMessages.count {
 }
 expect(capTimeline.messages.count == 5, "到达上限后不再增长")
 expect(capTimeline.truncatedOldest == 5, "丢弃最早 5 条并有计数")
+expect(capTimeline.droppedAtCap > 0, "到上限后拒绝的回插另算，不和截断混在一起")
 expect(capTimeline.messages.map(\.text) == ["消息5", "消息6", "消息7", "消息8", "消息9"], "保留的是最新的内容")
 
 // MARK: - 27 / 28 / 31：代际隔离（迟到帧、旧 session、重新 start）

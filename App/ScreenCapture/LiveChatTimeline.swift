@@ -11,6 +11,8 @@ struct LiveChatTimeline: Equatable {
     private(set) var duplicateDrops = 0
     /// 因为超过上限而丢掉的旧条数
     private(set) var truncatedOldest = 0
+    /// 已经到上限时被拒绝的更旧条目数（它们从没进过时间线）
+    private(set) var droppedAtCap = 0
     /// 连续多帧都找不到可靠 overlap 的次数
     private(set) var discontinuityFrames = 0
     /// 最近一次合并是否发现「不连续聊天区域」
@@ -20,6 +22,7 @@ struct LiveChatTimeline: Equatable {
         messages.removeAll()
         duplicateDrops = 0
         truncatedOldest = 0
+        droppedAtCap = 0
         discontinuityFrames = 0
         lastDiscontinuity = false
     }
@@ -70,11 +73,16 @@ struct LiveChatTimeline: Equatable {
         // 比 anchor 旧的那些：只有 anchor 正好在时间线开头时才往前插
         if anchorStart == 0 {
             let prefix = visible[0..<match.visibleIndex]
-            let fresh = prefix.filter { item in
-                !messages.contains { Self.sameMessage(item, $0, config: config) }
+            if messages.count >= config.maxTimelineMessages {
+                // 已经到上限：插进来也会被立刻丢掉，干脆不收，免得反复插了又删
+                droppedAtCap += prefix.count
+            } else {
+                let fresh = prefix.filter { item in
+                    !messages.contains { Self.sameMessage(item, $0, config: config) }
+                }
+                duplicateDrops += prefix.count - fresh.count
+                if !fresh.isEmpty { messages.insert(contentsOf: fresh, at: 0) }
             }
-            duplicateDrops += prefix.count - fresh.count
-            if !fresh.isEmpty { messages.insert(contentsOf: fresh, at: 0) }
         } else if !visible[0..<match.visibleIndex].allSatisfy({ item in
             messages.contains { Self.sameMessage(item, $0, config: config) }
         }) {

@@ -15,6 +15,8 @@ struct LiveChatSnapshot: Equatable {
     var duplicateDrops = 0
     /// 因为超过上限而丢掉的旧条数
     var truncatedOldest = 0
+    /// 已经到上限时被拒绝的更旧条目数
+    var droppedAtCap = 0
     /// 连续多帧找不到可靠 overlap 的次数
     var discontinuityFrames = 0
     /// 最近一次合并是否发现「不连续聊天区域」
@@ -78,6 +80,7 @@ struct LiveChatSystem {
             unknownCount: timeline.messages.filter { $0.role == .unknown }.count,
             duplicateDrops: timeline.duplicateDrops,
             truncatedOldest: timeline.truncatedOldest,
+            droppedAtCap: timeline.droppedAtCap,
             discontinuityFrames: timeline.discontinuityFrames,
             showsDiscontinuity: timeline.lastDiscontinuity,
             generation: generation
