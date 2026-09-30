@@ -243,7 +243,7 @@ let secondEffect = busy.session.fireDue(now: t0.addingTimeInterval(104), config:
 expect(secondEffect == .idle, "21. 在飞的时候不会并发第二个 save")
 
 let laterBatch = [candidate("第二批", role: .me)]
-let pendingEffect = busy.session.noteTimeline(laterBatch, now: t0.addingTimeInterval(105), config: config)
+let pendingEffect = busy.session.noteTimeline(messages: laterBatch, now: t0.addingTimeInterval(105), config: config)
 expect(pendingEffect != .idle, "22b. 在飞期间的更新会被排上队")
 let finishFirst = busy.session.saveFinished(
     fingerprint: busy.session.lastAttemptFingerprint ?? "",
@@ -368,7 +368,7 @@ coordinator.onStateChange = { state, _, _ in
 coordinatorQueue.async {
     coordinator.resetForNewSession(generation: 1)
     coordinator.setEnabled(true, messages: [])
-    coordinator.noteTimeline([candidate("走真实计时器的内容", role: .me)])
+    coordinator.noteTimeline([candidate("走真实计时器的内容", role: .me)], generation: 1)
 }
 if fired.wait(timeout: .now() + 5) == .timedOut {
     expect(false, "16d. 协调器应当在自己的 debounce 之后真的写入一次")
