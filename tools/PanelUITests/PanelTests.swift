@@ -186,7 +186,7 @@ final class PanelTests: XCTestCase {
         panel.layoutIfNeeded()
 
         // idle：有入口，但还没有任何分析内容
-        XCTAssertTrue(labels(in: panel).contains("聊天分析"))
+        XCTAssertTrue(labels(in: panel).contains("【聊天分析】"))
         XCTAssertTrue(titles(in: panel).contains { $0.hasPrefix("分析这段聊天") })
 
         // 「读取识别聊天」只发读取动作，不发分析
