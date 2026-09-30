@@ -187,13 +187,13 @@ expect(harness.saves == 1, "18/57. 内容不变时 20 次更新也不会重复�
 let textChanged = [candidate("今晚有空吗", role: .other), candidate("有啊，我七点有空", role: .me)]
 harness.noteTimeline(textChanged, now: t0.addingTimeInterval(30))
 expect(harness.session.state == .scheduled, "19. 条数相同但正文变化会重新同步")
-harness.advance(to: t0.addingTimeInterval(31))
+harness.advance(to: t0.addingTimeInterval(30 + config.debounceInterval))
 expect(harness.saves == 2, "19b. 真的写了第二次")
 
 let roleChanged = [candidate("今晚有空吗", role: .me), candidate("有啊，我七点有空", role: .other)]
 harness.noteTimeline(roleChanged, now: t0.addingTimeInterval(40))
 expect(harness.session.state == .scheduled, "20. 正文相同但角色变化也会重新同步")
-harness.advance(to: t0.addingTimeInterval(41))
+harness.advance(to: t0.addingTimeInterval(40 + config.debounceInterval))
 expect(harness.saves == 3, "20b. 真的写了第三次")
 
 // MARK: - 6~9 / 11：unknown 拦住整次同步，system 丢在外
