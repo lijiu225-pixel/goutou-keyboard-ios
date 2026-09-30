@@ -422,16 +422,21 @@ expect(
 )
 
 // 分片必须**无缝、无重叠**地铺满整张工作图（重叠靠识别内容的去重解决，切图本身不重叠）。
+//
+// 容差取 1 像素：工作图高度是 `pixelHeight × scale`，实际渲染出来会取整
+// （1290×12000 缩到 645×6000 是整数没事，1290×2796 缩到 645×1398 就差 0.5 像素）。
+// 这点亚像素误差无关紧要，但断言不能假装它是 0。
+let tileSeamTolerance = 1.0
 let tiles = longScreenshot.tiles
 expect(tiles.first?.y == 0, "第一片必须从顶部开始，实际 \(String(describing: tiles.first?.y))")
 expect(
-    abs((tiles.last?.maxY ?? 0) - longScreenshot.workingHeight) < 0.001,
+    abs((tiles.last?.maxY ?? 0) - longScreenshot.workingHeight) < tileSeamTolerance,
     "最后一片必须正好贴住底边"
 )
 for index in 1..<tiles.count {
     expect(
-        abs(tiles[index].y - tiles[index - 1].maxY) < 0.001,
-        "第 \(index + 1) 片必须紧接上一片，不能有缝也不能重叠"
+        abs(tiles[index].y - tiles[index - 1].maxY) < tileSeamTolerance,
+        "第 \(index + 1) 片必须紧接上一片，不能有缝也不能重叠（容差 \(tileSeamTolerance) 像素），实际 \(tiles[index].y) vs \(tiles[index - 1].maxY)"
     )
     expect(
         tiles[index].width == longScreenshot.workingWidth,
