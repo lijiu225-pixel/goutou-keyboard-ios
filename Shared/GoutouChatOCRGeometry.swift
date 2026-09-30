@@ -198,20 +198,31 @@ enum ChatOCRTilingPlanner {
         )
     }
 
-    /// 从下往上倒着推每一片的起点，保证最后一片正好贴着底边、没有空白片。
+    /// 把工作图竖着切成连续的若干片：层高尽量取 `tileSpan`，除不尽时把余数摊平，
+    /// 保证「第一片从 0 开始、片片相接、最后一片正好贴底」，而且没有空白片。
+    ///
+    /// 曾经写成「从下往上倒推 `H - (remaining+1) × span`」，那只在 H 正好是 span 整数倍时成立：
+    /// H=4465.116、span=1400 时会算出第 1 片 y=0 h=1400、第 2 片 y=265.116，
+    /// 两片直接叠在一起，中间那一大段永远识别不到。
     static func tileRects(workingWidth: Double, workingHeight: Double, tileSpan: Double) -> [ChatPixelRect] {
         guard workingWidth >= 1, workingHeight >= 1, tileSpan >= 1 else { return [] }
         let count = max(1, Int(ceil(workingHeight / tileSpan)))
+        // 平均层高。除不尽时各片高度最多相差 1 像素，无所谓；
+        // 关键是它一定 ≤ tileSpan，所以每片都还在 Vision 舒服的范围内。
+        let slice = workingHeight / Double(count)
+
         var rects: [ChatPixelRect] = []
         rects.reserveCapacity(count)
         for index in 0..<count {
-            let remaining = count - 1 - index
-            let top = max(0, workingHeight - Double(remaining + 1) * tileSpan)
+            let top = slice * Double(index)
+            // 除了最后一片都按 slice 取，最后一片直接取到 H：
+            // 用乘法算 `slice × (index+1)` 会积累浮点误差，让最后一片差几个 ulp 贴不住底边。
+            let bottom = index == count - 1 ? workingHeight : slice * Double(index + 1)
             let rect = ChatPixelRect(
                 x: 0,
                 y: top,
                 width: workingWidth,
-                height: min(tileSpan, workingHeight - top)
+                height: bottom - top
             )
             rects.append(rect.clipped(toWidth: workingWidth, height: workingHeight))
         }

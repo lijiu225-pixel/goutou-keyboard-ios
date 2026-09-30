@@ -400,7 +400,8 @@ expect(mixedConfidence[0].confidence == 0.3, "一条消息的置信度取组内�
 // MARK: - 9. 长截图分片：缩放口径
 
 // 关键回归：1290×12000 的长截图如果按「最长边 2400」缩，宽度只剩 258 像素，文字直接不可读。
-// 正确行为是退回按最小宽度定比例（480 / 1290 = 0.372 → 还是不够，于是取 0.5 让宽度过线）。
+// 现在的口径：按最长边缩会让宽度掉到 480 以下，就改成按最小宽度定比例 ——
+// 480 / 1290 = 0.372，宽度正好落在可读下限 480 上。
 let longScreenshot = try ChatOCRTilingPlanner.plan(pixelWidth: 1290, pixelHeight: 12000)
 expect(longScreenshot.strategy == .tiled, "长截图必须走分片路线")
 expect(
@@ -409,11 +410,11 @@ expect(
 )
 expect(
     longScreenshot.workingWidth > 1290 * (2400.0 / 12000.0),
-    "宽度必须明显优于「最长边缩到 2400」的旧行为（旧行为只有 \(1290 * 2400 / 12000)）"
+    "宽度必须明显优于「最长边缩到 2400」的旧行为（旧行为只有 \(1290 * 2400 / 12000))，实际 \(longScreenshot.workingWidth)"
 )
 expect(
-    longScreenshot.scale >= 480.0 / 1290.0,
-    "缩放比例不能被压到最小可读宽度以下，实际 \(longScreenshot.scale)"
+    abs(longScreenshot.scale - 480.0 / 1290.0) < 0.0001,
+    "缩放比应该正好是「让宽度落在可读下限」的比例，实际 \(longScreenshot.scale)"
 )
 expect(longScreenshot.tiles.count > 1, "要切成多片，实际 \(longScreenshot.tiles.count)")
 expect(
@@ -423,9 +424,12 @@ expect(
 
 // 分片必须**无缝、无重叠**地铺满整张工作图（重叠靠识别内容的去重解决，切图本身不重叠）。
 //
-// 容差取 1 像素：工作图高度是 `pixelHeight × scale`，实际渲染出来会取整
-// （1290×12000 缩到 645×6000 是整数没事，1290×2796 缩到 645×1398 就差 0.5 像素）。
-// 这点亚像素误差无关紧要，但断言不能假装它是 0。
+// 容差取 1 像素：工作图高度是 `pixelHeight × scale`，渲染出来会取整，
+// 除不尽时各片高度也会差不到 1 像素。这点亚像素误差无关紧要，但断言不能假装它是 0。
+//
+// 这里同时锁死一个真实修过的 bug：曾经「从下往上倒推」的写法只在高度正好是片高整数倍时
+// 成立，1290×12000 的实际计划（工作图 480×4465.116）会算出第 1 片 y=0 h=1400、
+// 第 2 片 y=265.116 —— 两片叠在一起，中间一大段永远识别不到。
 let tileSeamTolerance = 1.0
 let tiles = longScreenshot.tiles
 // 接缝断言失败时得能一次看全所有数字，所以先把计划整体打成一行日志。
@@ -454,14 +458,39 @@ for index in 1..<tiles.count {
     )
 }
 expect(
-    tiles.allSatisfy { $0.height <= ChatOCRTilingConfig.default.tileSpan + 0.001 },
-    "每一片的高度不能超过分片跨度"
+    tiles.allSatisfy { $0.height > 0 && $0.height <= ChatOCRTilingConfig.default.tileSpan + 0.001 },
+    "每一片的高度必须落在 (0, 片高上限] 之间，不能出现零高或超高的片"
+)
+// 真正把整张工作图盖满：覆盖总长度必须等于工作图高度（不是「有几片」就算了）。
+let covered = tiles.reduce(0.0) { $0 + $1.height }
+expect(
+    abs(covered - longScreenshot.workingHeight) < tileSeamTolerance,
+    "所有片的高度加起来必须正好等于工作图高度，实际 \(covered) vs \(longScreenshot.workingHeight)"
 )
 
-// 普通竖屏截图：不能因为分片改动而改变原有行为（仍是单次识别）。
+// 除不尽的情形：2400 高的工作图切成 1400 的片 → 2 片各 1200，而不是「1400 + 1000」。
+let unevenTiling = ChatOCRTilingPlanner.tileRects(workingWidth: 600, workingHeight: 2400, tileSpan: 1400)
+expect(unevenTiling.count == 2, "2400 高切 1400 的片要两片，实际 \(unevenTiling.count)")
+expect(
+    unevenTiling.allSatisfy { abs($0.height - 1200) < 0.001 },
+    "除不尽时把余数摊平，两片各 1200，实际 \(unevenTiling.map { $0.height })"
+)
+expect(unevenTiling[1].y == unevenTiling[0].maxY, "摊平之后两片依然严丝合缝")
+expect(
+    abs(unevenTiling[1].maxY - 2400) < 0.001,
+    "最后一片依然贴底，实际 \(unevenTiling[1].maxY)"
+)
+
+// 普通竖屏截图：最长边超过 2400，缩到 2400 后正好单次识别完（不出多余的分片）。
 let phoneScreenshot = try ChatOCRTilingPlanner.plan(pixelWidth: 1290, pixelHeight: 2796)
-expect(phoneScreenshot.strategy == .tiled, "2796 高超过 2400，仍然要分片")
-expect(phoneScreenshot.tiles.count == 2, "2796 高应该正好两片，实际 \(phoneScreenshot.tiles.count)")
+expect(
+    phoneScreenshot.strategy == .singlePass,
+    "缩到 2400 之后高度正好在单次范围内，不该白切片，实际 \(phoneScreenshot.strategy)"
+)
+expect(
+    abs(phoneScreenshot.workingHeight - 2400) < 0.001,
+    "普通竖屏截图应该缩到高度 2400，实际 \(phoneScreenshot.workingHeight)"
+)
 
 let smallScreenshot = try ChatOCRTilingPlanner.plan(pixelWidth: 1170, pixelHeight: 2000)
 expect(smallScreenshot.strategy == .singlePass, "最长边不超过上限就单次识别")
@@ -471,10 +500,25 @@ expect(
     "单次识别不改尺寸"
 )
 
-// 刚刚越过上限：仍然按最长边缩，宽度还够用（这条锁住「没触发宽度保护」的路径）。
-let justOver = try ChatOCRTilingPlanner.plan(pixelWidth: 1290, pixelHeight: 2401)
-expect(justOver.strategy == .tiled, "2401 高要分片")
-expect(abs(justOver.scale - 2400.0 / 2401.0) < 0.0001, "刚刚越界时按最长边缩，实际 \(justOver.scale)")
+// 刚越过单次上限：按最长边缩（宽度还够，不触发宽度保护），缩完工作图高度正好 2400，所以仍是单次。
+// 这条专门锁住「没触发宽度保护」的那条路径。
+let justOver = try ChatOCRTilingPlanner.plan(pixelWidth: 2000, pixelHeight: 2401)
+expect(
+    abs(justOver.scale - 2400.0 / 2401.0) < 0.0001,
+    "刚刚越界时按最长边缩，实际 \(justOver.scale)"
+)
+expect(
+    abs(justOver.workingHeight - 2400) < 0.001,
+    "缩完高度正好压到 2400，实际 \(justOver.workingHeight)"
+)
+// 再高一点就真的开始分片了。
+let tiledJustOver = try ChatOCRTilingPlanner.plan(pixelWidth: 2000, pixelHeight: 2600)
+expect(tiledJustOver.strategy == .tiled, "2600 高要分片，实际 \(tiledJustOver.strategy)")
+expect(
+    abs(tiledJustOver.workingHeight - 2400) < 0.001,
+    "分片时工作图高度也是 2400，实际 \(tiledJustOver.workingHeight)"
+)
+expect(tiledJustOver.tiles.count == 2, "2400 高切 1400 的片是 2 片，实际 \(tiledJustOver.tiles.count)")
 
 // MARK: - 10. 长截图分片：超出支持范围要明确报错，不能静默缩到不可用
 
@@ -534,14 +578,26 @@ for error: ChatOCRGeometryError in [
 
 // MARK: - 11. 分片坐标换算回原图统一归一化
 
-// 1290×12000，缩放 0.5 → 工作图 645×6000，片高 1400：片起点 0 / 1400 / 2800 / 4200 / 5500。
-let tiled = try ChatOCRTilingPlanner.plan(pixelWidth: 1290, pixelHeight: 12000)
-expect(abs(tiled.scale - 0.5) < 0.0001, "前提：这张图的缩放比是 0.5，实际 \(tiled.scale)")
-let mapper = ChatOCRCoordinateMapper(plan: tiled)
+// 坐标换算用一份**合成**计划，数字好核对：1290×12000 原图，工作图 645×6000（缩放 0.5），
+// 片高 1400 → 4 片，起点 0 / 1400 / 2800 / 4200。
+// （真实计划里 1290×12000 的缩放是 0.372，工作图 480×4465.116，数字不好看，
+//  所以这里用合成计划单独验换算，剩下的部分在上面用真实计划验。）
+let syntheticPlan = ChatOCRTilingPlan(
+    originalWidth: 1290,
+    originalHeight: 12000,
+    scale: 0.5,
+    workingWidth: 645,
+    workingHeight: 6000,
+    strategy: .tiled,
+    tiles: ChatOCRTilingPlanner.tileRects(workingWidth: 645, workingHeight: 6000, tileSpan: 1400)
+)
+expect(syntheticPlan.tiles.count == 4, "合成计划应该有 4 片，实际 \(syntheticPlan.tiles.count)")
+let mapper = ChatOCRCoordinateMapper(plan: syntheticPlan)
 
 // 第 2 片（工作图 y 从 1400 开始）里、贴着该片顶部的一行：
 // 片内归一化 y=0 → 工作图 1400 → 原图 2800 → 归一化 2800/12000 = 0.2333…
-let secondTile = tiled.tiles[1]
+let secondTile = syntheticPlan.tiles[1]
+expect(secondTile.y == 1400, "合成计划第 2 片起点应该是 1400，实际 \(secondTile.y)")
 let mappedFromSecondTile = mapper.map(
     lines: [
         ChatOCRLine(
@@ -579,7 +635,7 @@ expect(
 )
 
 // 第一片和最后一片的边界也要落在原图范围内（0...1）。
-for (offset, tile) in tiled.tiles.enumerated() {
+for (offset, tile) in syntheticPlan.tiles.enumerated() {
     let mapped = mapper.map(
         lines: [ChatOCRLine(text: "行 \(offset)", box: ChatLayoutBox(x: 0, y: 0, width: 1, height: 1), confidence: 1)],
         tileOrigin: tile,
