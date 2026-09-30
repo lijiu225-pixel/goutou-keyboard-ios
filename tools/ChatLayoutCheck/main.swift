@@ -511,14 +511,20 @@ expect(
     abs(justOver.workingHeight - 2400) < 0.001,
     "缩完高度正好压到 2400，实际 \(justOver.workingHeight)"
 )
-// 再高一点就真的开始分片了。
-let tiledJustOver = try ChatOCRTilingPlanner.plan(pixelWidth: 2000, pixelHeight: 2600)
-expect(tiledJustOver.strategy == .tiled, "2600 高要分片，实际 \(tiledJustOver.strategy)")
+// 只有「宽度保护」逼着少缩时，缩完高度才会超过 2400、才真的需要分片。
+let widthProtectedTiling = try ChatOCRTilingPlanner.plan(pixelWidth: 1290, pixelHeight: 5000)
 expect(
-    abs(tiledJustOver.workingHeight - 2400) < 0.001,
-    "分片时工作图高度也是 2400，实际 \(tiledJustOver.workingHeight)"
+    widthProtectedTiling.strategy == .tiled,
+    "宽度保护下的 1290×5000 必须分片，实际 \(widthProtectedTiling.strategy)"
 )
-expect(tiledJustOver.tiles.count == 2, "2400 高切 1400 的片是 2 片，实际 \(tiledJustOver.tiles.count)")
+expect(
+    abs(widthProtectedTiling.workingHeight - 5000 * 480.0 / 1290.0) < 0.001,
+    "工作图高度应该是 5000 × 0.372，实际 \(widthProtectedTiling.workingHeight)"
+)
+expect(
+    widthProtectedTiling.tiles.count == 2,
+    "2232 高的工作图切成 1400 的片是 2 片，实际 \(widthProtectedTiling.tiles.count)"
+)
 
 // MARK: - 10. 长截图分片：超出支持范围要明确报错，不能静默缩到不可用
 
