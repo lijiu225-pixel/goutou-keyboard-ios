@@ -90,7 +90,7 @@ enum ChatOCRGeometryError: LocalizedError, Equatable {
         case .tooTall(let pixelHeight, let tileCount):
             return "这张图有 \(Int(pixelHeight)) 像素高，需要切成 \(tileCount) 片，超过本阶段支持的上限。请分段截图（比如一次截半屏），分几次识别。"
         case .widthTooSmall(let pixelWidth, let minimum):
-            return "这张图只有 \(Int(pixelWidth)) 像素宽，缩到能识别的尺寸后文字会糊，认不准。请用原始分辨率重新截图。"
+            return "这张图只有 \(Int(pixelWidth)) 像素宽，缩到能识别的尺寸（宽度至少 \(Int(minimum)) 像素）后文字会糊，认不准。请用原始分辨率重新截图。"
         }
     }
 }

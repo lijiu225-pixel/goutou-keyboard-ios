@@ -298,7 +298,7 @@ expect(centered[1].needsReview, "未确定要能被界面识别出来")
 let oneFullWidth = ChatLayoutParser.parse(lines: [
     line("这是一整屏宽的一句话", x: 0.02, y: 0.10, width: 0.96),
 ])
-expect(oneFullWidth.count == 1)
+expect(oneFullWidth.count == 1, "整屏宽的一句话就是一条，实际 \(oneFullWidth.count)")
 expect(oneFullWidth[0].role == .unknown, "整屏宽的气泡左右都贴边，不能靠 midX 硬判")
 
 // 截图里只有一侧的话：缺少另一侧参照，诚实标未确定，由「批量修正归属」一键定完
