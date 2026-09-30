@@ -129,9 +129,13 @@ enum ChatOCRTilingPlanner {
     /// 唯一决定「单次还是分片」的地方。
     ///
     /// 缩放口径（关键修复点）：
-    /// - 第一次只按最长边算，保证不超 `maxPixelDimension`；
-    /// - 如果这么算出来的宽度低于 `minimumPixelDimension`，就**退回到按最小宽度定比例**，
-    ///   宁可片多一点，也不把文字压糊。
+    /// - 先按「最长边不超 `maxPixelDimension`」算一个上限；
+    /// - 如果这么缩会把宽度压到 `minimumPixelDimension` 以下，就改成**按最小宽度定比例**，
+    ///   宁可片多一点，也不把文字压糊。这一步是**放大**（少缩），不是接着往下缩。
+    ///
+    /// 注意 `max(scale, widthPreserving)` 这个写法是错的：`scale` 是「最多能缩到多少」，
+    /// 宽度保护要求的是「最少只能缩到多少」，两者取 max 会让缩放比反而变小
+    /// （1290×12000 会算出 0.372，宽度正好 480，文字照样糊）。正确的是直接取宽度要求的比例。
     static func plan(
         pixelWidth: Double,
         pixelHeight: Double,
@@ -150,8 +154,8 @@ enum ChatOCRTilingPlanner {
         let widthAfterLongestEdge = pixelWidth * scale
         if widthAfterLongestEdge < config.minimumPixelDimension {
             // 长截图走到这里：按最长边缩会把宽度压到不可读，改成按宽度定比例。
-            let widthPreservingScale = config.minimumPixelDimension / pixelWidth
-            scale = max(scale, min(1, widthPreservingScale))
+            // 不放大（`min(1, ...)`）：原图本来就窄的情况由下面的宽度检查负责报错。
+            scale = min(1, config.minimumPixelDimension / pixelWidth)
         }
 
         let workingWidth = max(1, pixelWidth * scale)

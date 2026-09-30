@@ -428,15 +428,25 @@ expect(
 // 这点亚像素误差无关紧要，但断言不能假装它是 0。
 let tileSeamTolerance = 1.0
 let tiles = longScreenshot.tiles
+// 接缝断言失败时得能一次看全所有数字，所以先把计划整体打成一行日志。
+print(
+    "[诊断] 1290×12000 → strategy=\(longScreenshot.strategy) scale=\(longScreenshot.scale) "
+        + "working=\(longScreenshot.workingWidth)×\(longScreenshot.workingHeight) "
+        + "tiles=\(tiles.count) "
+        + tiles.enumerated().map { "\($0.offset):[y=\($0.element.y) h=\($0.element.height) maxY=\($0.element.maxY)]" }
+            .joined(separator: " ")
+)
 expect(tiles.first?.y == 0, "第一片必须从顶部开始，实际 \(String(describing: tiles.first?.y))")
 expect(
     abs((tiles.last?.maxY ?? 0) - longScreenshot.workingHeight) < tileSeamTolerance,
-    "最后一片必须正好贴住底边"
+    "最后一片必须正好贴住底边，实际 \(String(describing: tiles.last?.maxY)) vs \(longScreenshot.workingHeight)"
 )
 for index in 1..<tiles.count {
     expect(
         abs(tiles[index].y - tiles[index - 1].maxY) < tileSeamTolerance,
-        "第 \(index + 1) 片必须紧接上一片，不能有缝也不能重叠（容差 \(tileSeamTolerance) 像素），实际 \(tiles[index].y) vs \(tiles[index - 1].maxY)"
+        "第 \(index + 1) 片必须紧接上一片，不能有缝也不能重叠（容差 \(tileSeamTolerance) 像素），"
+            + "实际 \(tiles[index].y) vs \(tiles[index - 1].maxY)，"
+            + "片高 \(tiles[index].height)，工作图高 \(longScreenshot.workingHeight)"
     )
     expect(
         tiles[index].width == longScreenshot.workingWidth,
