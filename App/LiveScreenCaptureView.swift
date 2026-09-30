@@ -57,6 +57,59 @@ struct LiveScreenCaptureView: View {
                 Text("只保留最近一次结果，放在内存里；不保存截图、不写文件。")
             }
 
+            Section {
+                LabeledContent("当前屏幕候选", value: "\(manager.chat.candidatesThisFrame)")
+                LabeledContent("本帧已稳定", value: "\(manager.chat.stableThisFrame)")
+                LabeledContent("待确认", value: "\(manager.chat.pendingCandidates)")
+                LabeledContent("时间线消息", value: "\(manager.chat.messages.count)")
+                LabeledContent("未确定角色", value: "\(manager.chat.unknownCount)")
+                LabeledContent("去重丢弃", value: "\(manager.chat.duplicateDrops)")
+                if manager.chat.truncatedOldest > 0 {
+                    LabeledContent("超出上限丢弃", value: "\(manager.chat.truncatedOldest)")
+                }
+                Button("清空实时聊天", role: .destructive) { manager.clearLiveChat() }
+                    .disabled(manager.chat.messages.isEmpty)
+            } header: {
+                Text("实时聊天")
+            } footer: {
+                Text("只放在内存里，最多 \(LiveChatGeometryConfiguration.default.maxTimelineMessages) 条；不会写共享聊天，也不会自动送去 AI。清空不会停止屏幕捕获。")
+            }
+
+            if manager.chat.showsDiscontinuity {
+                Section {
+                    Label("检测到不连续聊天区域：这一屏和已记录的内容没有可靠重叠，先不拼接。", systemImage: "exclamationmark.triangle")
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            Section {
+                if manager.chat.messages.isEmpty {
+                    Text("还没有稳定消息。切到微信停一会儿，或上下滚动一次。")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 6) {
+                            ForEach(Array(manager.chat.messages.enumerated()), id: \.offset) { _, message in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(message.role.displayName)
+                                        .font(.caption2)
+                                        .foregroundStyle(roleColor(message.role))
+                                    Text(message.text)
+                                        .font(.footnote)
+                                        .textSelection(.enabled)
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 240)
+                }
+            } header: {
+                Text("时间线（按识别顺序）")
+            } footer: {
+                Text("「未确定」表示从几何上看不出归属，它不会被自动算成「我」或「对方」。")
+            }
+
             if case .unsupported = manager.model.state {
                 Section {
                     Text("动态屏幕识别需要 iOS 27 或更高版本；截图 OCR、军师分析与回复插入都不受影响。")
@@ -67,6 +120,16 @@ struct LiveScreenCaptureView: View {
         }
         .navigationTitle("动态识别测试")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// 角色只用文字标签区分，颜色只是辅助：unknown 必须显眼，不能被藏起来。
+    private func roleColor(_ role: LiveChatRole) -> Color {
+        switch role {
+        case .me: return .blue
+        case .other: return .primary
+        case .unknown: return .orange
+        case .system: return .secondary
+        }
     }
 }
 

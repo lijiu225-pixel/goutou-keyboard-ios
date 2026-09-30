@@ -50,6 +50,15 @@ enum LiveScreenOCRProcessor {
             guard let candidate = observation.topCandidates(1).first else { return nil }
             return Line(text: candidate.string, box: observation.boundingBox)
         }
-        return LiveOCRSnapshot(timestamp: now, strings: readingOrder(lines))
+        // 阶段 12B：把几何一起带走（Vision 是左下角原点，这里换算成左上角原点）。
+        let observations = (request.results ?? []).compactMap { observation -> LiveOCRObservation? in
+            guard let candidate = observation.topCandidates(1).first else { return nil }
+            return LiveOCRObservation.fromVision(
+                text: candidate.string,
+                confidence: Double(candidate.confidence),
+                boundingBox: observation.boundingBox
+            )
+        }
+        return LiveOCRSnapshot(timestamp: now, strings: readingOrder(lines), observations: observations)
     }
 }

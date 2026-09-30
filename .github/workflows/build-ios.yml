@@ -147,6 +147,27 @@ jobs:
             -o "$RUNNER_TEMP/livescreencapturecheck"
           "$RUNNER_TEMP/livescreencapturecheck"
 
+      # 阶段 12B：聊天消息结构化 + 保守角色判断 + 稳定化 + 滚动去重（纯逻辑，不联网、不落盘）。
+      - name: Live chat recognition contract
+        run: |
+          swiftc -swift-version 5 \
+            Shared/SharedConstants.swift \
+            Shared/GoutouChatClipboard.swift \
+            Shared/SharedChatStore.swift \
+            Keyboard/GoutouConfig.swift \
+            App/ScreenCapture/LiveOCRObservation.swift \
+            App/ScreenCapture/LiveOCRSnapshot.swift \
+            App/ScreenCapture/LiveChatGeometryConfiguration.swift \
+            App/ScreenCapture/LiveChatCandidate.swift \
+            App/ScreenCapture/LiveChatRoleClassifier.swift \
+            App/ScreenCapture/LiveChatBlockGrouper.swift \
+            App/ScreenCapture/LiveChatStabilizer.swift \
+            App/ScreenCapture/LiveChatTimeline.swift \
+            App/ScreenCapture/LiveChatSystem.swift \
+            tools/LiveChatRecognitionCheck/main.swift \
+            -o "$RUNNER_TEMP/livechatreccheck"
+          "$RUNNER_TEMP/livechatreccheck"
+
       - name: Generate Xcode project
         run: |
           xcodegen generate

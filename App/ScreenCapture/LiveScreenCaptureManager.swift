@@ -9,6 +9,20 @@ import SwiftUI
 import ScreenCaptureKit
 #endif
 
+/// 阶段 12B 的聊天状态盒：只在 `ocrQueue` 上访问，避免和 MainActor 抢状态。
+private final class LiveChatEngineBox {
+    private var system = LiveChatSystem()
+
+    func ingest(observations: [LiveOCRObservation], timestamp: Date, generation: Int) -> LiveChatSnapshot {
+        system.ingest(observations: observations, timestamp: timestamp, generation: generation)
+    }
+
+    func reset(generation: Int) -> LiveChatSnapshot {
+        system.reset(generation: generation)
+        return system.snapshot()
+    }
+}
+
 /// 阶段 12A：整屏捕获管理器。
 ///
 /// 只在主 App 里：键盘扩展绝不碰屏幕捕获。
@@ -22,9 +36,12 @@ import ScreenCaptureKit
 final class LiveScreenCaptureManager: ObservableObject {
 
     @Published private(set) var model: LiveScreenCaptureModel
+    /// 阶段 12B 的实时聊天快照（只读给界面）。
+    @Published private(set) var chat = LiveChatSnapshot.empty
 
     private let sampleQueue = DispatchQueue(label: "goutou.live.capture.samples")
     private let ocrQueue = DispatchQueue(label: "goutou.live.capture.ocr", qos: .utility)
+    private let chatEngine = LiveChatEngineBox()
     /// OCR 在跑时最多留一帧最新画面（SCStream / bridge 都是 Any，靠 availability 再转回来）。
     private var stream: AnyObject?
     private var pickerBridge: AnyObject?
@@ -48,6 +65,11 @@ final class LiveScreenCaptureManager: ObservableObject {
     /// 点「开始动态识别测试」：只挂观察者并调起系统 picker，**不**提前假设捕获成功。
     func start() {
         guard model.beginStart() else { return }
+        // 阶段 12B：重新开始 = 新 session，实时聊天与稳定化状态一起清零，避免跨会话误拼。
+        chat = .empty
+        let engine = chatEngine
+        let newGeneration = model.generation
+        ocrQueue.async { _ = engine.reset(generation: newGeneration) }
         #if canImport(ScreenCaptureKit)
         if #available(iOS 27.0, *) {
             let bridge = LiveContentSharingPickerBridge(owner: self)
@@ -84,6 +106,20 @@ final class LiveScreenCaptureManager: ObservableObject {
         }
         #endif
         model.captureDidStop()
+    }
+
+    /// 只清阶段 12B 的实时聊天（时间线 / 稳定化 / 去重状态）。
+    ///
+    /// **不**停止屏幕捕获、**不**碰共享聊天、**不**碰键盘上的聊天：
+    /// 捕获继续跑，之后会重新积累。
+    func clearLiveChat() {
+        chat = .empty
+        let engine = chatEngine
+        let generation = model.generation
+        ocrQueue.async { [weak self] in
+            let snapshot = engine.reset(generation: generation)
+            Task { @MainActor in self?.chat = snapshot }
+        }
     }
 
     // MARK: - picker / stream 回调（由桥转发进来）
@@ -157,6 +193,7 @@ final class LiveScreenCaptureManager: ObservableObject {
     private func runOCR(pixelBuffer: CVPixelBuffer, orientation: CGImagePropertyOrientation, generation: Int) {
         model.ocrDidStart(at: Date())
         let languages = ChatOCRService.defaultLanguageHints
+        let engine = chatEngine
         ocrQueue.async { [weak self] in
             let result: Result<LiveOCRSnapshot, LiveOCRFailure>
             do {
@@ -168,13 +205,27 @@ final class LiveScreenCaptureManager: ObservableObject {
             } catch {
                 result = .failure(LiveOCRFailure("这一帧识别失败"))
             }
+            var chatSnapshot: LiveChatSnapshot?
+            if case .success(let snapshot) = result {
+                // 阶段 12B：分组、编辑距离、overlap 都在这个串行队列上做，不占主线程。
+                chatSnapshot = engine.ingest(
+                    observations: snapshot.observations,
+                    timestamp: snapshot.timestamp,
+                    generation: generation
+                )
+            }
             Task { @MainActor in
-                self?.finishOCR(result, generation: generation)
+                self?.finishOCR(result, chat: chatSnapshot, generation: generation)
             }
         }
     }
 
-    private func finishOCR(_ result: Result<LiveOCRSnapshot, LiveOCRFailure>, generation: Int) {
+    private func finishOCR(
+        _ result: Result<LiveOCRSnapshot, LiveOCRFailure>,
+        chat chatSnapshot: LiveChatSnapshot?,
+        generation: Int
+    ) {
+        if let chatSnapshot { chat = chatSnapshot }
         // 代际号对不上（已经停止 / 重新开始）时，模型一个字都不写。
         let runPending = model.ocrDidFinish(generation: generation, result: result, at: Date())
         if runPending, let pending = pendingFrame {

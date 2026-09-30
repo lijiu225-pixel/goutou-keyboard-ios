@@ -9,10 +9,13 @@ struct LiveOCRSnapshot: Equatable {
     let strings: [String]
     /// 上面几行拼起来，给界面直接显示。
     let fullText: String
+    /// 结构化结果（阶段 12B 用）：文字 + 置信度 + **左上角原点**的归一化包围盒。
+    let observations: [LiveOCRObservation]
 
-    init(timestamp: Date, strings: [String]) {
+    init(timestamp: Date, strings: [String], observations: [LiveOCRObservation] = []) {
         self.timestamp = timestamp
         self.strings = strings
         self.fullText = strings.joined(separator: "\n")
+        self.observations = observations
     }
 }
