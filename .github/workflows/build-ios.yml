@@ -139,6 +139,7 @@ jobs:
             Shared/SharedConstants.swift \
             Shared/GoutouChatClipboard.swift \
             Shared/SharedChatStore.swift \
+            Shared/SharedChatFingerprint.swift \
             Keyboard/GoutouConfig.swift \
             App/ScreenCapture/LiveOCRObservation.swift \
             App/ScreenCapture/LiveOCRSnapshot.swift \
@@ -209,6 +210,7 @@ jobs:
             App/ScreenCapture/LiveChatTimeline.swift \
             App/ScreenCapture/LiveChatSystem.swift \
             App/ScreenCapture/LiveChatReviewDraft.swift \
+            Shared/SharedChatFingerprint.swift \
             App/ScreenCapture/LiveChatAutoSyncConfiguration.swift \
             App/ScreenCapture/LiveChatAutoSyncState.swift \
             App/ScreenCapture/LiveChatAutoSyncSession.swift \
@@ -216,6 +218,24 @@ jobs:
             tools/LiveChatAutoSyncCheck/main.swift \
             -o "$RUNNER_TEMP/livechatautosynccheck"
           "$RUNNER_TEMP/livechatautosynccheck"
+
+      # 阶段 12E：键盘自动发现共享聊天更新 + 「使用最新聊天」的语义。
+      - name: Shared chat update contract
+        run: |
+          swiftc -swift-version 5 \
+            Shared/SharedConstants.swift \
+            Shared/GoutouChatClipboard.swift \
+            Shared/SharedChatStore.swift \
+            Shared/SharedChatFingerprint.swift \
+            Keyboard/GoutouConfig.swift \
+            Keyboard/GoutouPrompt.swift \
+            Keyboard/GoutouAIClient.swift \
+            Keyboard/RecognizedChatContext.swift \
+            Keyboard/RecognizedChatAnalysis.swift \
+            Keyboard/SharedChatUpdateDetector.swift \
+            tools/SharedChatUpdateCheck/main.swift \
+            -o "$RUNNER_TEMP/sharedchatupdatecheck"
+          "$RUNNER_TEMP/sharedchatupdatecheck"
 
       - name: Generate Xcode project
         run: |

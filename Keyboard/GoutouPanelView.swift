@@ -44,6 +44,8 @@ struct GoutouPanelSnapshot {
     var sharedChatError: String? = nil
     /// 键盘正在使用的识别聊天临时上下文；nil = 只是看过预览，没在使用。
     var activeRecognizedChat: RecognizedChatContext? = nil
+    /// 阶段 12E：键盘发现 SharedChatStore 有新聊天时显示的横幅（nil = 不显示）。
+    var pendingSharedChat: PendingSharedChatUpdate? = nil
     /// 识别聊天分析区的状态（idle / loading / success / failure），由控制器算好。
     var recognizedChatAnalysis: RecognizedChatAnalysisState = .idle
 }
@@ -53,6 +55,8 @@ enum GoutouPanelAction {
     case importConfig
     case readAppGroupProbe
     case readRecognizedChat
+    /// 阶段 12E：用户点「使用最新聊天」——只切 Active Context，不调 AI。
+    case useLatestSharedChat
     /// 把当前预览正式变成临时上下文（只改本地状态，阶段 8 不接 AI）。
     case useRecognizedChat
     /// 只取消使用，不删共享聊天、不动预览。
@@ -438,6 +442,9 @@ final class GoutouPanelView: UIView {
         }
         if screen == .profiles { buildProfilesBody(); return }
         bodyStack.addArrangedSubview(makeReadChatButton())
+        if let pending = pendingSharedChat {
+            buildPendingSharedChatBanner(pending)
+        }
         if let active = activeRecognizedChat {
             // 主屏也要看得出「正在使用识别聊天」，别和「只是看过预览」混起来。
             bodyStack.addArrangedSubview(makeNoticeLabel("已使用识别聊天 · \(active.messageCount) 条", color: GoutouTheme.secondary))
@@ -528,6 +535,24 @@ final class GoutouPanelView: UIView {
         makeActionButton(title: "读取识别聊天", background: GoutouTheme.function, fontSize: 14) {
             self.delegate?.goutouPanel(self, didTrigger: .readRecognizedChat)
         }
+    }
+
+    /// 阶段 12E：发现共享聊天有更新时只**提示**，绝不自动替换上下文、清结果或调 AI。
+    private func buildPendingSharedChatBanner(_ pending: PendingSharedChatUpdate) {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .medium
+        bodyStack.addArrangedSubview(makeSectionHeader("发现新聊天 · \(pending.messageCount) 条"))
+        bodyStack.addArrangedSubview(makeNoticeLabel(
+            "保存时间：\(formatter.string(from: pending.updatedAt))",
+            color: GoutouTheme.secondary
+        ))
+        if activeRecognizedChat != nil {
+            bodyStack.addArrangedSubview(makeNoticeLabel("使用后会替换当前聊天。", color: GoutouTheme.secondary))
+        }
+        bodyStack.addArrangedSubview(makeActionButton(title: "使用最新聊天", background: GoutouTheme.blue, fontSize: 14) {
+            self.delegate?.goutouPanel(self, didTrigger: .useLatestSharedChat)
+        })
     }
 
     private func buildSharedChatBody() {

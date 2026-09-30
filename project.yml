@@ -61,6 +61,8 @@ targets:
       - path: Shared/AppGroupDiagnostics.swift
       - path: Shared/SharedChatStore.swift
       # 军师人格：和 Android / Web 共用同一个 SKILL.md，打进键盘 bundle 当 system prompt。
+      # 阶段 12E：共享聊天指纹两端共用，免得 App 与 Keyboard 对「是不是同一份聊天」判断不一致。
+      - path: Shared/SharedChatFingerprint.swift
       - path: Keyboard/GoutouSkill.md
         buildPhase: resources
       # 九键拼音词库（由 tools/fetch-pinyin-data.py 从三份 MIT 数据生成）
@@ -103,6 +105,7 @@ targets:
       - path: Shared/SharedConstants.swift
       - path: Shared/AppGroupDiagnostics.swift
       - path: Shared/SharedChatStore.swift
+      - path: Shared/SharedChatFingerprint.swift
     dependencies:
       - target: GoutouPanelTestHost
     settings:

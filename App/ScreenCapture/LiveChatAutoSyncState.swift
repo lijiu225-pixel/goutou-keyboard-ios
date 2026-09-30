@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 /// 自动同步的状态：一个状态一个值，UI 直接照着显示，不用一堆互相矛盾的 Bool。
@@ -63,13 +62,9 @@ struct LiveChatAutoSyncFailure: Error, Equatable {
 ///
 /// 只用于内存里比较「内容是否真的变了」，绝不写进正式 JSON。
 enum LiveChatAutoSyncFingerprint {
+    /// 和键盘侧（阶段 12E）共用同一套算法：两端对「是不是同一份聊天」的判断必须一致。
     static func make(messages: [GoutouChatClipboardMessage], version: String) -> String {
-        var text = version
-        for message in messages {
-            text += "\n\(message.role.rawValue)|\(message.text)"
-        }
-        let digest = SHA256.hash(data: Data(text.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+        SharedChatFingerprint.make(messages: messages, version: version)
     }
 }
 

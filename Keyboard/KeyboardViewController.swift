@@ -72,6 +72,10 @@ final class KeyboardViewController: UIInputViewController {
     private var panelState: GoutouPanelState = .empty(banner: nil)
     /// 识别聊天：预览 → 使用 → 取消使用 的状态机（纯内存，不持久化，阶段 8 不接 AI）
     private var recognizedChat = RecognizedChatSession()
+    /// 阶段 12E：共享聊天是否有更新（独立状态，不和 AI 分析状态混在一起）。
+    private var sharedChatUpdate = SharedChatUpdateState.idle
+    /// 键盘当前已经预览过或使用过的共享聊天指纹：用来判断「是不是同一份聊天」。
+    private var knownSharedChatFingerprint: String?
     /// 阶段 9：识别聊天分析的状态机 + 在途请求（只有用户点「分析这段聊天」才会赋值）
     private var recognizedChatAnalysis = RecognizedChatAnalysisSession()
     private var recognizedChatTask: URLSessionTask?
@@ -458,6 +462,17 @@ final class KeyboardViewController: UIInputViewController {
         nineKeyView?.isHidden = true
         mentorPanel?.isHidden = false
         mentorPanel?.resetScreen()
+        // 阶段 12E：面板打开时检查一次共享聊天有没有更新（只检查，不替换任何状态）
+        checkForSharedChatUpdate()
+        refreshPanel()
+    }
+
+    /// 阶段 12E：键盘重新出现（包括被系统回收后重建）时，如果面板正开着就再检查一次。
+    /// 事件触发，**不做**任何定时轮询。
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        guard isPanelVisible else { return }
+        checkForSharedChatUpdate()
         refreshPanel()
     }
 
@@ -515,6 +530,7 @@ final class KeyboardViewController: UIInputViewController {
             sharedChat: recognizedChat.preview,
             sharedChatError: recognizedChat.errorMessage,
             activeRecognizedChat: recognizedChat.active,
+            pendingSharedChat: sharedChatUpdate.pending,
             recognizedChatAnalysis: recognizedChatAnalysis.state
         ))
     }
@@ -699,6 +715,27 @@ final class KeyboardViewController: UIInputViewController {
         recognizedChatTask?.cancel()
         recognizedChatTask = nil
         recognizedChatAnalysis.invalidate()
+    }
+
+    /// 阶段 12E：检查共享聊天有没有比键盘当前这份更新。
+    ///
+    /// 只读文件、只记状态：不替换当前上下文、不动 AI、不发请求、不写任何东西。
+    /// 检查失败也是「非破坏性」的——当前 Active / 分析 / 回复一律保持原样。
+    private func checkForSharedChatUpdate() {
+        guard hasFullAccess else {
+            // App Group 读不到就别假装发现了更新（自动检查与网络 AI 的完全访问不是一回事，这里只按能否读容器判断）
+            sharedChatUpdate = .idle
+            return
+        }
+        do {
+            let snapshot = try SharedChatStore().read()
+            sharedChatUpdate = SharedChatUpdateDetector.evaluate(
+                shared: snapshot,
+                knownFingerprint: knownSharedChatFingerprint
+            )
+        } catch {
+            sharedChatUpdate = .failedNonDestructive(error.localizedDescription)
+        }
     }
 
     /// 用户主动点「分析这段聊天」才会走到这里。
@@ -1045,8 +1082,23 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
             } else {
                 recognizedChat.invalidate(withError: "没有开启键盘完全访问。请到设置开启「允许完全访问」后重试。")
             }
+            // 刚读到的这份就是键盘「已经知道」的聊天的了：不再提示发现新聊天
+            if let preview = recognizedChat.preview {
+                knownSharedChatFingerprint = SharedChatUpdateDetector.fingerprint(of: preview)
+                sharedChatUpdate = .upToDate
+            }
             refreshPanel()
             panel.showSharedChatPreview()
+
+        case .useLatestSharedChat:
+            // 用户明确点了才动：先取消在跑的旧 AI 请求、作废旧分析（analysis / tone / replies），
+            // 再把 Active 换成最新这份。**不**调用 AI。
+            guard let pending = sharedChatUpdate.pending else { break }
+            dropRecognizedChatAnalysis()
+            recognizedChat.adoptActive(pending.snapshot)
+            knownSharedChatFingerprint = pending.fingerprint
+            sharedChatUpdate = .upToDate
+            refreshPanel()
 
         case .useRecognizedChat:
             // 只改本地状态：不读文件、不写人物记忆、不发任何网络请求（阶段 9 才接 AI）。

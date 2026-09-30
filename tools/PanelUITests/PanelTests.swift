@@ -334,6 +334,57 @@ final class PanelTests: XCTestCase {
         assertBounded(panel)
     }
 
+    /// 阶段 12E：发现共享聊天更新时只出现横幅与「使用最新聊天」，
+    /// 点它只发一个动作，且不会顺带触发分析。
+    @MainActor
+    func testPendingSharedChatBannerRequiresExplicitUse() throws {
+        let messages = [GoutouChatClipboardMessage(role: .other, text: "今晚有空吗"),
+                        GoutouChatClipboardMessage(role: .me, text: "有啊")]
+        let savedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        var snapshot = GoutouPanelSnapshot(state: .empty(banner: nil), segments: [], memory: [], profiles: [],
+            activeProfileID: UUID(), lastResult: nil, configSummary: "", memoryNote: nil)
+        snapshot.pendingSharedChat = PendingSharedChatUpdate(
+            snapshot: SharedChatSnapshot(messages: messages, updatedAt: savedAt),
+            fingerprint: "test-fingerprint"
+        )
+
+        let panel = GoutouPanelView(frame: CGRect(x: 0, y: 0, width: 390, height: 302))
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        let host = UIViewController()
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        host.view.addSubview(panel)
+        defer { window.isHidden = true }
+        let recorder = PanelActionRecorder()
+        panel.delegate = recorder
+
+        panel.render(snapshot)
+        panel.layoutIfNeeded()
+        XCTAssertTrue(labels(in: panel).contains("发现新聊天 · 2 条"))
+        XCTAssertTrue(labels(in: panel).contains { $0.hasPrefix("保存时间：") })
+        XCTAssertTrue(titles(in: panel).contains { $0.hasPrefix("使用最新聊天") })
+        // 还没有 Active Context：不提示「使用后会替换当前聊天」
+        XCTAssertFalse(labels(in: panel).contains("使用后会替换当前聊天。"))
+        assertBounded(panel)
+
+        let useLatest = try XCTUnwrap(descendants(panel).compactMap { $0 as? UIButton }.first {
+            $0.isEnabled && ($0.title(for: .normal) ?? "").hasPrefix("使用最新聊天")
+        })
+        useLatest.sendActions(for: .touchUpInside)
+        XCTAssertEqual(recorder.actions.count, 1)
+        XCTAssertTrue(recorder.actions.contains { if case .useLatestSharedChat = $0 { return true }; return false })
+        XCTAssertFalse(recorder.actions.contains { if case .analyze = $0 { return true }; return false })
+        XCTAssertFalse(recorder.actions.contains { if case .analyzeRecognizedChat = $0 { return true }; return false })
+
+        // 已经有 Active Context：补一句「会被替换」，但仍然只是提示
+        snapshot.activeRecognizedChat = RecognizedChatContext(messages: messages, updatedAt: savedAt)
+        panel.render(snapshot)
+        panel.layoutIfNeeded()
+        XCTAssertTrue(labels(in: panel).contains("使用后会替换当前聊天。"))
+        XCTAssertEqual(recorder.actions.count, 1, "重画界面不该产生新动作")
+        assertBounded(panel)
+    }
+
     @MainActor
     private func labels(in panel: GoutouPanelView) -> [String] {
         descendants(panel).compactMap { ($0 as? UILabel)?.text }

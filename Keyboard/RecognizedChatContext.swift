@@ -90,6 +90,16 @@ struct RecognizedChatSession: Equatable {
         active = nil
     }
 
+    /// 阶段 12E：「使用最新聊天」——把一份**已经过 SharedChatStore 校验**的共享聊天
+    /// 直接变成活动上下文。走的是和 read + usePreview 一样的状态规则，不绕过任何限制。
+    @discardableResult
+    mutating func adoptActive(_ snapshot: SharedChatSnapshot) -> Bool {
+        reset()
+        guard !snapshot.messages.isEmpty else { return false }
+        preview = snapshot
+        return usePreview()
+    }
+
     private mutating func reset() {
         preview = nil
         errorMessage = nil
