@@ -24,6 +24,9 @@ struct ChatPixelRect: Equatable {
     let width: Double
     let height: Double
 
+    /// 单次识别（整张图当一片）用的原点。
+    static let zero = ChatPixelRect(x: 0, y: 0, width: 0, height: 0)
+
     init(x: Double, y: Double, width: Double, height: Double) {
         self.x = x
         self.y = y
