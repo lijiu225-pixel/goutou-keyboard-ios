@@ -87,7 +87,9 @@ struct AutoSyncHarness {
             saves += 1
             lastSaveAt = now
             if let forcedError {
-                apply(session.saveFinished(fingerprint: snapshot.fingerprint, result: .failure(forcedError), at: now), now: now)
+                apply(session.saveFinished(fingerprint: snapshot.fingerprint,
+                                           result: .failure(LiveChatAutoSyncFailure(forcedError)),
+                                           at: now), now: now)
                 return
             }
             do {
@@ -100,7 +102,9 @@ struct AutoSyncHarness {
                 )
                 apply(session.saveFinished(fingerprint: snapshot.fingerprint, result: .success(result), at: now), now: now)
             } catch {
-                apply(session.saveFinished(fingerprint: snapshot.fingerprint, result: .failure("写入共享聊天失败"), at: now), now: now)
+                apply(session.saveFinished(fingerprint: snapshot.fingerprint,
+                                           result: .failure(LiveChatAutoSyncFailure("写入共享聊天失败")),
+                                           at: now), now: now)
             }
         }
     }
@@ -243,7 +247,7 @@ let pendingEffect = busy.session.noteTimeline(laterBatch, now: t0.addingTimeInte
 expect(pendingEffect != .idle, "22b. 在飞期间的更新会被排上队")
 let finishFirst = busy.session.saveFinished(
     fingerprint: busy.session.lastAttemptFingerprint ?? "",
-    result: .failure("先失败（只是为了让在飞状态结束）"),
+    result: .failure(LiveChatAutoSyncFailure("先失败（只是为了让在飞状态结束）")),
     at: t0.addingTimeInterval(106)
 )
 expect(finishFirst != .idle, "22. 第一份结束后会按最新那份继续排")

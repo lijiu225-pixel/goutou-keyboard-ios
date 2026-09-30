@@ -50,6 +50,15 @@ enum LiveChatAutoSyncBuildResult: Equatable {
     case ready(LiveChatAutoSyncSnapshot)
 }
 
+/// 一次自动同步写盘失败的原因：一句话，给人看，不吐沙盒路径、不吐聊天正文。
+struct LiveChatAutoSyncFailure: Error, Equatable {
+    let message: String
+
+    init(_ message: String) {
+        self.message = message
+    }
+}
+
 /// 指纹：deterministic 的 SHA-256（**不用** Swift 默认 Hasher —— 它带随机 seed，跨运行不稳定）。
 ///
 /// 只用于内存里比较「内容是否真的变了」，绝不写进正式 JSON。

@@ -113,7 +113,7 @@ struct LiveChatAutoSyncSession {
     /// 写盘结果回来。
     mutating func saveFinished(
         fingerprint: String,
-        result: Result<LiveChatAutoSyncSnapshot, String>,
+        result: Result<LiveChatAutoSyncSnapshot, LiveChatAutoSyncFailure>,
         at now: Date
     ) -> LiveChatAutoSyncEffect {
         // 旧代际 / 旧任务的迟到回报：一概不认，更不许污染新 session 的统计
@@ -129,7 +129,7 @@ struct LiveChatAutoSyncSession {
             state = .synced(messageCount: snapshot.count, at: now)
         case .failure(let reason):
             lastFailedFingerprint = fingerprint
-            state = .failed(reason)
+            state = .failed(reason.message)
         }
 
         // 写的过程中又攒了更新：继续按最新那份排一次

@@ -99,7 +99,7 @@ final class LiveChatAutoSyncCoordinator {
     }
 
     private func performSave(_ snapshot: LiveChatAutoSyncSnapshot) {
-        let result: Result<LiveChatAutoSyncSnapshot, String>
+        let result: Result<LiveChatAutoSyncSnapshot, LiveChatAutoSyncFailure>
         do {
             // updatedAt 用 SharedChatStore 的默认值 = 本次真正写入的时刻
             let saved = try store.save(GoutouChatClipboardPayload(messages: snapshot.messages))
@@ -109,7 +109,7 @@ final class LiveChatAutoSyncCoordinator {
                 generation: snapshot.generation
             ))
         } catch {
-            result = .failure(failureReason(error))
+            result = .failure(LiveChatAutoSyncFailure(failureReason(error)))
         }
         let next = session.saveFinished(fingerprint: snapshot.fingerprint, result: result, at: Date())
         publish()
