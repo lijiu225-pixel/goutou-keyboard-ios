@@ -579,12 +579,15 @@ expectGeometryError(.tooManyPixels(pixels: 100_000_000, limit: 64_000_000), "像
 var heightFocusedConfig = ChatOCRTilingConfig.default
 heightFocusedConfig.maxPixelCount = 3_000_000_000
 let extremeHeight = 1_000_000.0
-let extremeHeightPlan = try ChatOCRTilingPlanner.plan(
-    pixelWidth: 1290,
-    pixelHeight: extremeHeight,
-    config: heightFocusedConfig
-)
-let extremeTiles = extremeHeightPlan.tiles.count
+// 这一段只是「预测会被判成几片」，好把期望值算出来；真正被断言的是下面那一次 plan。
+// 不能直接调 plan：它会直接 throw，那就没法先断言前提了。
+let extremeWorkingWidth = 1290 * (480.0 / 1290.0)
+let extremeWorkingHeight = extremeHeight * (480.0 / 1290.0)
+let extremeTiles = ChatOCRTilingPlanner.tileRects(
+    workingWidth: extremeWorkingWidth,
+    workingHeight: extremeWorkingHeight,
+    tileSpan: heightFocusedConfig.tileSpan
+).count
 expect(extremeTiles > heightFocusedConfig.maxTileCount, "前提：这个高度确实超过片数上限，实际 \(extremeTiles)")
 expectGeometryError(.tooTall(pixelHeight: extremeHeight, tileCount: extremeTiles), "超高长图") {
     _ = try ChatOCRTilingPlanner.plan(
