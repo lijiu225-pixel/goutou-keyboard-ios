@@ -72,7 +72,7 @@ struct SimulatedPipeline {
         )
         if decision.startsNewSession { system.reset(generation: generation) }
         guard decision.verdict == .activeChat else { return (false, decision.verdict) }
-        system.ingest(candidates: candidates, timestamp: now, generation: generation, config: geometry)
+        _ = system.ingest(candidates: candidates, timestamp: now, generation: generation, config: geometry)
         return (true, decision.verdict)
     }
 }
@@ -82,7 +82,9 @@ struct SimulatedPipeline {
 var pipeline = SimulatedPipeline()
 pipeline.reset(generation: 1)
 var submitted = false
-for frame in 0..<2 {
+// 第 1 帧还只是「确认中」，第 2 帧进入聊天界面，稳定化再从提交的第一帧重新数，
+// 所以第一条约消息要第 3 帧才进时间线（约 1.6 秒，和 OCR 节流一致）。
+for frame in 0..<3 {
     submitted = pipeline.ingest(chatScreen(), at: t0.addingTimeInterval(Double(frame) * 0.8)).submitted
 }
 expect(pipeline.gate.verdict == .activeChat, "1. 标准左右聊天页面连续两帧 → activeChat")
@@ -117,6 +119,7 @@ let mediaScreen = chatScreen(mine: 1, theirs: 1, extra: [
 ])
 _ = mediaPipeline.ingest(mediaScreen, at: t0)
 _ = mediaPipeline.ingest(mediaScreen, at: t0.addingTimeInterval(0.8))
+_ = mediaPipeline.ingest(mediaScreen, at: t0.addingTimeInterval(1.6))
 expect(mediaPipeline.gate.verdict == .activeChat, "4. 语音 / 图片较多但仍然左右成对 + 有输入栏：仍可判定")
 expect(mediaPipeline.timelineCount > 0, "4b. 这类聊天页也允许进入时间线")
 
@@ -165,12 +168,13 @@ var switching = SimulatedPipeline()
 switching.reset(generation: 1)
 _ = switching.ingest(chatScreen(top: "张三"), at: t0)
 _ = switching.ingest(chatScreen(top: "张三"), at: t0.addingTimeInterval(0.8))
+_ = switching.ingest(chatScreen(top: "张三"), at: t0.addingTimeInterval(1.6))
 let firstChatCount = switching.timelineCount
 expect(firstChatCount > 0, "14. 先积累了一段跟张三的聊天")
 
 var newSessionCount = 0
 for frame in 0..<3 {
-    let outcome = switching.ingest(chatScreen(top: "李四"), at: t0.addingTimeInterval(1.6 + Double(frame) * 0.8))
+    let outcome = switching.ingest(chatScreen(top: "李四"), at: t0.addingTimeInterval(2.4 + Double(frame) * 0.8))
     if switching.gate.verdict == .activeChat { newSessionCount += 1 }
     _ = outcome
 }
