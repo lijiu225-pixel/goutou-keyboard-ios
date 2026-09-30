@@ -263,14 +263,15 @@ func runVisionSyntheticCheck(dark: Bool) -> [String] {
         failures.append("\(label)：820x2900 应该走单次识别，实际 \(result.strategy)")
     }
 
-    print("[(label)] Vision 认出的原始行（含气泡证据）：")
+    print("[\\(label)] Vision 认出的原始行（含气泡证据）：")
     for line in result.lines {
-        let bubble = line.bubble.map { "气泡=[(round($0.span.minX * 1000) / 1000),(round($0.span.maxX * 1000) / 1000)] 头像=($0.avatarSide.rawValue)" } ?? "无气泡"
-        print(
-            "    box=[(round(line.box.minX * 1000) / 1000),(round(line.box.minY * 1000) / 1000),"
-                + "(round(line.box.maxX * 1000) / 1000),(round(line.box.maxY * 1000) / 1000)] "
-                + "(bubble) (line.text)"
-        )
+        let bubbleText = line.bubble.map { evidence in
+            "气泡=[\\(round(evidence.span.minX * 1000) / 1000),\\(round(evidence.span.maxX * 1000) / 1000)]"
+                + " 头像=\\(evidence.avatarSide.rawValue)"
+        } ?? "无气泡"
+        let boxText = "[\\(round(line.box.minX * 1000) / 1000),\\(round(line.box.minY * 1000) / 1000),"
+            + "\\(round(line.box.maxX * 1000) / 1000),\\(round(line.box.maxY * 1000) / 1000)]"
+        print("    box=\\(boxText) \\(bubbleText) \\(line.text)")
     }
 
     let analysis = ChatLayoutParser.analyze(lines: result.lines)
