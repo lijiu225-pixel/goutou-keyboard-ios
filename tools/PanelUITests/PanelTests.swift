@@ -227,7 +227,9 @@ final class PanelTests: XCTestCase {
         XCTAssertTrue(labels(in: panel).contains("① 好啊，七点老地方"))
         XCTAssertTrue(labels(in: panel).contains("② 你先定地方，我都行"))
         XCTAssertTrue(labels(in: panel).contains("③ 行，那我请客"))
-        XCTAssertEqual(labels(in: panel).filter { ["①", "②", "③"].contains { mark in $0.hasPrefix(mark) } }.count, 3)
+        let replyMarks = ["①", "②", "③"]
+        let replyCards = labels(in: panel).filter { label in replyMarks.contains(where: label.hasPrefix) }
+        XCTAssertEqual(replyCards.count, 3)
         XCTAssertTrue(titles(in: panel).contains { $0.hasPrefix("重新分析") })
         XCTAssertFalse(titles(in: panel).contains { $0.contains("插入") })
         XCTAssertFalse(titles(in: panel).contains { $0.contains("发送") })
