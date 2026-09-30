@@ -63,6 +63,7 @@ def main():
     files.append(os.path.join(repo, "tools", "RecognizedChatAnalysisCheck", "main.swift"))
     files.append(os.path.join(repo, "tools", "LiveScreenCaptureCheck", "main.swift"))
     files.append(os.path.join(repo, "tools", "LiveChatRecognitionCheck", "main.swift"))
+    files.append(os.path.join(repo, "tools", "LiveChatReviewCheck", "main.swift"))
     bad = 0
     for path in files:
         with open(path, encoding="utf-8") as handle:

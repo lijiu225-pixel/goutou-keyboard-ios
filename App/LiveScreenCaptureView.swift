@@ -5,6 +5,7 @@ import SwiftUI
 struct LiveScreenCaptureView: View {
 
     @StateObject private var manager = LiveScreenCaptureManager()
+    @State private var showsReview = false
 
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -67,12 +68,17 @@ struct LiveScreenCaptureView: View {
                 if manager.chat.truncatedOldest > 0 {
                     LabeledContent("超出上限丢弃", value: "\(manager.chat.truncatedOldest)")
                 }
-                Button("清空实时聊天", role: .destructive) { manager.clearLiveChat() }
+                Button("整理当前实时聊天") {
+                    manager.beginLiveChatReview()
+                    showsReview = true
+                }
+                .disabled(manager.chat.messages.isEmpty)
+                Button("清空实时聊天（不影响已共享聊天）", role: .destructive) { manager.clearLiveChat() }
                     .disabled(manager.chat.messages.isEmpty)
             } header: {
                 Text("实时聊天")
             } footer: {
-                Text("只放在内存里，最多 \(LiveChatGeometryConfiguration.default.maxTimelineMessages) 条；不会写共享聊天，也不会自动送去 AI。清空不会停止屏幕捕获。")
+                Text("只放在内存里，最多 \(LiveChatGeometryConfiguration.default.maxTimelineMessages) 条；不会自动送去 AI。「整理当前实时聊天」会把这一刻冻结成一份快照，让你改完再保存给键盘；清空只清这里的实时结果，不会停止屏幕捕获、也不会删除已经共享给键盘的聊天。")
             }
 
             if manager.chat.showsDiscontinuity {
@@ -120,6 +126,9 @@ struct LiveScreenCaptureView: View {
         }
         .navigationTitle("动态识别测试")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(isPresented: $showsReview) {
+            LiveChatReviewView(manager: manager)
+        }
     }
 
     /// 角色只用文字标签区分，颜色只是辅助：unknown 必须显眼，不能被藏起来。

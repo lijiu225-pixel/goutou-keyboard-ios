@@ -38,6 +38,10 @@ final class LiveScreenCaptureManager: ObservableObject {
     @Published private(set) var model: LiveScreenCaptureModel
     /// 阶段 12B 的实时聊天快照（只读给界面）。
     @Published private(set) var chat = LiveChatSnapshot.empty
+    /// 阶段 12C：冻结出来的确认草稿（nil = 没在确认）。和实时 chat 是两份状态，互不影响。
+    @Published var reviewDraft: LiveChatReviewDraft?
+    /// 保存结果提示（成功或失败），只给人看。
+    @Published private(set) var reviewNote: String?
 
     private let sampleQueue = DispatchQueue(label: "goutou.live.capture.samples")
     private let ocrQueue = DispatchQueue(label: "goutou.live.capture.ocr", qos: .utility)
@@ -119,6 +123,46 @@ final class LiveScreenCaptureManager: ObservableObject {
         ocrQueue.async { [weak self] in
             let snapshot = engine.reset(generation: generation)
             Task { @MainActor in self?.chat = snapshot }
+        }
+    }
+
+    // MARK: - 阶段 12C：实时聊天 → 用户确认 → 现有共享聊天
+
+    /// 「整理当前实时聊天」：把当前时间线**冻结**成一份草稿。
+    /// 捕获可以继续跑、时间线可以继续涨，这份草稿不会跟着跳。
+    func beginLiveChatReview() {
+        guard !chat.messages.isEmpty else { return }
+        reviewDraft = LiveChatReviewDraft(timeline: chat.messages)
+        reviewNote = nil
+    }
+
+    /// 放弃这次整理：只丢草稿；实时聊天与已共享聊天都不动。
+    func cancelLiveChatReview() {
+        reviewDraft = nil
+        reviewNote = nil
+    }
+
+    func setReviewRole(id: UUID, role: LiveChatRole) {
+        reviewDraft?.update(id: id, role: role)
+    }
+
+    func setReviewText(id: UUID, text: String) {
+        reviewDraft?.update(id: id, text: text)
+    }
+
+    func setReviewIncluded(id: UUID, isIncluded: Bool) {
+        reviewDraft?.update(id: id, isIncluded: isIncluded)
+    }
+
+    /// 「保存给狗头军师」：只有用户点才写，走的还是现有 SharedChatStore（校验 / 原子写 / 错误模型都不变）。
+    func saveLiveChatReview() {
+        guard let draft = reviewDraft else { return }
+        do {
+            let snapshot = try LiveChatReviewSaver(store: SharedChatStore()).save(draft)
+            reviewNote = "已保存 \(snapshot.messages.count) 条实时聊天，去键盘点『读取识别聊天』。"
+        } catch {
+            // 失败只显示原因，绝不显示成功提示
+            reviewNote = error.localizedDescription
         }
     }
 
