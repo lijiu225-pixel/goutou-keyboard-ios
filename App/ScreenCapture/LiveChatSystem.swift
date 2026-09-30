@@ -62,6 +62,19 @@ struct LiveChatSystem {
 
         let inViewport = LiveChatViewportFilter.filter(observations, config: config)
         let candidates = LiveChatBlockGrouper.group(inViewport, config: config, timestamp: timestamp)
+        return ingest(candidates: candidates, timestamp: timestamp, generation: generation, config: config)
+    }
+
+    /// 已经把候选块算好时走这里（阶段 12E 的门控要先算一遍候选来判断「像不像聊天界面」，
+    /// 算好的结果直接复用，不重复分组）。
+    mutating func ingest(
+        candidates: [LiveChatCandidate],
+        timestamp: Date,
+        generation: Int,
+        config: LiveChatGeometryConfiguration = .default
+    ) -> LiveChatSnapshot {
+        guard generation == self.generation else { return snapshot() }
+        self.config = config
         candidatesThisFrame = candidates.count
 
         let stable = stabilizer.update(candidates, config: config)

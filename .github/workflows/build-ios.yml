@@ -237,6 +237,32 @@ jobs:
             -o "$RUNNER_TEMP/sharedchatupdatecheck"
           "$RUNNER_TEMP/sharedchatupdatecheck"
 
+      # 阶段 12E：聊天界面门控（只有稳定判定为聊天界面才允许 OCR → 时间线 → 自动同步）。
+      - name: Chat screen detection contract
+        run: |
+          swiftc -swift-version 5 \
+            Shared/SharedConstants.swift \
+            Shared/GoutouChatClipboard.swift \
+            Shared/SharedChatStore.swift \
+            Shared/SharedChatFingerprint.swift \
+            Keyboard/GoutouConfig.swift \
+            App/ScreenCapture/LiveOCRObservation.swift \
+            App/ScreenCapture/LiveOCRSnapshot.swift \
+            App/ScreenCapture/LiveChatGeometryConfiguration.swift \
+            App/ScreenCapture/LiveChatCandidate.swift \
+            App/ScreenCapture/LiveChatRoleClassifier.swift \
+            App/ScreenCapture/LiveChatBlockGrouper.swift \
+            App/ScreenCapture/LiveChatStabilizer.swift \
+            App/ScreenCapture/LiveChatTimeline.swift \
+            App/ScreenCapture/LiveChatSystem.swift \
+            App/ScreenCapture/LiveChatAutoSyncConfiguration.swift \
+            App/ScreenCapture/LiveChatAutoSyncState.swift \
+            App/ScreenCapture/LiveChatAutoSyncSession.swift \
+            App/ScreenCapture/ChatSceneGate.swift \
+            tools/ChatScreenDetectionCheck/main.swift \
+            -o "$RUNNER_TEMP/chatscreendetectioncheck"
+          "$RUNNER_TEMP/chatscreendetectioncheck"
+
       - name: Generate Xcode project
         run: |
           xcodegen generate

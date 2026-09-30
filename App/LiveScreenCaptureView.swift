@@ -16,6 +16,7 @@ struct LiveScreenCaptureView: View {
     var body: some View {
         Form {
             Section {
+                LabeledContent("识别门控", value: manager.sceneVerdict.title)
                 LabeledContent("状态", value: manager.model.state.title)
                 Button("开始动态识别测试") { manager.start() }
                     .disabled(!manager.model.state.canStart)

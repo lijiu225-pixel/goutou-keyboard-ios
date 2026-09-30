@@ -10,14 +10,52 @@ import ScreenCaptureKit
 #endif
 
 /// 阶段 12B 的聊天状态盒：只在 `ocrQueue` 上访问，避免和 MainActor 抢状态。
+/// 一帧的处理结果：时间线快照 + 场景判定 + 这一帧有没有真的提交给时间线。
+struct LiveChatFrameOutcome: Equatable {
+    var chat: LiveChatSnapshot
+    var verdict: ChatSceneVerdict
+    var startsNewSession: Bool
+    var submitted: Bool
+}
+
 private final class LiveChatEngineBox {
     private var system = LiveChatSystem()
+    private var gate = ChatSceneGate()
+    private var geometry = LiveChatGeometryConfiguration.default
+    private var sceneConfig = ChatSceneGateConfiguration.default
+    private var sessionGeneration = 0
 
-    func ingest(observations: [LiveOCRObservation], timestamp: Date, generation: Int) -> LiveChatSnapshot {
-        system.ingest(observations: observations, timestamp: timestamp, generation: generation)
+    /// 先算候选块与场景证据；只有判定为「聊天界面」时，才把候选提交给时间线。
+    func ingest(observations: [LiveOCRObservation], timestamp: Date, generation: Int) -> LiveChatFrameOutcome {
+        let inViewport = LiveChatViewportFilter.filter(observations, config: geometry)
+        let candidates = LiveChatBlockGrouper.group(inViewport, config: geometry, timestamp: timestamp)
+        let evidence = ChatSceneDetector.evidence(observations: observations, candidates: candidates, config: sceneConfig)
+        let decision = gate.update(
+            isChatFrame: ChatSceneDetector.isChatScene(evidence, config: sceneConfig),
+            titleFingerprint: evidence.topBarFingerprint,
+            config: sceneConfig
+        )
+
+        // 重新进入聊天 / 换了聊天对象 / 换了 capture：时间线重开，绝不混两个人的聊天
+        if generation != sessionGeneration || decision.startsNewSession {
+            sessionGeneration = generation
+            _ = system.reset(generation: generation)
+        }
+
+        guard decision.verdict == .activeChat else {
+            // 不在聊天界面：不向时间线提交任何东西
+            return LiveChatFrameOutcome(chat: system.snapshot(), verdict: decision.verdict,
+                                        startsNewSession: decision.startsNewSession, submitted: false)
+        }
+        let snapshot = system.ingest(candidates: candidates, timestamp: timestamp,
+                                     generation: generation, config: geometry)
+        return LiveChatFrameOutcome(chat: snapshot, verdict: decision.verdict,
+                                    startsNewSession: decision.startsNewSession, submitted: true)
     }
 
     func reset(generation: Int) -> LiveChatSnapshot {
+        sessionGeneration = generation
+        gate.reset()
         system.reset(generation: generation)
         return system.snapshot()
     }
@@ -44,6 +82,8 @@ final class LiveScreenCaptureManager: ObservableObject {
     @Published private(set) var reviewNote: String?
     /// 阶段 12D：自动同步状态（默认关闭，只有用户主动开启才会写共享聊天）。
     @Published private(set) var autoSyncState: LiveChatAutoSyncState = .disabled
+    /// 阶段 12E：当前屏幕是不是聊天会话界面（门控结果，只用来显示，不含任何正文）。
+    @Published private(set) var sceneVerdict: ChatSceneVerdict = .unknown
     @Published private(set) var autoSyncLastSyncAt: Date?
     @Published private(set) var autoSyncLastCount = 0
 
@@ -293,20 +333,26 @@ final class LiveScreenCaptureManager: ObservableObject {
                 result = .failure(LiveOCRFailure("这一帧识别失败"))
             }
             var chatSnapshot: LiveChatSnapshot?
+            var sceneVerdict: ChatSceneVerdict?
             if case .success(let snapshot) = result {
-                // 阶段 12B：分组、编辑距离、overlap 都在这个串行队列上做，不占主线程。
-                chatSnapshot = engine.ingest(
+                // 阶段 12B/12E：分组、场景判定、编辑距离、overlap 都在这个串行队列上做，不占主线程。
+                let outcome = engine.ingest(
                     observations: snapshot.observations,
                     timestamp: snapshot.timestamp,
                     generation: generation
                 )
-                // 阶段 12D：时间线更新后让自动同步（如果用户开着）判断要不要 debounce 写一次
-                if let chatSnapshot {
-                    sync.noteTimeline(chatSnapshot.messages, generation: generation)
+                chatSnapshot = outcome.chat
+                sceneVerdict = outcome.verdict
+                if outcome.submitted {
+                    // 阶段 12D：时间线更新后让自动同步（如果用户开着）判断要不要 debounce 写一次
+                    sync.noteTimeline(outcome.chat.messages, generation: generation)
+                } else {
+                    // 阶段 12E：不在聊天界面 —— 不提交消息，也不让排队的自动同步写盘
+                    sync.noteLeftChatScene()
                 }
             }
             Task { @MainActor in
-                self?.finishOCR(result, chat: chatSnapshot, generation: generation)
+                self?.finishOCR(result, chat: chatSnapshot, verdict: sceneVerdict, generation: generation)
             }
         }
     }
@@ -314,9 +360,11 @@ final class LiveScreenCaptureManager: ObservableObject {
     private func finishOCR(
         _ result: Result<LiveOCRSnapshot, LiveOCRFailure>,
         chat chatSnapshot: LiveChatSnapshot?,
+        verdict: ChatSceneVerdict?,
         generation: Int
     ) {
         if let chatSnapshot { chat = chatSnapshot }
+        if let verdict { sceneVerdict = verdict }
         // 代际号对不上（已经停止 / 重新开始）时，模型一个字都不写。
         let runPending = model.ocrDidFinish(generation: generation, result: result, at: Date())
         if runPending, let pending = pendingFrame {

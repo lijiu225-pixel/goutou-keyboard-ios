@@ -64,6 +64,12 @@ final class LiveChatAutoSyncCoordinator {
         apply(session.clearLiveChat(), now: Date())
     }
 
+    /// 阶段 12E：门控判定「已离开聊天界面」——取消排队的自动同步（不清已共享出去的聊天，
+    /// 重新进入聊天页面后按当前开关继续工作）。
+    func noteLeftChatScene() {
+        clearLiveChat()
+    }
+
     /// 阶段 12C 人工确认保存**成功**之后：立即暂停自动同步，防止人工结果被自动覆盖。
     func noteManualSaveSucceeded() {
         cancelScheduled()
