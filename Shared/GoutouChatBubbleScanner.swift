@@ -368,8 +368,12 @@ enum ChatBubbleScanner {
         guard fill >= config.minimumBubbleFill else { return false }
 
         // 3. 纵向厚度要明显大于这一行文字的高度（气泡上下还有填充）。
+        //
+        // 取值列要**靠色块两端**：那里是气泡的内边距，没有字，量到的就是气泡的真实厚度。
+        // 取中间几列会被文字抗锯齿坑到 —— 浅色主题里「深色字 -> 白色气泡」的过渡一定会
+        // 经过画布那档灰度，于是纵向连续被切断，量出来的厚度等于字高，真气泡会被误杀。
         var thickness = 0.0
-        for fraction in [0.25, 0.5, 0.75] {
+        for fraction in [0.04, 0.10, 0.90, 0.96, 0.5] {
             let column = min(
                 rows.width - 1,
                 max(0, Int(((span.minX + span.width * fraction) * Double(rows.width)).rounded(.down)))
@@ -402,12 +406,30 @@ enum ChatBubbleScanner {
             guard row >= 0, row < rows.height else { return false }
             return rows.pixels[row * rows.width + column].distance(to: background) > tolerance
         }
+        // 允许中间漏一行：抗锯齿、JPEG 压缩都会让零星一行正好落回底色附近，
+        // 不允许漏行的话，一个完整气泡会被这一行切断，量出来只有字那么高。
+        func extent(from start: Int, step: Int) -> Int {
+            var cursor = start
+            var lastMarked = start
+            var misses = 0
+            while true {
+                let next = cursor + step
+                guard next >= 0, next < rows.height else { break }
+                cursor = next
+                if isMarked(cursor) {
+                    lastMarked = cursor
+                    misses = 0
+                } else {
+                    misses += 1
+                    if misses > 1 { break }
+                }
+            }
+            return lastMarked
+        }
         var thickness = 0.0
         for start in sampleIndexes where isMarked(start) {
-            var top = start
-            while top - 1 >= 0 && isMarked(top - 1) { top -= 1 }
-            var bottom = start
-            while bottom + 1 < rows.height && isMarked(bottom + 1) { bottom += 1 }
+            let top = extent(from: start, step: -1)
+            let bottom = extent(from: start, step: 1)
             thickness = max(thickness, Double(bottom - top + 1) / Double(rows.height))
         }
         return thickness
