@@ -817,7 +817,9 @@ enum ChatLayoutParser {
         let compact = text
             .replacingOccurrences(of: " ", with: "")
             .replacingOccurrences(of: "\n", with: "")
-            .trimmingCharacters(in: CharacterSet(charactersIn: "·。.!！?？,，"))
+            // Call icons can be recognized as dot variants. Normalize only for
+            // classification; preserve the user's original text for review.
+            .trimmingCharacters(in: CharacterSet(charactersIn: "·•∙‧。.!！?？,，"))
         guard !compact.isEmpty, compact.count <= 10 else { return false }
         let phrases: Set<String> = [
             "已取消", "已拒绝", "已接通", "已结束", "未接听", "未接通", "已挂断",

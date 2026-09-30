@@ -157,11 +157,11 @@ func runStageTwoChecks() {
     let missingCallBubble = ChatLayoutParser.analyze(lines: [
         stageTwoLine("甲甲甲", x: 0.18, y: 0.20, width: 0.2,
                      bubble: (minX: 0.135, maxX: 0.45, tone: .neutral)),
-        stageTwoLine("已取消", x: 0.68, y: 0.40, width: 0.15),
+        stageTwoLine("已取消•", x: 0.68, y: 0.40, width: 0.15),
         stageTwoLine("他说已取消", x: 0.18, y: 0.60, width: 0.3,
                      bubble: (minX: 0.135, maxX: 0.55, tone: .neutral)),
     ])
-    expect(missingCallBubble.messages.first { $0.text == "已取消" }?.kind.reason == .callRecord,
+    expect(missingCallBubble.messages.first { $0.text == "已取消•" }?.kind.reason == .callRecord,
            "No bubble: exact call status remains a recoverable candidate")
     expect(missingCallBubble.messages.first { $0.text == "他说已取消" }?.isKept == true,
            "A normal sentence containing call words must remain chat")
@@ -402,6 +402,8 @@ func runStageTwoChecks() {
     expect(ChatLayoutParser.isSystemNotice("「张三」拍了拍我"), "拍一拍")
     expect(ChatLayoutParser.isCallRecord("已取消"), "通话记录：已取消")
     expect(ChatLayoutParser.isCallRecord("已取消·"), "通话记录：带尾巴的已取消")
+    expect(ChatLayoutParser.isCallRecord("已取消•"), "真机回归：通话图标被 OCR 识别为 bullet")
+    expect(!ChatLayoutParser.isCallRecord("他说已取消•"), "只忽略边界图标，不吞掉普通句子")
     expect(ChatLayoutParser.isCallRecord("通话时长 00:12"), "通话记录：时长")
     expect(!ChatLayoutParser.isCallRecord("他说已取消"), "包含匹配不算通话记录（不能吃掉正常聊天）")
     expect(
