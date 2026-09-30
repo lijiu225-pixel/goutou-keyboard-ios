@@ -102,7 +102,7 @@ expectClipboardError(.notOurFormat, "顶层是数组") {
 expectClipboardError(.notOurFormat, "别家格式") {
     _ = try GoutouChatClipboardCodec.decode("{\"format\":\"other-app\",\"version\":1,\"messages\":[]}")
 }
-expectClipboardError(.notOurFormat, "版本号是字符串") {
+expectClipboardError(.invalidVersionType, "版本号是字符串") {
     _ = try GoutouChatClipboardCodec.decode("{\"format\":\"goutou-chat\",\"version\":\"1\",\"messages\":[]}")
 }
 expectClipboardError(.unsupportedVersion(2), "未来版本") {
