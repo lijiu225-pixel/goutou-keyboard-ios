@@ -75,15 +75,15 @@ expect(LiveChatViewportFilter.filter([observation("", x: 0.2, y: 0.4, width: 0.2
 
 expect(LiveChatRoleClassifier.classify(box: CGRect(x: 0.02, y: 0.30, width: 0.36, height: 0.03), config: config) == .other,
        "明显靠左 → other")
-expect(LiveChatRoleClassifier.classify(box: CGRect(x: 0.58, y: 0.40, width: 0.39, height: 0.03), config: config) == .me,
+expect(LiveChatRoleClassifier.classify(box: CGRect(x: 0.60, y: 0.40, width: 0.34, height: 0.03), config: config) == .me,
        "明显靠右 → me")
 expect(LiveChatRoleClassifier.classify(box: CGRect(x: 0.30, y: 0.50, width: 0.40, height: 0.03), config: config) == .unknown,
        "中间且很宽 → unknown")
 expect(LiveChatRoleClassifier.classify(box: CGRect(x: 0.44, y: 0.20, width: 0.12, height: 0.03), config: config) == .system,
        "居中且很窄（时间）→ system")
-expect(LiveChatRoleClassifier.classify(box: CGRect(x: 0.20, y: 0.60, width: 0.77, height: 0.03), config: config) == .me,
+expect(LiveChatRoleClassifier.classify(box: CGRect(x: 0.20, y: 0.60, width: 0.78, height: 0.03), config: config) == .me,
        "长消息跨中线但右 anchor → me")
-expect(LiveChatRoleClassifier.classify(box: CGRect(x: 0.02, y: 0.65, width: 0.78, height: 0.03), config: config) == .other,
+expect(LiveChatRoleClassifier.classify(box: CGRect(x: 0.02, y: 0.65, width: 0.80, height: 0.03), config: config) == .other,
        "长消息跨中线但左 anchor → other")
 expect(LiveChatRoleClassifier.classify(box: CGRect(x: 0.01, y: 0.70, width: 0.98, height: 0.03), config: config) == .unknown,
        "几乎铺满整行、两边都贴 → 保守 unknown")
@@ -101,11 +101,11 @@ expect(merged.first?.text == "今晚要不要一起出去吃饭", "中文相邻�
 expect(merged.first?.role == .other, "合并后仍是靠左的对方消息")
 
 let mixedSides = [
-    observation("你好", x: 0.05, y: 0.300, width: 0.20),
-    observation("你好", x: 0.60, y: 0.305, width: 0.20),
+    observation("你好", x: 0.05, y: 0.300, width: 0.65),
+    observation("你好", x: 0.30, y: 0.305, width: 0.65),
 ]
 expect(LiveChatBlockGrouper.group(mixedSides, config: config, timestamp: t0).count == 2,
-       "一左一右相邻也绝不合并")
+       "一左一右相邻、水平也重叠，仍然绝不合并")
 
 let farApart = [
     observation("第一条", x: 0.05, y: 0.200, width: 0.25),
@@ -128,7 +128,7 @@ var system = LiveChatSystem()
 system.reset(generation: 1)
 let firstFrame = [
     observation("今晚有空吗", x: 0.05, y: 0.30, width: 0.35),
-    observation("有啊", x: 0.60, y: 0.38, width: 0.20),
+    observation("有啊", x: 0.74, y: 0.38, width: 0.18),
 ]
 let frameOne = system.ingest(observations: firstFrame, timestamp: t0, generation: 1)
 expect(frameOne.candidatesThisFrame == 2, "第一帧识别到 2 个候选")
@@ -145,7 +145,7 @@ expect(frameTwo.messages.map(\.role) == [.other, .me], "左 → 对方、右 →
 
 let jittered = [
     observation("今晚有空吗？", x: 0.05, y: 0.302, width: 0.35),
-    observation("有啊", x: 0.60, y: 0.381, width: 0.20),
+    observation("有啊", x: 0.74, y: 0.381, width: 0.18),
 ]
 let frameThree = system.ingest(observations: jittered, timestamp: t0.addingTimeInterval(1.8), generation: 1)
 expect(frameThree.messages.count == 2, "只差一个标点仍然算同两条，不重复添加")
@@ -232,18 +232,14 @@ expect(repeated.messages.count == 2, "同一屏再来一帧仍然是两条")
 
 var cappedConfig = LiveChatGeometryConfiguration.default
 cappedConfig.maxTimelineMessages = 5
-var capSystem = LiveChatSystem()
-capSystem.reset(generation: 1)
-var capSnapshot = capSystem.snapshot()
-for round in 0..<10 {
-    let texts = (0..<10).map { "消息\(round)-\($0)" }
-    let observations = screen(texts, role: .other, startY: 0.16, step: 0.035)
-    _ = capSystem.ingest(observations: observations, timestamp: t0.addingTimeInterval(Double(round)), generation: 1, config: cappedConfig)
-    capSnapshot = capSystem.ingest(observations: observations, timestamp: t0.addingTimeInterval(Double(round) + 0.5), generation: 1, config: cappedConfig)
+var capTimeline = LiveChatTimeline()
+let capMessages = (0..<10).map { candidate("消息\($0)", role: .other, x: 0.05, y: 0.30, width: 0.30) }
+for end in 1...capMessages.count {
+    capTimeline.merge(Array(capMessages[0..<end]), config: cappedConfig)
 }
-expect(capSnapshot.messages.count == 5, "到达上限后不再增长")
-expect(capSnapshot.truncatedOldest > 0, "丢弃的是最早的条目，并有计数")
-expect(capSnapshot.messages.last?.text.hasPrefix("消息9-") == true, "保留的是最新的内容")
+expect(capTimeline.messages.count == 5, "到达上限后不再增长")
+expect(capTimeline.truncatedOldest == 5, "丢弃最早 5 条并有计数")
+expect(capTimeline.messages.map(\.text) == ["消息5", "消息6", "消息7", "消息8", "消息9"], "保留的是最新的内容")
 
 // MARK: - 27 / 28 / 31：代际隔离（迟到帧、旧 session、重新 start）
 
@@ -294,8 +290,11 @@ var stressSystem = LiveChatSystem()
 stressSystem.reset(generation: 1)
 var stressSnapshot = stressSystem.snapshot()
 let stressStart = Date()
-for round in 0..<20 {
-    let texts = (0..<50).map { "压力\(round)-\($0)" }
+let stressMessages = (0..<260).map { candidate("压力\($0)", role: .other, x: 0.05, y: 0.30, width: 0.30) }
+for round in 0..<40 {
+    // 每帧只看 50 条、窗口每次滑 5 条：既有 overlap，又让时间线一路涨到上限
+    let slice = Array(stressMessages[(round * 5)..<(round * 5 + 50)])
+    let texts = slice.map(\.text)
     let observations = screen(texts, role: .other, startY: 0.13, step: 0.012)
     _ = stressSystem.ingest(observations: observations, timestamp: t0.addingTimeInterval(Double(round)), generation: 1)
     stressSnapshot = stressSystem.ingest(observations: observations,
@@ -303,7 +302,8 @@ for round in 0..<20 {
                                          generation: 1)
 }
 expect(stressSnapshot.messages.count <= config.maxTimelineMessages, "每帧 50 条也不会突破上限")
-expect(stressSnapshot.candidatesThisFrame <= 200, "单帧候选数与当前屏幕一致，不是历史累加")
+expect(stressSnapshot.candidatesThisFrame <= 50, "单帧候选数与当前屏幕一致，不是历史累加")
+expect(stressSnapshot.messages.count > 100, "长窗口能正常涨到上百条（实测 \(stressSnapshot.messages.count) 条）")
 let stressElapsed = Date().timeIntervalSince(stressStart)
 expect(stressElapsed < 10, "1000 条 observations 的处理时间在合理范围（实测 \(String(format: "%.2f", stressElapsed))s）")
 

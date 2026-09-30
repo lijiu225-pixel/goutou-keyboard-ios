@@ -11,10 +11,12 @@ struct LiveChatGeometryConfiguration: Equatable {
     /// 底部输入栏 + 键盘占屏幕高度的比例：这一带不进聊天
     var bottomInsetRatio: CGFloat = 0.28
 
-    /// 离左边多近算「明显左对齐」
-    var leftAnchorTolerance: CGFloat = 0.06
+    /// 离左边多近算「明显左对齐」。
+    /// 取 0.12 而不是更小：微信里对方气泡左边要留头像，气泡左边缘通常在 0.10 左右；
+    /// 「我」的气泡同理离右边约 0.10（右边是头像）。再小就会把真实气泡判成 unknown。
+    var leftAnchorTolerance: CGFloat = 0.12
     /// 离右边多近算「明显右对齐」
-    var rightAnchorTolerance: CGFloat = 0.06
+    var rightAnchorTolerance: CGFloat = 0.12
     /// |centerX - 0.5| 小于它算「居中」
     var centerTolerance: CGFloat = 0.06
     /// 居中文字还得窄于这个宽度才算 system（时间 / 撤回提示）；更宽的居中内容宁可 unknown
