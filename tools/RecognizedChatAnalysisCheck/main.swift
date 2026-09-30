@@ -365,7 +365,7 @@ defer { try? fm.removeItem(at: probeRoot) }
 let beforeRun = try fm.contentsOfDirectory(atPath: probeRoot.path)
 var cycle = RecognizedChatAnalysisSession()
 if case .started(let cycleGeneration) = cycle.begin(hasFullAccess: true, config: config, skillAvailable: true, context: context) {
-    cycle.complete(generation: cycleGeneration, result: .success("一轮分析"))
+    cycle.complete(generation: cycleGeneration, result: .success(goodResult))
 }
 cycle.invalidate()
 let afterRun = try fm.contentsOfDirectory(atPath: probeRoot.path)
