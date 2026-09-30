@@ -44,9 +44,10 @@ struct RecognizedChatSession: Equatable {
         return .notLoaded
     }
 
-    /// 只有「读到的是一份非空的有效聊天」才允许使用。看到预览 ≠ 正在使用。
+    /// 「使用这份聊天」现在能不能点：预览有效且非空，而且还没有正在使用的一份。
+    /// 取消使用之后又能点——看到预览 ≠ 正在使用。
     var canUsePreview: Bool {
-        guard let preview = preview else { return false }
+        guard active == nil, let preview = preview else { return false }
         return !preview.messages.isEmpty
     }
 

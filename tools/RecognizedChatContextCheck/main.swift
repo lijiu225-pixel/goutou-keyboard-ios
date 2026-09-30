@@ -57,6 +57,7 @@ expect(session.preview?.messages == chatA, "preview keeps text, role and order")
 expect(abs((session.preview?.updatedAt.timeIntervalSince(t0)) ?? .infinity) < 0.001, "preview keeps the save time")
 expect(session.active == nil, "reading alone must not activate a context")
 expect(session.status == .previewing(messageCount: 8), "successful read enters previewing")
+expect(session.canUsePreview, "a valid preview offers the use action")
 expect(session.errorMessage == nil, "successful read clears the error")
 
 // 2~6. 使用后：条数、正文、role、顺序、时间都不变
@@ -73,6 +74,7 @@ session.cancelUse()
 expect(session.active == nil, "cancel clears the active context")
 expect(session.status == .previewing(messageCount: 8), "cancel falls back to previewing")
 expect(session.preview?.messages == chatA, "cancel keeps the preview")
+expect(session.canUsePreview, "cancel offers the use action again")
 expect(try store.read().messages == chatA, "cancel use must not delete the shared chat file")
 
 // 15~18. 30 分钟边界沿用阶段 7 的判定；旧聊天仍然允许使用
@@ -130,7 +132,7 @@ expect(session.preview == nil && session.active == nil, "no full access clears b
 expect(session.errorMessage == "没有开启键盘完全访问。", "no full access message")
 
 // 13~14. 空聊天 / 非法聊天都进不了活动上下文
-let emptyPreview = RecognizedChatSession(preview: SharedChatSnapshot(messages: [], updatedAt: t0))
+var emptyPreview = RecognizedChatSession(preview: SharedChatSnapshot(messages: [], updatedAt: t0))
 expect(!emptyPreview.canUsePreview, "an empty preview is not usable")
 expect(!emptyPreview.usePreview(), "an empty preview cannot activate")
 expect(emptyPreview.active == nil, "an empty chat never becomes the active context")
