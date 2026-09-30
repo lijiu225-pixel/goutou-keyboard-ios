@@ -198,7 +198,7 @@ final class LiveScreenCaptureManager: ObservableObject {
 
     /// 帧方向来自 ScreenCaptureKit 的帧元数据（iOS 27 的 `SCStreamFrameInfoVideoOrientation`，
     /// 取值遵循 `CGImagePropertyOrientation`）；拿不到就按正立处理，不硬编码猜测。
-    private static func frameOrientation(_ sampleBuffer: CMSampleBuffer) -> CGImagePropertyOrientation {
+    private nonisolated static func frameOrientation(_ sampleBuffer: CMSampleBuffer) -> CGImagePropertyOrientation {
         #if canImport(ScreenCaptureKit)
         if #available(iOS 27.0, *) {
             if let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: false)
