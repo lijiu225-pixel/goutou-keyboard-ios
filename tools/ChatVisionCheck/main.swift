@@ -274,6 +274,27 @@ func runVisionSyntheticCheck(dark: Bool) -> [String] {
         print("    box=\(boxText) \(bubbleText) \(line.text)")
     }
 
+    // 分析图自检：确认「行 0 是图像顶部」这个假设成立，并看清每一行到底有没有色块。
+    if let scan = ChatOCRScanContext.make(from: image) {
+        let bg = scan.background
+        print(
+            "[\(label)] 分析图 \(scan.rows.width)x\(scan.rows.height) "
+                + "底色=(\\(round(bg.red * 255)),\\(round(bg.green * 255)),\\(round(bg.blue * 255)))"
+        )
+        for probe in [0.02, 0.06, 0.10, 0.14, 0.19, 0.24, 0.31, 0.90, 0.96] {
+            let rowIndex = scan.rows.rowIndex(forNormalizedY: probe)
+            let row = scan.rows.row(atIndex: rowIndex)
+            var first = -1
+            var last = -1
+            var count = 0
+            for (offset, pixel) in row.enumerated() where pixel.distance(to: bg) > 0.06 {
+                count += 1
+                if first < 0 { first = offset }
+                last = offset
+            }
+            print("    分析行 y=\(probe) row=\(rowIndex) 非底色列=\(count) 首=\(first) 尾=\(last)")
+        }
+    }
     let analysis = ChatLayoutParser.analyze(lines: result.lines)
 
     // 把这次真 OCR 认出来的每一行都写进日志（都是合成文字，不含任何真实内容），
