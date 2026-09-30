@@ -58,6 +58,14 @@ struct ContentView: View {
                 }
 
                 Section {
+                    NavigationLink("动态识别测试") { LiveScreenCaptureView() }
+                } header: {
+                    Text("动态屏幕识别（实验）")
+                } footer: {
+                    Text("用户主动授权整屏共享后，主 App 会持续收到屏幕画面，并在本机把画面文字识别出来给你看。本阶段只验证捕获链路：不自动分析、不写聊天、不保存截图。")
+                }
+
+                Section {
                     NavigationLink("App Group 诊断") { AppGroupDiagnosticView() }
                 }
 

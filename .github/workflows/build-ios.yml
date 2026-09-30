@@ -33,7 +33,9 @@ env:
 
 jobs:
   build:
-    runs-on: macos-15
+    # 阶段 12A 起用 xcode-27 镜像（Xcode 27.0 / iOS 27 SDK）：iOS 版 ScreenCaptureKit
+    # 是 iOS 27.0+ 的框架，macos-15 / macos-26 镜像的 SDK 里根本没有这个模块。
+    runs-on: xcode-27
 
     steps:
       - uses: actions/checkout@v4
@@ -138,6 +140,22 @@ jobs:
             tools/RecognizedChatAnalysisCheck/main.swift \
             -o "$RUNNER_TEMP/recognizedchatanalysischeck"
           "$RUNNER_TEMP/recognizedchatanalysischeck"
+
+      # 阶段 12A：动态屏幕识别的纯逻辑（状态机 / 节流 / 单 OCR in-flight / 阅读顺序）。
+      # 不碰 ScreenCaptureKit、不联网、不落盘，所以能在 macOS 上直接跑。
+      - name: Live screen capture contract
+        run: |
+          swiftc -swift-version 5 \
+            Shared/SharedConstants.swift \
+            Shared/GoutouChatClipboard.swift \
+            Shared/SharedChatStore.swift \
+            Keyboard/GoutouConfig.swift \
+            App/ScreenCapture/LiveOCRSnapshot.swift \
+            App/ScreenCapture/LiveScreenCaptureState.swift \
+            App/ScreenCapture/LiveScreenOCRProcessor.swift \
+            tools/LiveScreenCaptureCheck/main.swift \
+            -o "$RUNNER_TEMP/livescreencapturecheck"
+          "$RUNNER_TEMP/livescreencapturecheck"
 
       - name: Generate Xcode project
         run: |

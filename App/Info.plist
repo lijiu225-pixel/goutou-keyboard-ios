@@ -26,6 +26,10 @@
 	<dict/>
 	<key>UIRequiresFullScreen</key>
 	<true/>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>screen-capture</string>
+	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
