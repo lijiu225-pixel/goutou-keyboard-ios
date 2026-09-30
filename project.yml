@@ -44,6 +44,31 @@ targets:
       - target: GoutouKeyboard
         embed: true
         codeSign: true
+      # 灵动岛 / 锁屏状态 + 控制中心快捷入口（WidgetKit 扩展）
+      - target: GoutouCaptureWidget
+        embed: true
+        codeSign: true
+
+  # 动态识别的系统级状态入口：Live Activity（灵动岛 / 锁屏）+ 控制中心 Control。
+  # 它不读聊天存储、不碰 AI、不碰 API Key，只画主 App 推过来的状态。
+  GoutouCaptureWidget:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widget
+      # Activity 属性主 App 与扩展共用同一份定义
+      - path: Shared/LiveActivity
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.goutouinput.capturewidget
+        PRODUCT_NAME: GoutouCaptureWidget
+        INFOPLIST_FILE: Widget/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+        VERSIONING_SYSTEM: apple-generic
+        # ActivityKit 需要 16.1；控制中心 Control 需要 18，按可用性在代码里隔离
+        IPHONEOS_DEPLOYMENT_TARGET: "16.1"
 
   # 键盘扩展：最小 QWERTY + 九键 + 军师面板
   GoutouKeyboard:

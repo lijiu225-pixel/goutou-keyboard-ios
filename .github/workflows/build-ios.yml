@@ -263,6 +263,37 @@ jobs:
             -o "$RUNNER_TEMP/chatscreendetectioncheck"
           "$RUNNER_TEMP/chatscreendetectioncheck"
 
+      # 阶段 12E（Final）：灵动岛 / 锁屏 Live Activity 的纯逻辑契约
+      # （只有真的开始捕获才建、去重、节流、停止/失败收尾、内容里没有正文）。
+      # ActivityKit 只检查决策与内容映射；真实灵动岛只能真机验收。
+      - name: Capture activity contract
+        run: |
+          swiftc -swift-version 5 \
+            Shared/SharedConstants.swift \
+            Shared/GoutouChatClipboard.swift \
+            Shared/SharedChatStore.swift \
+            Shared/SharedChatFingerprint.swift \
+            Keyboard/GoutouConfig.swift \
+            App/ScreenCapture/LiveOCRObservation.swift \
+            App/ScreenCapture/LiveOCRSnapshot.swift \
+            App/ScreenCapture/LiveScreenCaptureState.swift \
+            App/ScreenCapture/LiveChatGeometryConfiguration.swift \
+            App/ScreenCapture/LiveChatCandidate.swift \
+            App/ScreenCapture/LiveChatRoleClassifier.swift \
+            App/ScreenCapture/LiveChatBlockGrouper.swift \
+            App/ScreenCapture/LiveChatStabilizer.swift \
+            App/ScreenCapture/LiveChatTimeline.swift \
+            App/ScreenCapture/LiveChatSystem.swift \
+            App/ScreenCapture/LiveChatAutoSyncConfiguration.swift \
+            App/ScreenCapture/LiveChatAutoSyncState.swift \
+            App/ScreenCapture/LiveChatAutoSyncSession.swift \
+            App/ScreenCapture/ChatSceneGate.swift \
+            App/ScreenCapture/GoutouCaptureActivityState.swift \
+            App/ScreenCapture/GoutouCaptureActivityController.swift \
+            tools/CaptureActivityCheck/main.swift \
+            -o "$RUNNER_TEMP/captureactivitycheck"
+          "$RUNNER_TEMP/captureactivitycheck"
+
       - name: Generate Xcode project
         run: |
           xcodegen generate
@@ -320,6 +351,13 @@ jobs:
           ls -la Payload/$APP_NAME.app
           echo "--- 扩展是否被正确嵌进 App ---"
           ls -la "Payload/$APP_NAME.app/PlugIns/" || echo "!! PlugIns 目录不存在，扩展没被嵌入"
+          for ext in GoutouKeyboard.appex GoutouCaptureWidget.appex; do
+            if [ ! -d "Payload/$APP_NAME.app/PlugIns/$ext" ]; then
+              echo "!! 缺扩展 $ext —— 扩展没被正确嵌入"
+              exit 1
+            fi
+            echo "OK 已嵌入 $ext"
+          done
           zip -qry "$UNSIGNED_IPA" Payload
           unzip -l "$UNSIGNED_IPA" | head -20
           ls -la "$UNSIGNED_IPA"

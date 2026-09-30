@@ -1,0 +1,82 @@
+import ActivityKit
+import SwiftUI
+import WidgetKit
+
+/// 以「状态」形式展示动态识别是否在工作。
+///
+/// **只显示状态与计数**：条数、同步条数、未确定条数、门控与自动同步文案、最后同步时间；
+/// 绝不显示任何聊天正文（隐私要求）。
+struct GoutouCaptureActivityWidget: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: GoutouCaptureActivityAttributes.self) { context in
+            lockScreen(context.state)
+                .activityBackgroundTint(Color.black.opacity(0.75))
+                .activitySystemActionForegroundColor(Color.white)
+        } dynamicIsland: { context in
+            DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) {
+                    Label("狗头军师", systemImage: "pawprint.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.tint)
+                }
+                DynamicIslandExpandedRegion(.trailing) {
+                    Text(statusText(context.state))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                DynamicIslandExpandedRegion(.bottom) {
+                    counts(context.state)
+                        .font(.caption2)
+                }
+            } compactLeading: {
+                Image(systemName: "pawprint.fill")
+                    .foregroundStyle(.tint)
+            } compactTrailing: {
+                Text(context.state.capturing ? "\(context.state.timelineCount)" : "⏸")
+                    .font(.caption2)
+            } minimal: {
+                Image(systemName: "pawprint.fill")
+                    .foregroundStyle(.tint)
+            }
+            .keylineTint(.blue)
+        }
+    }
+
+    private func lockScreen(_ state: GoutouCaptureActivityAttributes.ContentState) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "pawprint.fill")
+                Text("狗头军师动态识别")
+                    .font(.caption)
+                    .bold()
+            }
+            Text(statusText(state))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            counts(state)
+                .font(.caption2)
+            if let errorText = state.errorText {
+                Text(errorText)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(2)
+    }
+
+    /// 只描述状态：识别中 / 已暂停 / 未在聊天界面…
+    private func statusText(_ state: GoutouCaptureActivityAttributes.ContentState) -> String {
+        state.capturing ? "识别中 · \(state.gateText)" : "已停止 · \(state.gateText)"
+    }
+
+    private func counts(_ state: GoutouCaptureActivityAttributes.ContentState) -> some View {
+        HStack(spacing: 10) {
+            Text("实时聊天 \(state.timelineCount) 条")
+            Text("已同步 \(state.syncedCount) 条")
+            if state.unknownCount > 0 {
+                Text("未确定 \(state.unknownCount) 条")
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+}

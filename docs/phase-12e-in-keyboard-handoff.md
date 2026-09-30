@@ -69,4 +69,64 @@ Final 的目标只有一个：**让用户尽量一直待在微信里**。
 模拟器 UIKit 回归新增 `testPendingSharedChatBannerRequiresExplicitUse`：横幅文案、时间、
 「使用后会替换当前聊天」提示，以及点「使用最新聊天」只发一个 `.useLatestSharedChat`、不触发分析。
 
+## 灵动岛 / 锁屏状态（Live Activity）
+
+动态识别启动后用户基本待在微信，状态得能在系统界面看到：
+
+- `Shared/LiveActivity/GoutouCaptureActivityAttributes.swift`：主 App 与 Widget 扩展**编译同一份**
+  属性定义（不复制两份）。静态属性只有一个 `sessionID`；动态 `ContentState` 只有**状态与计数**：
+  是否在捕获、门控文案、自动同步文案、实时条数、已同步条数、未确定条数、最后同步时间、错误文案。
+  **没有任何聊天正文**，也不放 API Key、不放沙盒路径。
+- `App/ScreenCapture/GoutouCaptureActivityState.swift`：纯函数映射 + 规划器。只有真正开始捕获
+  （`state == .capturing`）才请求创建一个 Activity；相同状态不重复 update；两次 update 之间至少隔
+  1 秒（**绝不按帧推灵动岛**）；停止 / 失败时结束。这些决策不依赖 ActivityKit，所以能在 CI 上单测。
+- `App/ScreenCapture/GoutouCaptureActivityController.swift`：唯一碰 ActivityKit 的地方。
+  `#if canImport(ActivityKit)` + `#available(iOS 16.2, *)` 隔离；启动新一轮时会先收掉残留的旧
+  Activity（不累积多个狗头军师状态）；**任何 ActivityKit 错误只记一句原因**，捕获 / OCR / 时间线 /
+  自动同步 / 共享聊天 / 键盘一律照常。
+- 只有「有意义的变化」才推：OCR 回来（门控 / 条数 / 未确定变化）、自动同步状态变化（成功 / 失败）、
+  捕获开始 / 停止 / 失败。不保存帧历史，不按帧刷新。
+- 灵动岛：minimal 只画 🐶；compact 左边图标、右边条数（暂停时是 ⏸）；expanded 左「狗头军师」
+  右状态、底部条数 / 已同步 / 未确定。锁屏是同样三行状态 + 计数。**都不出现正文。**
+
+## 控制中心
+
+`Widget/GoutouCaptureControl.swift` 是一个 iOS 18+ 的 `ControlWidgetButton`：点一下**只把 App 打开**
+（`openAppWhenRun = true`），没有别的语义。
+
+- 它**不会**、也无法绕过系统的内容共享界面去偷偷开始整屏捕获；
+- 它**不会**把「自动同步」变成持久授权（12D 的授权语义一个字没改）；
+- 它不碰 AI、不碰聊天存储、不读 API Key。
+
+跨进程没法可靠地操作正在跑的内存里的 capture session，所以 Control 就只做「快捷入口」，
+不做「一键开关自动同步」这种看起来方便、实际上不可靠也不安全的事。
+
+## 系统 SDK 核对（先查再写）
+
+写代码前先用一次性 probe workflow 在 `xcode-27` 镜像上实际 typecheck 过 Xcode 27 / iOS 27 SDK：
+`ActivityAttributes` 是 `@available(iOS 16.1, *)`，`DynamicIsland` / `ActivityConfiguration`（16.1）、
+`ControlWidget` / `StaticControlConfiguration` / `ControlWidgetButton`（18.0）都存在，一整套
+「Live Activity + 灵动岛 + Control」在 `-target arm64-apple-ios16.1` 下 typecheck 通过。
+所以**不需要**为了这两个能力把项目最低版本提到 iOS 27：主 target 仍是 iOS 16，
+Widget 扩展单独设 16.1（ActivityKit 的下限），Control 用 `if #available(iOS 18.0, *)` 隔离。
+
+## 重签时要注意的 capability
+
+Final 仍然是**未签名 IPA**。重签环境要保住这些，否则对应能力只是「没起来」（主链路不受影响）：
+
+- App Group（键盘读写 `latest_chat.json`）——现有那套；
+- `NSSupportsLiveActivities`（已在 `App/Info.plist`）与 Widget 扩展的 bundle id
+  `com.example.goutouinput.capturewidget`（必须挂在主 App 的 ID 下面）；
+- Control / AppIntent 相关 capability 由重签工具按它自己的规则处理；重签后要在真机上确认
+  灵动岛与控制中心是否真的出现。
+
+## 测试
+
+`tools/CaptureActivityCheck`（CI 的 `Capture activity contract`，纯逻辑 + 源码契约，不联网）覆盖：
+没开始捕获不建 Activity、开始后请求创建、运行期间只 update 不重复创建、条数 / 同步数 / 未确定数
+如实映射、内容里不含正文与 URL、相同状态不重复推、过快变化被节流并统计、停止后 end 且不再更新、
+失败带着错误状态收尾、新一轮 capture 建新 Activity 且不复用旧的、控制器初始不在跑 / 停止后回到不在跑，
+以及源码级检查（新代码里没有 AI / 输入代理 / 聊天存储 / 容器路径 / UserDefaults / `fatalError` / `try!`，
+Control 只有「打开 App」语义）。真实的灵动岛、锁屏与控制中心仍然只能真机验收。
+
 **Final 代码、CI 与构建已完成，真实 iPhone / 官方微信端到端最终验收仍需用户完成。**

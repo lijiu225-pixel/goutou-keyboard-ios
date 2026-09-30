@@ -98,21 +98,32 @@ thinking 片段），但进界面前严格归一化：空、纯标点、完全�
 
 ```
 截图 OCR ──┐
-           ├─→ 人工确认/修正 → SharedChatStore（App Group）→ 键盘「读取识别聊天」
-动态识别 ──┘                          ↑                        ↓
-（ScreenCaptureKit + Vision）   自动同步（默认关闭，用户手动开）  「使用这份聊天」
-                                        ↑                        ↓
-                            键盘自动发现「发现新聊天 · N 条」   Active Context
-                                    →「使用最新聊天」            ↓
-                                                             「分析这段聊天」→ AI
-                                                             聊天分析 + 对方状态 + 恰好 3 条回复
-                                                                      ↓
-                                                            点一条 → 只插入输入框
-                                                                    （不自动发送，永远由用户决定）
+           ├─→ 人工确认/修正 ─→ SharedChatStore（App Group）
+动态识别 ──┘   （ScreenCaptureKit + Vision）        │
+                      │                            │
+                      ├─→ 自动同步（默认关闭，用户手动开）┘
+                      │
+                      └─→ 灵动岛 / 锁屏状态
+                          （只有状态与计数，没有正文）
+
+SharedChatStore ─→ 键盘「读取识别聊天」/ 自动「发现新聊天 · N 条」
+                      ↓
+                   「使用最新聊天」─→ Active Context
+                      ↓
+                   「分析这段聊天」─→ AI
+                      ↓
+                   聊天分析 + 对方状态 + 恰好 3 条回复
+                      ↓
+                   点一条 ─→ 只插入输入框（不自动发送，永远由用户决定）
 ```
 
 - 键盘只在**事件节点**检查共享聊天（面板打开 / 键盘重新出现 / 手动读取），**不做任何轮询**；
   发现新聊天只提示，用户点「使用最新聊天」才切换上下文，并且会一并作废旧分析。
+- **灵动岛 / 锁屏 Live Activity**（`Shared/LiveActivity` + `Widget` 扩展）只显示**状态与计数**
+  —— 识别中 / 已暂停、实时条数、已同步条数、未确定条数、最后同步时间 —— **绝不出聊天正文**，
+  只有真正开始捕获才创建，相同状态不重复推、两次更新至少隔 1 秒，停止 / 失败就收掉；
+  ActivityKit 起不来只是「状态没显示」，识别链路照常。控制中心是一个 iOS 18+ 的
+  `ControlWidgetButton`，点一下**只把 App 打开**，不绕系统整屏共享授权、不改自动同步授权语义。
 - 动态屏幕识别需要 **iOS 27 + 用户主动在系统界面共享整屏**；项目最低 deployment target 仍然是
   **iOS 16**，截图 OCR、键盘、AI 分析、回复插入这些旧功能**都不依赖** ScreenCaptureKit。
 - 12D 的自动同步安全规则保持不变：默认关闭、每个 capture session 重新授权、unknown 阻止整次同步、
@@ -135,6 +146,14 @@ Shared/                              两端共用（键盘编译契约、共享�
   GoutouChatClipboard.swift          goutou-chat JSON 契约与编解码（含 version 严格校验与体量上限）
   GoutouChatOCRGeometry.swift        长图分片几何：缩放口径 / 切片 / 坐标换算 / 重叠去重（纯 Foundation）
   GoutouChatBubbleScanner.swift      气泡边缘扫描：底色估计 / 行内色块 / 头像侧（纯 Foundation，有测试）
+  SharedChatFingerprint.swift        共享聊天指纹（role|text 顺序拼接后 SHA-256，App 与键盘共用）
+  LiveActivity/
+    GoutouCaptureActivityAttributes.swift  灵动岛 / 锁屏的属性与 ContentState（App 与 Widget 扩展共用同一份）
+Widget/                              灵动岛 / 锁屏状态 + 控制中心快捷入口（WidgetKit 扩展）
+  GoutouCaptureWidgetBundle.swift    WidgetBundle：Live Activity + Control
+  GoutouCaptureActivityWidget.swift  锁屏与灵动岛（minimal / compact / expanded），只画状态与计数
+  GoutouCaptureControl.swift         控制中心按钮（iOS 18+）：点一下只把 App 打开
+  Info.plist                         NSExtension: com.apple.widgetkit-extension
 Keyboard/                            键盘扩展：UIInputViewController + Auto Layout
   KeyboardViewController.swift       两种布局的控制器 + textDocumentProxy 上屏
   NineKeyKeyboardView.swift          中文九键界面（对标 Android 布局与配色）
@@ -164,7 +183,9 @@ tools/ChatVisionCheck/main.swift      真 Vision 的合成截图回归（只在 
 .github/workflows/build-ios.yml      无 Mac 构建流水线
 ```
 
-两个 target：`GoutouInput`（App）和 `GoutouKeyboard`（app-extension，被嵌进 App 的 `PlugIns/`）。扩展只依赖 UIKit，纯系统控件，没有 WebView、没有第三方库，内存曲线是平的。
+三个 target：`GoutouInput`（App）、`GoutouKeyboard`（app-extension，键盘）、
+`GoutouCaptureWidget`（app-extension，灵动岛 / 锁屏状态 + 控制中心），两个扩展都被嵌进 App 的 `PlugIns/`。
+扩展只依赖 UIKit / WidgetKit / ActivityKit，纯系统控件，没有 WebView、没有第三方库，内存曲线是平的。
 
 ### 跨平台复用的那一层
 
@@ -345,8 +366,9 @@ git tag adhoc-v1.0.0 && git push origin adhoc-v1.0.0
 
 ## 下一阶段（现在没做）
 
-- **截图 OCR 第三阶段（已完成主体）**：键盘侧「读取识别聊天 → 使用这份聊天 → 分析这段聊天 →
-  点候选上屏」已通；下一步才轮到动态屏幕识别那类能力（需要 ReplayKit / ScreenCaptureKit 的新阶段）。
+- **动态屏幕识别（12A～12E 已完成主体）**：截图 OCR、动态识别、实时时间线、人工确认、自动同步、
+  键盘自动发现新聊天、灵动岛 / 锁屏状态、控制中心快捷入口、分析 + 恰好 3 条回复、点一条只插入，
+  已经连成一条闭环；剩下的是**真机验收**（官方微信 + ScreenCaptureKit + 灵动岛 + 重签环境）。
 - **表情/图片消息的留位**：现在整条只有一个表情的消息（Vision 认不出文字）**不会出现**在结果里，
   要补上得把整张图的气泡做二维分割，这一阶段没做。
 - 整句输入 / 联想（现在是"数字串切拼音 + 词库命中"，没有再往上做整句模型；要更进一步就得考虑 RIME）

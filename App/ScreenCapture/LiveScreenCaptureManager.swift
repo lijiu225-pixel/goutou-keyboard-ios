@@ -92,6 +92,10 @@ final class LiveScreenCaptureManager: ObservableObject {
     private let chatEngine = LiveChatEngineBox()
     /// 阶段 12D 的自动同步：和聊天引擎同一条串行队列，不需要额外加锁。
     private let autoSync: LiveChatAutoSyncCoordinator
+    /// 灵动岛 / 锁屏状态（ActivityKit 失败只记原因，绝不影响识别链路）
+    private let captureActivity = GoutouCaptureActivityController()
+    /// 一轮 capture session 的标识：换了 session 就用新的 Live Activity
+    private var captureSessionID = UUID().uuidString
     /// OCR 在跑时最多留一帧最新画面（SCStream / bridge 都是 Any，靠 availability 再转回来）。
     private var stream: AnyObject?
     private var pickerBridge: AnyObject?
@@ -107,6 +111,8 @@ final class LiveScreenCaptureManager: ObservableObject {
                 self.autoSyncState = state
                 self.autoSyncLastSyncAt = lastSyncAt
                 self.autoSyncLastCount = lastCount
+                // 同步成功 / 失败也是「有意义的状态变化」：这时候推一次灵动岛。
+                self.captureActivity.stateChanged(self.captureActivityContent())
             }
         }
     }
@@ -117,6 +123,42 @@ final class LiveScreenCaptureManager: ObservableObject {
         case .disabled, .pausedAfterManualSave: return false
         default: return true
         }
+    }
+
+    /// 把当前状态映射成灵动岛 / 锁屏要显示的内容：**只有状态与计数，没有正文**。
+    private func captureActivityContent() -> GoutouCaptureActivityContent {
+        GoutouCaptureActivityContentBuilder.make(
+            captureState: model.state,
+            verdict: sceneVerdict,
+            autoSync: autoSyncState,
+            timelineCount: chat.messages.count,
+            unknownCount: chat.unknownCount,
+            syncedCount: autoSyncLastCount,
+            lastSyncAt: autoSyncLastSyncAt
+        )
+    }
+
+    /// 捕获真的开始：启动灵动岛状态。
+    private func noteCaptureActivityStarted() {
+        guard model.state.isCapturing else { return }
+        captureActivity.captureStarted(sessionID: captureSessionID, content: captureActivityContent())
+    }
+
+    /// 捕获停止 / 失败：结束灵动岛状态（不动任何聊天数据）。
+    private func noteCaptureActivityStopped() {
+        captureActivity.captureStopped(captureActivityContent())
+    }
+
+    /// 真的开始捕获：状态进 `capturing`，并起一个灵动岛状态。没起来就不建（不留假 Activity）。
+    private func markCaptureDidStart() {
+        guard model.captureDidStart() else { return }
+        noteCaptureActivityStarted()
+    }
+
+    /// 捕获失败：进 `failed` 并收掉灵动岛状态（End 时带上错误文案，但不含正文 / 路径）。
+    private func markCaptureDidFail(_ reason: String) {
+        model.captureDidFail(reason)
+        noteCaptureActivityStopped()
     }
 
     /// 系统是否具备 iOS 版 ScreenCaptureKit（iOS 27+ 且 SDK 里有这个 framework）。
@@ -132,6 +174,9 @@ final class LiveScreenCaptureManager: ObservableObject {
     /// 点「开始动态识别测试」：只挂观察者并调起系统 picker，**不**提前假设捕获成功。
     func start() {
         guard model.beginStart() else { return }
+        // 新的一轮 capture：用一个新的 session 标识，之后建的就是新的 Live Activity，
+        // 绝不复用上一轮已经结束的那个（避免灵动岛显示上一次的状态）。
+        captureSessionID = UUID().uuidString
         // 阶段 12B：重新开始 = 新 session，实时聊天与稳定化状态一起清零，避免跨会话误拼。
         chat = .empty
         let engine = chatEngine
@@ -153,7 +198,7 @@ final class LiveScreenCaptureManager: ObservableObject {
             return
         }
         #endif
-        model.captureDidFail("当前系统不支持动态屏幕识别（需要 iOS 27 或更高）")
+        markCaptureDidFail("当前系统不支持动态屏幕识别（需要 iOS 27 或更高）")
     }
 
     /// 点「停止动态识别」：停 stream、移除输出、清观察者。多次点安全。
@@ -174,12 +219,16 @@ final class LiveScreenCaptureManager: ObservableObject {
                     if let output { try? current.removeStreamOutput(output, type: .screen) }
                     try? await current.stopCapture()
                 }
-                await MainActor.run { self?.model.captureDidStop() }
+                await MainActor.run {
+                    self?.model.captureDidStop()
+                    self?.noteCaptureActivityStopped()   // 停止：顺手收掉灵动岛状态
+                }
             }
             return
         }
         #endif
         model.captureDidStop()
+        noteCaptureActivityStopped()
     }
 
     /// 只清阶段 12B 的实时聊天（时间线 / 稳定化 / 去重状态）。
@@ -264,15 +313,15 @@ final class LiveScreenCaptureManager: ObservableObject {
                 do {
                     try newStream.addStreamOutput(bridge, type: .screen, sampleHandlerQueue: self?.sampleQueue)
                     try await newStream.startCapture()
-                    await MainActor.run { self?.model.captureDidStart() }
+                    await MainActor.run { self?.markCaptureDidStart() }
                 } catch {
-                    await MainActor.run { self?.model.captureDidFail("启动屏幕捕获失败") }
+                    await MainActor.run { self?.markCaptureDidFail("启动屏幕捕获失败") }
                 }
             }
             return
         }
         #endif
-        model.captureDidFail("系统没有给出可用的捕获内容")
+        markCaptureDidFail("系统没有给出可用的捕获内容")
     }
 
     func pickerDidCancel() {
@@ -283,6 +332,7 @@ final class LiveScreenCaptureManager: ObservableObject {
     func pickerDidFail(_ reason: String) {
         releasePicker()
         model.pickerDidFail(reason)
+        noteCaptureActivityStopped()
     }
 
     func streamDidStopWithError(_ reason: String) {
@@ -290,6 +340,7 @@ final class LiveScreenCaptureManager: ObservableObject {
         streamBridge = nil
         pendingFrame = nil
         model.captureDidStopWithError(reason)
+        noteCaptureActivityStopped()   // 系统结束了共享：把灵动岛状态也收掉
     }
 
     // MARK: - 帧 → OCR
@@ -365,6 +416,8 @@ final class LiveScreenCaptureManager: ObservableObject {
     ) {
         if let chatSnapshot { chat = chatSnapshot }
         if let verdict { sceneVerdict = verdict }
+        // 灵动岛 / 锁屏只要「状态 + 计数」：规划器会去重 + 节流，不会每帧都推。
+        captureActivity.stateChanged(captureActivityContent())
         // 代际号对不上（已经停止 / 重新开始）时，模型一个字都不写。
         let runPending = model.ocrDidFinish(generation: generation, result: result, at: Date())
         if runPending, let pending = pendingFrame {

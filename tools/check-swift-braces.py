@@ -67,6 +67,9 @@ def main():
     files.append(os.path.join(repo, "tools", "LiveChatAutoSyncCheck", "main.swift"))
     files.append(os.path.join(repo, "tools", "SharedChatUpdateCheck", "main.swift"))
     files.append(os.path.join(repo, "tools", "ChatScreenDetectionCheck", "main.swift"))
+    files.append(os.path.join(repo, "tools", "CaptureActivityCheck", "main.swift"))
+    files += sorted(glob.glob(os.path.join(repo, "Widget", "*.swift")))
+    files += sorted(glob.glob(os.path.join(repo, "Shared", "LiveActivity", "*.swift")))
     bad = 0
     for path in files:
         with open(path, encoding="utf-8") as handle:
