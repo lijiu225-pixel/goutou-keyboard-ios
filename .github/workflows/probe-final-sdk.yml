@@ -1,0 +1,101 @@
+# 临时探针：确认 iOS 27 SDK 里 ActivityKit / WidgetKit / Control 的真实 API 与可用性。
+name: Probe Live Activity and Control SDK (temporary)
+
+on:
+  push:
+    branches:
+      - probe/final-sdk
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: xcode-27
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Frameworks in the iOS SDK
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "SDK=$SDK"
+          ls "$SDK/System/Library/Frameworks/" | grep -i -E "activity|widget|swiftui" || true
+          ls "$SDK/System/Library/Frameworks/ActivityKit.framework/Headers/" 2>/dev/null | head -20 || echo "(no ActivityKit headers)"
+          ls "$SDK/System/Library/Frameworks/WidgetKit.framework/Headers/" 2>/dev/null | head -20 || echo "(no WidgetKit headers)"
+
+      - name: Availability of the pieces we need
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          IF="$SDK/System/Library/Frameworks/ActivityKit.framework/Modules/ActivityKit.swiftmodule"
+          echo "--- ActivityKit swiftinterface files ---"
+          ls "$IF" 2>/dev/null | head || true
+          F=$(ls "$IF"/*.swiftinterface 2>/dev/null | head -1)
+          if [ -n "$F" ]; then
+            echo "interface: $F"
+            grep -n "public struct ActivityAttributes\|public protocol ActivityAttributes\|public struct Activity\b\|@available(iOS 16.1" "$F" | head -20 || true
+          fi
+          WIF="$SDK/System/Library/Frameworks/WidgetKit.framework/Modules/WidgetKit.swiftmodule"
+          WF=$(ls "$WIF"/*.swiftinterface 2>/dev/null | head -1)
+          echo "widget interface: $WF"
+          if [ -n "$WF" ]; then
+            grep -n "ControlWidget\b\|ControlWidgetConfiguration\|DynamicIsland\b\|ActivityConfiguration" "$WF" | head -30 || true
+          fi
+
+      - name: Typecheck a Live Activity + Control shape
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          mkdir -p "$RUNNER_TEMP/shape"
+          cat > "$RUNNER_TEMP/shape/main.swift" <<'SWIFT'
+          import ActivityKit
+          import AppIntents
+          import SwiftUI
+          import WidgetKit
+
+          @available(iOS 16.1, *)
+          struct CaptureActivityAttributes: ActivityAttributes {
+              public struct ContentState: Codable, Hashable {
+                  var captureActive: Bool
+                  var timelineCount: Int
+                  var syncedCount: Int
+                  var unknownCount: Int
+              }
+              var sessionID: String
+          }
+
+          @available(iOS 16.1, *)
+          struct CaptureActivityWidget: Widget {
+              var body: some WidgetConfiguration {
+                  ActivityConfiguration(for: CaptureActivityAttributes.self) { context in
+                      Text("dog")
+                  } dynamicIsland: { context in
+                      DynamicIsland {
+                          DynamicIslandExpandedRegion(.leading) { Text("dog") }
+                      } compactLeading: {
+                          Text("dog")
+                      } compactTrailing: {
+                          Text("\(context.state.timelineCount)")
+                      } minimal: {
+                          Text("dog")
+                      }
+                  }
+              }
+          }
+
+          @available(iOS 18.0, *)
+          struct OpenCaptureIntent: AppIntent {
+              static var title: LocalizedStringResource = "Open"
+              static var openAppWhenRun: Bool = true
+              func perform() async throws -> some IntentResult { .result() }
+          }
+
+          @available(iOS 18.0, *)
+          struct CaptureControl: ControlWidget {
+              var body: some ControlWidgetConfiguration {
+                  StaticControlConfiguration(kind: "com.example.goutouinput.capture") {
+                      ControlWidgetButton(action: OpenCaptureIntent()) {
+                          Label("dog", systemImage: "dot.radiowaves.left.and.right")
+                      }
+                  }
+              }
+          }
+          SWIFT
+          xcrun -sdk iphoneos swiftc -typecheck -target arm64-apple-ios16.1 -sdk "$SDK" "$RUNNER_TEMP/shape/main.swift" 2>&1 | head -60 || true
+          echo "shape probe done"
