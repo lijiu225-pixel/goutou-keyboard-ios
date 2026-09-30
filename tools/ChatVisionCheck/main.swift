@@ -279,7 +279,7 @@ func runVisionSyntheticCheck(dark: Bool) -> [String] {
         let bg = scan.background
         print(
             "[\(label)] 分析图 \(scan.rows.width)x\(scan.rows.height) "
-                + "底色=(\\(round(bg.red * 255)),\\(round(bg.green * 255)),\\(round(bg.blue * 255)))"
+                + "底色=(\(round(bg.red * 255)),\(round(bg.green * 255)),\(round(bg.blue * 255)))"
         )
         for probe in [0.02, 0.06, 0.10, 0.14, 0.19, 0.24, 0.31, 0.90, 0.96] {
             let rowIndex = scan.rows.rowIndex(forNormalizedY: probe)
@@ -293,6 +293,35 @@ func runVisionSyntheticCheck(dark: Bool) -> [String] {
                 last = offset
             }
             print("    分析行 y=\(probe) row=\(rowIndex) 非底色列=\(count) 首=\(first) 尾=\(last)")
+        }
+        // 直接对第一条消息那一行做一次并集，看清色块到底切成什么样。
+        var unionColumns = [Bool](repeating: false, count: scan.rows.width)
+        for probeY in [0.094, 0.097, 0.100, 0.103, 0.106] {
+            let probeRow = scan.rows.row(atIndex: scan.rows.rowIndex(forNormalizedY: probeY))
+            for (offset, pixel) in probeRow.enumerated() where pixel.distance(to: bg) > 0.06 {
+                unionColumns[offset] = true
+            }
+        }
+        var probeRuns: [String] = []
+        var runStart = -1
+        for offset in 0..<unionColumns.count {
+            if unionColumns[offset] {
+                if runStart < 0 { runStart = offset }
+            } else if runStart >= 0 {
+                probeRuns.append("\(runStart)-\(offset - 1)")
+                runStart = -1
+            }
+        }
+        if runStart >= 0 {
+            probeRuns.append("\(runStart)-\(unionColumns.count - 1)")
+        }
+        print("    第一条并集色块: " + probeRuns.joined(separator: ","))
+
+        let probeBox = ChatLayoutBox(x: 0.179, y: 0.094, width: 0.259, height: 0.012)
+        if let probe = ChatBubbleScanner.evidence(forText: probeBox, rows: scan.rows, background: bg) {
+            print("    第一条 probe -> 气泡=[" + "\(probe.span.minX)," + "\(probe.span.maxX)]")
+        } else {
+            print("    第一条 probe -> nil")
         }
     }
     let analysis = ChatLayoutParser.analyze(lines: result.lines)
