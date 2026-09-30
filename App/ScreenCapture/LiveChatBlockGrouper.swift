@@ -17,7 +17,9 @@ enum LiveChatViewportFilter {
         _ observations: [LiveOCRObservation],
         config: LiveChatGeometryConfiguration = .default
     ) -> [LiveOCRObservation] {
-        observations.filter { !$0.normalizedText.isEmpty && isInsideViewport($0.box, config: config) }
+        observations.filter {
+            !LiveChatText.normalize($0.text).isEmpty && isInsideViewport($0.box, config: config)
+        }
     }
 }
 
@@ -44,7 +46,7 @@ enum LiveChatBlockGrouper {
         timestamp: Date = Date()
     ) -> [LiveChatCandidate] {
         var blocks: [[LiveOCRObservation]] = []
-        for observation in readingOrder(observations) where !observation.normalizedText.isEmpty {
+        for observation in readingOrder(observations) where !LiveChatText.normalize(observation.text).isEmpty {
             if let last = blocks.last?.last, canMerge(last, observation, config: config) {
                 blocks[blocks.count - 1].append(observation)
             } else {
@@ -73,7 +75,8 @@ enum LiveChatBlockGrouper {
         _ next: LiveOCRObservation,
         config: LiveChatGeometryConfiguration = .default
     ) -> Bool {
-        guard !previous.normalizedText.isEmpty, !next.normalizedText.isEmpty else { return false }
+        guard !LiveChatText.normalize(previous.text).isEmpty,
+              !LiveChatText.normalize(next.text).isEmpty else { return false }
 
         // 1) 角色必须兼容：一左一右绝不合（「对方：你好 / 我：你好」上下再近也是两条）
         let previousRole = LiveChatRoleClassifier.classify(box: previous.box, config: config)
