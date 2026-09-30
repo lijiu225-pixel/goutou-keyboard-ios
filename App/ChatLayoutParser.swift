@@ -276,6 +276,15 @@ struct ChatLayoutResult: Equatable {
     let messages: [ChatLayoutMessage]
     /// 被剔掉的内容按原因汇总。
     let excludedCounts: [ChatLayoutExcludedCount]
+    /// Preserve heuristically excluded text locally so users can undo a wrong exclusion.
+    var excludedMessages: [ChatLayoutMessage] = []
+
+    var reviewMessages: [ChatLayoutMessage] {
+        (messages + excludedMessages).sorted {
+            if $0.box.minY != $1.box.minY { return $0.box.minY < $1.box.minY }
+            return $0.box.minX < $1.box.minX
+        }
+    }
 
     var excludedTotal: Int {
         excludedCounts.reduce(0) { $0 + $1.count }
@@ -365,6 +374,14 @@ enum ChatLayoutParser {
 
         var messages: [ChatLayoutMessage] = []
         var excludedCounts: [ChatNonChatReason: Int] = [:]
+        var excludedMessages: [ChatLayoutMessage] = []
+
+        func preserveExcluded(_ block: Block, reason: ChatNonChatReason) {
+            excludedMessages.append(makeMessage(
+                block, role: roleFor(block: block, area: area, rails: rails, thresholds: thresholds),
+                kind: .nonChatCandidate(reason), thresholds: thresholds
+            ))
+        }
 
         for index in blocks.indices {
             let block = blocks[index]
@@ -373,15 +390,18 @@ enum ChatLayoutParser {
 
             if keyboardIndexes.contains(index) {
                 excludedCounts[.keyboard, default: 0] += 1
+                preserveExcluded(block, reason: .keyboard)
                 continue
             }
             if let top = bandTop, let bottom = bandBottom {
                 if block.box.maxY <= top + bandSlack {
                     excludedCounts[.header, default: 0] += 1
+                    preserveExcluded(block, reason: .header)
                     continue
                 }
                 if block.box.minY >= bottom - bandSlack {
                     excludedCounts[.footer, default: 0] += 1
+                    preserveExcluded(block, reason: .footer)
                     continue
                 }
             }
@@ -401,7 +421,7 @@ enum ChatLayoutParser {
             }
             // 通话记录在微信里也是有气泡的（右侧绿色），所以不能靠「没有气泡」认，
             // 只能靠「整条就是一句通话状态」。认不准的一律只当候选，用户能一键放回。
-            if kind.isChat, hasBubble, isCallRecord(text) {
+            if kind.isChat, isCallRecord(text) {
                 kind = .nonChatCandidate(.callRecord)
             }
 
@@ -422,7 +442,7 @@ enum ChatLayoutParser {
             guard let count = excludedCounts[reason], count > 0 else { return nil }
             return ChatLayoutExcludedCount(reason: reason, count: count)
         }
-        return ChatLayoutResult(messages: messages, excludedCounts: summary)
+        return ChatLayoutResult(messages: messages, excludedCounts: summary, excludedMessages: excludedMessages)
     }
 
     // MARK: 1. 阅读顺序

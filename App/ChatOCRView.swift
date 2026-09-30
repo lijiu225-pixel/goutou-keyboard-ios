@@ -88,7 +88,7 @@ struct ChatOCRView: View {
 
     /// 只有「保留着、而且是聊天消息、归属还没定」的才需要用户定。
     private var unresolvedCount: Int {
-        messages.filter { $0.isKept && $0.kind.isChat && $0.needsReview }.count
+        messages.filter { $0.isKept && $0.needsReview }.count
     }
 
     private var canCopy: Bool {
@@ -176,7 +176,7 @@ struct ChatOCRView: View {
     /// 被自动剔掉的内容只说个数和类型，不回显文字。
     private var excludedSummary: String {
         let parts = excludedCounts.map { "\($0.reason.displayName) \($0.count) 条" }
-        return "已自动忽略：" + parts.joined(separator: "、") + "。"
+        return "默认不复制：" + parts.joined(separator: "、") + "。可在下方候选区核对和恢复。"
     }
 
     // MARK: - 非聊天候选
@@ -185,13 +185,21 @@ struct ChatOCRView: View {
         Section {
             ForEach(candidateIndexes, id: \.self) { index in
                 row(for: $messages[index], showsRolePicker: false)
+                Toggle("保留这条，加入复制", isOn: $messages[index].isKept)
+                if messages[index].isKept {
+                    Picker("这条是谁说的", selection: $messages[index].role) {
+                        ForEach(ChatLayoutRole.selectable, id: \.self) { role in
+                            Text(role.displayName).tag(role)
+                        }
+                    }
+                }
             }
             Button("把这些都算进聊天") { setCandidates(kept: true) }
             Button("全部删掉", role: .destructive) { removeCandidates() }
         } header: {
             Text("非聊天内容（默认不复制）")
         } footer: {
-            Text("这些是居中的日期时间、系统提示或通话记录。版式上说得通，但同一个词也可能是真的聊天内容，所以默认不写进剪贴板 —— 确认是聊天就点上面的按钮放回来。")
+            Text("这些可能是日期、通话状态、页眉页脚或键盘。判断可能出错，请核对；真实消息可逐条保留并修改归属。默认不复制。")
         }
     }
 
@@ -383,7 +391,7 @@ struct ChatOCRView: View {
             }
 
             let analysis = ChatLayoutParser.analyze(lines: result.lines)
-            messages = analysis.messages
+            messages = analysis.reviewMessages
             excludedCounts = analysis.excludedCounts
             let chatCount = analysis.messages.filter { $0.kind.isChat }.count
             stage = .done(count: chatCount)

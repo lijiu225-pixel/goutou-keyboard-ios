@@ -153,6 +153,40 @@ let stageAnonymizedChatLines: [ChatOCRLine] = [
 // MARK: - 断言
 
 func runStageTwoChecks() {
+    // Missing bubble evidence must not turn a call status into copied chat.
+    let missingCallBubble = ChatLayoutParser.analyze(lines: [
+        stageTwoLine("甲甲甲", x: 0.18, y: 0.20, width: 0.2,
+                     bubble: (minX: 0.135, maxX: 0.45, tone: .neutral)),
+        stageTwoLine("已取消", x: 0.68, y: 0.40, width: 0.15),
+        stageTwoLine("他说已取消", x: 0.18, y: 0.60, width: 0.3,
+                     bubble: (minX: 0.135, maxX: 0.55, tone: .neutral)),
+    ])
+    expect(missingCallBubble.messages.first { $0.text == "已取消" }?.kind.reason == .callRecord,
+           "No bubble: exact call status remains a recoverable candidate")
+    expect(missingCallBubble.messages.first { $0.text == "他说已取消" }?.isKept == true,
+           "A normal sentence containing call words must remain chat")
+    let edgeReview = ChatLayoutParser.analyze(lines: [
+        stageTwoLine("边缘真实消息", x: 0.18, y: 0.02, width: 0.30),
+        stageTwoLine("甲甲甲", x: 0.18, y: 0.30, width: 0.20,
+                     bubble: (minX: 0.135, maxX: 0.45, tone: .neutral)),
+        stageTwoLine("乙乙乙", x: 0.55, y: 0.60, width: 0.20,
+                     bubble: (minX: 0.5, maxX: 0.865, tone: .greenish)),
+        stageTwoLine("底部真实消息", x: 0.55, y: 0.90, width: 0.30),
+    ])
+    expect(edgeReview.reviewMessages.map { $0.text } == ["边缘真实消息", "甲甲甲", "乙乙乙", "底部真实消息"],
+           "Potentially ignored edge messages must survive in reading order for recovery")
+    expect(edgeReview.reviewMessages.filter { $0.isKept }.count == 2,
+           "Ignored edge content is excluded from copy until explicitly restored")
+    var restored = edgeReview.reviewMessages
+    restored[0].isKept = true
+    restored[0].role = .other
+    let exportMessages = restored.filter { $0.isKept }.map {
+        GoutouChatClipboardMessage(role: $0.role.clipboardRole!, text: $0.text)
+    }
+    let exportText = try! GoutouChatClipboardCodec.encode(GoutouChatClipboardPayload(messages: exportMessages))
+    let exportBack = try! GoutouChatClipboardCodec.decode(exportText)
+    expect(exportBack.messages.map { $0.text } == ["边缘真实消息", "甲甲甲", "乙乙乙"],
+           "Restored content enters the JSON in reading order; unselected candidates stay out")
 
     // ── 1. 气泡扫描：底色估计 ───────────────────────────────────────────
 
