@@ -97,10 +97,14 @@ struct ContentView: View {
                     StepRow(index: 3, text: "点 ⟳ 分析 → 选一条话术上屏（不会自动发送）")
                 }
 
-                Section("用截图 OCR 聊天记录（本阶段只到复制为止）") {
+                // 用 header:/footer: 的显式形式：`Section("标题") { } footer: { }` 是 iOS 17 才有的重载，
+                // 本工程 deploymentTarget 是 iOS 16，加了 footer 会编译不过。
+                Section {
                     StepRow(index: 1, text: "截图工具截下聊天界面，回这里点「识别聊天截图」并选那张图")
                     StepRow(index: 2, text: "检查识别结果：改错的字、定「未确定」的归属、左滑删掉状态栏和标题")
                     StepRow(index: 3, text: "点「复制聊天文字」，结果 JSON 进剪贴板。键盘侧「导入识别聊天」还没做，复制完先放着")
+                } header: {
+                    Text("用截图 OCR 聊天记录（本阶段只到复制为止）")
                 } footer: {
                     Text("这一步不联网、不上传截图、不保存图片，也不会自动写剪贴板。下一阶段才接键盘导入和 AI 分析。")
                 }
