@@ -89,6 +89,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.goutouinput.paneltesthost
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        # iOS 27 SDK 起，App 必须走 UIScene 生命周期；这一项生成 scene manifest。
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
 
   GoutouPanelTests:
     type: bundle.unit-test
