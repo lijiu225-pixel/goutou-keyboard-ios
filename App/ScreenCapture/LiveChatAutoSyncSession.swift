@@ -81,14 +81,16 @@ struct LiveChatAutoSyncSession {
         now: Date,
         config: LiveChatAutoSyncConfiguration = .default
     ) -> LiveChatAutoSyncEffect {
+        // 人工确认过的结果优先级最高：先看暂停，再看开关——
+        // 否则「人工保存把开关关掉」之后，时间线一更新就会把状态显示成「已关闭」。
+        if manualPause {
+            pending = nil
+            state = .pausedAfterManualSave
+            return .cancelScheduled
+        }
         guard enabled else {
             pending = nil
             state = .disabled
-            return .cancelScheduled
-        }
-        guard !manualPause else {
-            pending = nil
-            state = .pausedAfterManualSave
             return .cancelScheduled
         }
         return plan(messages: messages, now: now, config: config)
