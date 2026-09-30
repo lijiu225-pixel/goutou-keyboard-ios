@@ -636,8 +636,11 @@ let syntheticPlan = ChatOCRTilingPlan(
 expect(syntheticPlan.tiles.count == 5, "合成计划应该有 5 片，实际 \(syntheticPlan.tiles.count)")
 let mapper = ChatOCRCoordinateMapper(plan: syntheticPlan)
 
-// 第 2 片（工作图 y 从 1200 开始）里、贴着该片顶部的一行：
-// 片内归一化 y=0 → 工作图 1200 → 原图 2400 → 归一化 2400/12000 = 0.2
+// 第 2 片（工作图 y 从 1200 开始）里、贴着该片顶部的一行。
+//
+// 片内归一化 y=0…0.05 → 工作图像素 0…0.05×6000=0…300（**分母是整张工作图的 6000，不是片高**），
+// 加片偏移 1200 → 工作图 1200…1500 → 除以缩放 0.5 回到原图 2400…3000 → 归一化 0.2…0.25。
+// 这里同时锁住一个真修过的 bug：拿片高当分母会把 1200 高的片拉成整图高，行高和位置全错。
 let secondTile = syntheticPlan.tiles[1]
 expect(secondTile.y == 1200, "合成计划第 2 片起点应该是 1200，实际 \(secondTile.y)")
 let mappedFromSecondTile = mapper.map(
@@ -648,8 +651,7 @@ let mappedFromSecondTile = mapper.map(
             confidence: 0.9
         )
     ],
-    tileOrigin: secondTile,
-    tileSize: CGSize(width: secondTile.width, height: secondTile.height)
+    tileOrigin: secondTile
 )
 let secondBox = mappedFromSecondTile[0].box
 expect(
@@ -657,8 +659,8 @@ expect(
     "第 2 片顶部的行必须换算到原图 y=0.2，实际 \(secondBox.minY)"
 )
 expect(
-    abs(secondBox.maxY - 2400.0 / 12000.0 - 0.05 * 0.5) < 0.0005,
-    "行高要按缩放比一起放大回原图，实际 \(secondBox.maxY)"
+    abs(secondBox.maxY - 3000.0 / 12000.0) < 0.0005,
+    "行高要按工作图尺寸换算回原图（0.25），实际 \(secondBox.maxY)"
 )
 // 横向：片内 x=0.1 → 工作图 0.1×645=64.5 → 原图 129 → 归一化 129/1290 = 0.1
 expect(abs(secondBox.minX - 0.1) < 0.0005, "横向坐标换算，实际 \(secondBox.minX)")
@@ -668,6 +670,8 @@ expect(abs(secondBox.maxX - 0.6) < 0.0005, "横向右边界换算，实际 \(sec
 let identityMapper = ChatOCRCoordinateMapper(
     originalWidth: 645,
     originalHeight: 6000,
+    workingWidth: 645,
+    workingHeight: 6000,
     scale: 1
 )
 let identityBox = ChatLayoutBox(x: 0.2, y: 0.3, width: 0.1, height: 0.02)
@@ -680,12 +684,23 @@ expect(
 for (offset, tile) in syntheticPlan.tiles.enumerated() {
     let mapped = mapper.map(
         lines: [ChatOCRLine(text: "行 \(offset)", box: ChatLayoutBox(x: 0, y: 0, width: 1, height: 1), confidence: 1)],
-        tileOrigin: tile,
-        tileSize: CGSize(width: tile.width, height: tile.height)
+        tileOrigin: tile
     )[0].box
     expect(
         mapped.minX >= -0.0001 && mapped.maxX <= 1.0001 && mapped.minY >= -0.0001 && mapped.maxY <= 1.0001,
         "第 \(offset + 1) 片的换算结果必须落在原图 0...1 内，实际 \(mapped)"
+    )
+}
+// 逐片检查：片内贴顶的一行换算到原图，必须正好落在这一片的实际起点上（不能整体偏上或偏下）。
+for (offset, tile) in syntheticPlan.tiles.enumerated() {
+    let mapped = mapper.map(
+        lines: [ChatOCRLine(text: "贴 \(offset)", box: ChatLayoutBox(x: 0, y: 0, width: 0.2, height: 0.02), confidence: 1)],
+        tileOrigin: tile
+    )[0].box
+    let expected = tile.y / syntheticPlan.scale / syntheticPlan.originalHeight
+    expect(
+        abs(mapped.minY - expected) < 0.0005,
+        "第 \(offset + 1) 片贴顶的行应该落在原图 y=\(expected)，实际 \(mapped.minY)"
     )
 }
 

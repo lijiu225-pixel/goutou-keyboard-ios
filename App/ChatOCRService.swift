@@ -85,7 +85,8 @@ enum ChatOCRService {
             let lines = try recognizeLines(
                 cgImage: prepared,
                 languageHints: languageHints,
-                tileOrigin: .zero
+                tileOrigin: .zero,
+                workingSize: CGSize(width: plan.workingWidth, height: plan.workingHeight)
             )
             let mapper = ChatOCRCoordinateMapper(plan: plan)
             let mapped = lines.map { line in
@@ -156,7 +157,8 @@ enum ChatOCRService {
             let lines = try recognizeLines(
                 cgImage: tileImage,
                 languageHints: languageHints,
-                tileOrigin: tile
+                tileOrigin: tile,
+                workingSize: workingSize
             )
             // 片内按上→下、左→右排一遍（Vision 的结果顺序没有承诺），
             // 片与片之间本来就是从上往下处理的，这样收集顺序就是阅读顺序。
@@ -172,8 +174,7 @@ enum ChatOCRService {
             collected.append(
                 contentsOf: mapper.map(
                     lines: ordered,
-                    tileOrigin: ChatPixelRect(x: tile.x, y: tile.y, width: tile.width, height: tile.height),
-                    tileSize: CGSize(width: tile.width, height: tile.height)
+                    tileOrigin: ChatPixelRect(x: tile.x, y: tile.y, width: tile.width, height: tile.height)
                 )
             )
         }
@@ -189,12 +190,14 @@ enum ChatOCRService {
 
     /// 识别一张（整图或一片）已经渲染好的位图。
     ///
-    /// `tileOrigin` 是这片在**工作图里的像素起点**：Vision 的 `boundingBox` 是相对传入位图的，
-    /// 所以这里要先加上偏移量，换算成整张工作图的归一化坐标。
+    /// `tileOrigin` 是这片在**工作图里的像素起点**，`workingSize` 是整张工作图的像素尺寸。
+    /// Vision 的 `boundingBox` 是相对传入位图的归一化坐标，这里要换算成
+    /// 「相对整张工作图、左上原点」的口径，所以片偏移和工作图尺寸都得传进来。
     private static func recognizeLines(
         cgImage: CGImage,
         languageHints: [String],
-        tileOrigin: ChatPixelRect
+        tileOrigin: ChatPixelRect,
+        workingSize: CGSize
     ) throws -> [ChatOCRLine] {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
@@ -214,8 +217,6 @@ enum ChatOCRService {
         }
 
         let observations = request.results ?? []
-        let tileWidth = max(Double(cgImage.width), 1)
-        let tileHeight = max(Double(cgImage.height), 1)
         return observations.compactMap { observation in
             guard let candidate = observation.topCandidates(1).first else { return nil }
             let text = candidate.string.trimmed
@@ -224,8 +225,8 @@ enum ChatOCRService {
                 text: text,
                 box: box(
                     fromVisionBoundingBox: observation.boundingBox,
-                    tileWidth: tileWidth,
-                    tileHeight: tileHeight,
+                    workingWidth: Double(workingSize.width),
+                    workingHeight: Double(workingSize.height),
                     origin: tileOrigin
                 ),
                 confidence: candidate.confidence
@@ -235,15 +236,18 @@ enum ChatOCRService {
 
     // MARK: 坐标转换
 
-    /// Vision（左下原点，相对传进去的那张位图）→ 我们的口径（左上原点，相对整张工作图）。
+    /// Vision（左下原点，相对传进去的那张位图）→ 我们的口径（左上原点，**相对整张工作图归一化**）。
+    ///
+    /// 关键：除以的是 `workingWidth/workingHeight`（整张工作图），不是单片的像素尺寸。
+    /// 用片尺寸做分母会把每一片纵向拉伸（1200 高的片被当成整图高，结果整体偏下、行高翻几倍）。
     static func box(
         fromVisionBoundingBox rect: CGRect,
-        tileWidth: Double,
-        tileHeight: Double,
+        workingWidth: Double,
+        workingHeight: Double,
         origin: ChatPixelRect
     ) -> ChatLayoutBox {
-        let width = max(tileWidth, 1)
-        let height = max(tileHeight, 1)
+        let width = max(workingWidth, 1)
+        let height = max(workingHeight, 1)
         return ChatLayoutBox(
             minX: Double(rect.minX) + origin.x / width,
             minY: Double(1 - rect.maxY) + origin.y / height,

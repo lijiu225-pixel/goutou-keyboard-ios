@@ -241,18 +241,27 @@ enum ChatOCRTilingPlanner {
 struct ChatOCRCoordinateMapper: Equatable {
     let originalWidth: Double
     let originalHeight: Double
+    /// 缩放后的工作图尺寸。**换算必须用它做分母**，不能用单片的尺寸 ——
+    /// 片内归一化坐标是相对整张工作图归一化出来的，用片高做分母会把每一片纵向拉伸
+    /// （1200 高的片会被拉成 6000 高，位置和行高全错）。
+    let workingWidth: Double
+    let workingHeight: Double
     /// 工作图相对原图的缩放比例。
     let scale: Double
 
     init(plan: ChatOCRTilingPlan) {
         self.originalWidth = plan.originalWidth
         self.originalHeight = plan.originalHeight
+        self.workingWidth = plan.workingWidth
+        self.workingHeight = plan.workingHeight
         self.scale = plan.scale
     }
 
-    init(originalWidth: Double, originalHeight: Double, scale: Double) {
+    init(originalWidth: Double, originalHeight: Double, workingWidth: Double, workingHeight: Double, scale: Double) {
         self.originalWidth = originalWidth
         self.originalHeight = originalHeight
+        self.workingWidth = workingWidth
+        self.workingHeight = workingHeight
         self.scale = scale
     }
 
@@ -270,28 +279,25 @@ struct ChatOCRCoordinateMapper: Equatable {
         )
     }
 
-    /// 把一片内的归一化坐标换算回**原图归一化**坐标。
+    /// 把一片的识别结果换算回**原图归一化**坐标。
     ///
-    /// `tileOrigin` 是这片在**工作图**里的像素起点，`tileSize` 是这片自己的像素尺寸。
-    /// 因为 Vision 的坐标是相对「传进去的那张位图」的，所以必须先用这一片的尺寸把
-    /// 片内归一化坐标还原成工作图像素，再加上片偏移，最后除以原图边长。
-    /// 两步缺一不可：漏掉片偏移，第二片开始的位置会整体偏上；漏掉除以原图边长，
-    /// 坐标就不是「原图归一化」口径，后面的左右归属判断全错。
-    func map(
-        lines: [ChatOCRLine],
-        tileOrigin: ChatPixelRect,
-        tileSize: CGSize
-    ) -> [ChatOCRLine] {
-        let width = max(Double(tileSize.width), 1)
-        let height = max(Double(tileSize.height), 1)
+    /// `tileOrigin` 是这片在**工作图**里的像素起点。Vision 给的是「相对传进去那张位图」
+    /// 的归一化坐标，所以先用**工作图**尺寸还原成工作图像素、加上片偏移，再换算回原图。
+    /// 用片尺寸当分母是错的（见 `workingHeight` 上的注释）。
+    func map(lines: [ChatOCRLine], tileOrigin: ChatPixelRect) -> [ChatOCRLine] {
+        let factor = inverseScale
+        let workingW = max(workingWidth, 1)
+        let workingH = max(workingHeight, 1)
+        let originalW = max(originalWidth, 1)
+        let originalH = max(originalHeight, 1)
         return lines.map { line in
             ChatOCRLine(
                 text: line.text,
                 box: ChatLayoutBox(
-                    minX: (line.box.minX * width + tileOrigin.x) * inverseScale / max(originalWidth, 1),
-                    minY: (line.box.minY * height + tileOrigin.y) * inverseScale / max(originalHeight, 1),
-                    maxX: (line.box.maxX * width + tileOrigin.x) * inverseScale / max(originalWidth, 1),
-                    maxY: (line.box.maxY * height + tileOrigin.y) * inverseScale / max(originalHeight, 1)
+                    minX: (line.box.minX * workingW + tileOrigin.x) * factor / originalW,
+                    minY: (line.box.minY * workingH + tileOrigin.y) * factor / originalH,
+                    maxX: (line.box.maxX * workingW + tileOrigin.x) * factor / originalW,
+                    maxY: (line.box.maxY * workingH + tileOrigin.y) * factor / originalH
                 ),
                 confidence: line.confidence
             )
@@ -302,21 +308,6 @@ struct ChatOCRCoordinateMapper: Equatable {
     private var inverseScale: Double {
         let effectiveScale = scale > 0 ? scale : 1
         return 1 / effectiveScale
-    }
-
-    /// 把一片的识别结果整体换算回原图归一化坐标。
-    ///
-    /// `lines` 的 `box` 是工作图归一化坐标；`tileRect` 除了用于裁剪，
-    /// 也用来给「结果位置必须落在这一片里」留一个断言空间（测试用）。
-    func map(lines: [ChatOCRLine], fromTile tileRect: ChatPixelRect) -> [ChatOCRLine] {
-        _ = tileRect
-        return lines.map { line in
-            ChatOCRLine(
-                text: line.text,
-                box: normalizedBox(fromWorkingNormalized: line.box),
-                confidence: line.confidence
-            )
-        }
     }
 }
 

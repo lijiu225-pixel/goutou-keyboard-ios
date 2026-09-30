@@ -299,7 +299,9 @@ struct ChatOCRView: View {
 
             guard !result.isEmpty else {
                 stage = .done(count: 0)
-                notice = "这张图没识别到文字。尽量只截聊天区域，别带太多空白和背景。"
+                notice = result.strategy == .tiled
+                    ? "这张长截图分片识别后也没找到文字。尽量只截聊天区域，别带太多空白和背景。"
+                    : "这张图没识别到文字。尽量只截聊天区域，别带太多空白和背景。"
                 return
             }
 
@@ -307,9 +309,15 @@ struct ChatOCRView: View {
             messages = parsed
             stage = .done(count: parsed.count)
             let unresolved = parsed.filter { $0.needsReview }.count
-            if unresolved > 0 {
-                notice = "有 \(unresolved) 条看不出是谁说的，先标成「未确定」了。"
+            // 长图走的是分片识别，用户有权知道「这次是按原图分辨率分片识的」。
+            var notes: [String] = []
+            if result.strategy == .tiled {
+                notes.append("长截图已分片识别，文字按原图分辨率保留。")
             }
+            if unresolved > 0 {
+                notes.append("有 \(unresolved) 条看不出是谁说的，先标成「未确定」了。")
+            }
+            notice = notes.isEmpty ? nil : notes.joined(separator: " ")
         } catch is CancellationError {
             // 取消不是失败：只有当自己还是当前任务时才动状态
             //（换图 / 清空的场景下，新任务已经接管了界面，这里什么都不该写）。
