@@ -836,10 +836,6 @@ final class KeyboardViewController: UIInputViewController {
             ? MemorySelector.fallback(personID: activeProfileID, memories: memory).items
             : selection.items
         lastMemorySelection = selection
-        #if DEBUG
-        print("[MemorySelector] 选中 \(chosen.count) 条 / \(selection.totalCharacters) 字（候选 \(memory.count) 条，其中 stale \(selection.staleCount) 条）")
-
-        #endif
         // 近期状态标一下，免得模型把它当永久事实
         let memoryLines = chosen.map { $0.category.isStable ? $0.content : "（近期）\($0.content)" }
         let userMessage = GoutouPrompt.userMessage(

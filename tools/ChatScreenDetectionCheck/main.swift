@@ -107,7 +107,7 @@ expect(mediaPipeline.timelineCount > 0, "4b. 这类聊天页也允许进入时�
 
 // MARK: - 5~8：联系人列表 / 设置 / 桌面 / 短视频信息流都判成 inactive
 
-for (index, label) in ["联系人列表", "设置", "桌面", "短视频"].enumerated() {
+for (index, label) in ["联系人列表", "微信首页", "设置", "桌面", "短视频"].enumerated() {
     var other = SimulatedPipeline()
     other.reset(generation: 1)
     var verdict = ChatSceneVerdict.unknown
