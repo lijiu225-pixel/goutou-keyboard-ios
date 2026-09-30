@@ -62,7 +62,7 @@ final class PanelTests: XCTestCase {
         oldLabel.font = .systemFont(ofSize: 13)
         oldLabel.numberOfLines = 0
         oldLabel.text = String(large)
-        XCTAssertGreaterThan(oldLabel.sizeThatFits(CGSize(width: 330, height: .greatestFiniteMagnitude)).height, 5000)
+        XCTAssertGreaterThan(oldLabel.sizeThatFits(CGSize(width: 330, height: CGFloat.greatestFiniteMagnitude)).height, 5000)
 
         for _ in 0..<12 {
             try tap("上下文 17 段", in: panel)
