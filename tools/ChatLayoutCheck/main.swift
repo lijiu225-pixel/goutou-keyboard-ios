@@ -511,19 +511,46 @@ expect(
     abs(justOver.workingHeight - 2400) < 0.001,
     "缩完高度正好压到 2400，实际 \(justOver.workingHeight)"
 )
-// 只有「宽度保护」逼着少缩时，缩完高度才会超过 2400、才真的需要分片。
-let widthProtectedTiling = try ChatOCRTilingPlanner.plan(pixelWidth: 1290, pixelHeight: 5000)
+// 宽度保护只在「按最长边缩会把宽度压到不可读」时才生效。
+// 1290×5000：按最长边缩（0.48）后宽度还有 619 像素，已经够读，就不该再套一次宽度保护
+// —— 套了反而缩到 480，白白降质（这条曾经写错过）。
+let widthAlreadyFine = try ChatOCRTilingPlanner.plan(pixelWidth: 1290, pixelHeight: 5000)
 expect(
-    widthProtectedTiling.strategy == .tiled,
-    "宽度保护下的 1290×5000 必须分片，实际 \(widthProtectedTiling.strategy)"
+    abs(widthAlreadyFine.scale - 2400.0 / 5000.0) < 0.0001,
+    "宽度本来就够读时不该额外缩放，实际 \(widthAlreadyFine.scale)"
 )
 expect(
-    abs(widthProtectedTiling.workingHeight - 5000 * 480.0 / 1290.0) < 0.001,
-    "工作图高度应该是 5000 × 0.372，实际 \(widthProtectedTiling.workingHeight)"
+    abs(widthAlreadyFine.workingWidth - 1290.0 * 2400 / 5000) < 0.001,
+    "工作图宽度应该是 619.2，实际 \(widthAlreadyFine.workingWidth)"
+)
+expect(
+    abs(widthAlreadyFine.workingHeight - 2400) < 0.001,
+    "缩完高度正好 2400，实际 \(widthAlreadyFine.workingHeight)"
+)
+expect(
+    widthAlreadyFine.strategy == .singlePass,
+    "缩完高度没超上限就是单次识别，实际 \(widthAlreadyFine.strategy)"
+)
+
+// 真的进入宽度保护、并且长到需要分片：1290×7000 按最长边缩宽度只剩 442 像素（太窄），
+// 改成按宽度定比例后工作图是 480×2604.7，出来 2 片。
+let widthProtectedTiling = try ChatOCRTilingPlanner.plan(pixelWidth: 1290, pixelHeight: 7000)
+expect(
+    widthProtectedTiling.strategy == .tiled,
+    "宽度保护下的 1290×7000 必须分片，实际 \(widthProtectedTiling.strategy)"
+)
+expect(
+    abs(widthProtectedTiling.scale - 480.0 / 1290.0) < 0.0001,
+    "缩放比应该正好是宽度比例，实际 \(widthProtectedTiling.scale)"
+)
+let expectedProtectedHeight = 7000 * 480.0 / 1290.0
+expect(
+    abs(widthProtectedTiling.workingHeight - expectedProtectedHeight) < 0.001,
+    "工作图高度应该是 2604.65，实际 \(widthProtectedTiling.workingHeight)"
 )
 expect(
     widthProtectedTiling.tiles.count == 2,
-    "2232 高的工作图切成 1400 的片是 2 片，实际 \(widthProtectedTiling.tiles.count)"
+    "2604.65 高的工作图切成 1400 的片是 2 片，实际 \(widthProtectedTiling.tiles.count)"
 )
 
 // MARK: - 10. 长截图分片：超出支持范围要明确报错，不能静默缩到不可用
@@ -550,7 +577,7 @@ expectGeometryError(.tooManyPixels(pixels: 100_000_000, limit: 64_000_000), "像
 // 超高长图：片数超上限就要报错，报错信息里带实际片数。
 // 像素总数先放开，好让这里测的是「片数超限」而不是「像素太多」。
 var heightFocusedConfig = ChatOCRTilingConfig.default
-heightFocusedConfig.maxPixelCount = 1_000_000_000
+heightFocusedConfig.maxPixelCount = 3_000_000_000
 let extremeHeight = 1_000_000.0
 let extremeHeightPlan = try ChatOCRTilingPlanner.plan(
     pixelWidth: 1290,
