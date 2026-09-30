@@ -257,6 +257,9 @@ struct ChatLayoutThresholds {
     var keyboardBlockMaxWidth: Double = 0.16
     /// 置信度低于这个值的行才考虑「末尾杂字 = 表情被认错」。
     var symbolNoiseConfidence: Float = 0.5
+    /// 给「去掉末尾杂字」建议要求正文至少有多少个汉字。
+    /// 取 2 时「我选 C」这种真实短句会被误判，所以收到 3。
+    var symbolNoiseMinimumCJK: Int = 3
 
     static let `default` = ChatLayoutThresholds()
 }
@@ -555,8 +558,10 @@ enum ChatLayoutParser {
         var rightAnchored = bubble.touchesImageRightEdge
 
         if let rails = rails {
-            leftGap = (bubble.minX - rails.left) / rails.span
-            rightGap = (rails.right - bubble.maxX) / rails.span
+            // 用**绝对距离**：气泡比轨道还靠外时（被裁到边缘、或者比最长的那条还长）
+            // 单侧差会算成负数，于是「贴着右边」被误判成立。
+            leftGap = abs(bubble.minX - rails.left) / rails.span
+            rightGap = abs(rails.right - bubble.maxX) / rails.span
             if rails.leftValid && leftGap <= thresholds.railTolerance {
                 leftAnchored = true
             }
@@ -808,7 +813,7 @@ enum ChatLayoutParser {
     ///
     /// 三个条件同时成立才给建议，避免把真实内容改掉：
     /// 1. 这一行的置信度本来就低（Vision 自己也没把握，真机上那两行正是这样）；
-    /// 2. 整行至少有两个汉字（说明正文是真的）；
+    /// 2. 去掉杂字之后正文至少还有 3 个汉字（说明正文是真的，「我选 C」这种短句不会被误伤）；
     /// 3. 首/尾有一个**孤立**的单字符 token，且它不是汉字。
     ///
     /// 而且它只是**建议**：界面上标个提示、由用户点一下才应用，绝不自动改正文。
@@ -830,7 +835,7 @@ enum ChatLayoutParser {
                 var remaining = tokens
                 remaining.remove(at: edgeIndex)
                 let rest = remaining.joined(separator: " ").trimmingCharacters(in: .whitespaces)
-                guard !rest.isEmpty, cjkCharacterCount(rest) >= 2 else { continue }
+                guard !rest.isEmpty, cjkCharacterCount(rest) >= thresholds.symbolNoiseMinimumCJK else { continue }
                 return rest
             }
         }
@@ -838,17 +843,29 @@ enum ChatLayoutParser {
         // 写法二：Vision 没插空格，杂字紧贴在汉字后面。
         // 例：「你平时不这样，我突然听见还有点不习惯こ」（表情 😂 被认成 こ）
         let trimmed = flattened.trimmingCharacters(in: .whitespaces)
-        if let dropped = droppingEdgeNoiseCharacter(trimmed, fromEnd: true) {
+        if let dropped = droppingEdgeNoiseCharacter(
+            trimmed,
+            fromEnd: true,
+            minimumCJK: thresholds.symbolNoiseMinimumCJK
+        ) {
             return dropped
         }
-        if let dropped = droppingEdgeNoiseCharacter(trimmed, fromEnd: false) {
+        if let dropped = droppingEdgeNoiseCharacter(
+            trimmed,
+            fromEnd: false,
+            minimumCJK: thresholds.symbolNoiseMinimumCJK
+        ) {
             return dropped
         }
         return nil
     }
 
-    /// 末尾（或开头）紧贴汉字的那一个非汉字字符，去掉它之后还剩两字以上汉字才给建议。
-    private static func droppingEdgeNoiseCharacter(_ text: String, fromEnd: Bool) -> String? {
+    /// 末尾（或开头）紧贴汉字的那一个非汉字字符，去掉它之后正文还够长才给建议。
+    private static func droppingEdgeNoiseCharacter(
+        _ text: String,
+        fromEnd: Bool,
+        minimumCJK: Int
+    ) -> String? {
         guard text.count >= 2 else { return nil }
         let edgeCharacter: Character = fromEnd ? text[text.index(before: text.endIndex)] : text[text.startIndex]
         guard isNoiseToken(String(edgeCharacter)) else { return nil }
@@ -859,7 +876,7 @@ enum ChatLayoutParser {
             ? trimmedRemainder[trimmedRemainder.index(before: trimmedRemainder.endIndex)]
             : trimmedRemainder[trimmedRemainder.startIndex]
         guard isCJK(neighbor) else { return nil }
-        guard cjkCharacterCount(trimmedRemainder) >= 2 else { return nil }
+        guard cjkCharacterCount(trimmedRemainder) >= minimumCJK else { return nil }
         return trimmedRemainder
     }
 
