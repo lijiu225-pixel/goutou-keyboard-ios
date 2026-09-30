@@ -618,7 +618,7 @@ enum GoutouAIClient {
                 return
             }
             do {
-                completion(.success(try parse(data: body)))
+                completion(.success(try parse(body)))
             } catch let error as GoutouAIError {
                 completion(.failure(error))
             } catch {
