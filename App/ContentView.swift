@@ -4,7 +4,7 @@ import SwiftUI
 ///
 /// 配置在这里填（这里能用系统键盘、能粘贴），点「复制配置」，
 /// 回键盘的「军师 → ⚙ 设置 → 从剪贴板导入」。
-/// 键盘扩展和宿主 App 之间没有 App Group，所以只能走剪贴板这一条通道。
+/// 接口配置仍走原有剪贴板通道；共享聊天单独使用 App Group。
 struct ContentView: View {
     @State private var draft = ""
     @State private var baseURL = ""
@@ -44,6 +44,8 @@ struct ContentView: View {
                 } footer: {
                     Text("九键：按 6 4 4 2 6 出「你好」。顶栏「军师」进面板。")
                 }
+
+                SharedChatTestSection()
 
                 Section {
                     TextField("Base URL，例如 https://api.example.com/v1", text: $baseURL)

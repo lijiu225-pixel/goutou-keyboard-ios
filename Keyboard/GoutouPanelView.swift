@@ -116,6 +116,11 @@ final class GoutouPanelView: UIView {
     private let analyzeButton = NineKeyButton(type: .system)
     private let analyzeSpinner = UIActivityIndicatorView(style: .medium)
     private let statusButton = NineKeyButton(type: .system)
+    private let sharedChatStatusLabel = UILabel()
+
+    func updateSharedChatStatus(_ text: String) {
+        sharedChatStatusLabel.text = text
+    }
     private var speakerButtons: [GoutouSpeaker: NineKeyButton] = [:]
 
     private var state: GoutouPanelState = .empty(banner: nil)
@@ -163,6 +168,7 @@ final class GoutouPanelView: UIView {
         let main = UIStackView(arrangedSubviews: [
             makeTopBar(),
             makeStatusRow(),
+            makeSharedChatStatusRow(),
             makeSpeakerRow(),
             makeBodyArea(),
         ])
@@ -176,6 +182,15 @@ final class GoutouPanelView: UIView {
             main.topAnchor.constraint(equalTo: topAnchor, constant: 5),
             main.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -7),
         ])
+    }
+
+    private func makeSharedChatStatusRow() -> UIView {
+        sharedChatStatusLabel.font = .systemFont(ofSize: 11)
+        sharedChatStatusLabel.textColor = GoutouTheme.secondary
+        sharedChatStatusLabel.numberOfLines = 1
+        sharedChatStatusLabel.lineBreakMode = .byTruncatingTail
+        sharedChatStatusLabel.heightAnchor.constraint(equalToConstant: 22).isActive = true
+        return sharedChatStatusLabel
     }
 
     private func makeTopBar() -> UIView {

@@ -29,12 +29,14 @@ targets:
     platform: iOS
     sources:
       - path: App
+      - path: Shared
       # 配置结构在 App 和键盘两边共用同一份（Foundation only，不依赖 UIKit）。
       - path: Keyboard/GoutouConfig.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.goutouinput
         PRODUCT_NAME: GoutouInput
+        CODE_SIGN_ENTITLEMENTS: App/App.entitlements
         INFOPLIST_FILE: App/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         VERSIONING_SYSTEM: apple-generic
@@ -53,6 +55,7 @@ targets:
           - "GoutouSkill.md"
           - "pinyin-chars.tsv"
           - "pinyin-words.tsv"
+      - path: Shared
       # 军师人格：和 Android / Web 共用同一个 SKILL.md，打进键盘 bundle 当 system prompt。
       - path: Keyboard/GoutouSkill.md
         buildPhase: resources
@@ -65,6 +68,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.goutouinput.keyboard
         PRODUCT_NAME: GoutouKeyboard
+        CODE_SIGN_ENTITLEMENTS: Keyboard/Keyboard.entitlements
         INFOPLIST_FILE: Keyboard/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         APPLICATION_EXTENSION_API_ONLY: YES

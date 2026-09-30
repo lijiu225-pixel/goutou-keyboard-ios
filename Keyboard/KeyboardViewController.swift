@@ -449,6 +449,9 @@ final class KeyboardViewController: UIInputViewController {
     // MARK: - 军师面板（新增）
 
     private func showMentorPanel() {
+        mentorPanel?.updateSharedChatStatus(hasFullAccess
+            ? ChatSharingStatus.read()
+            : "共享聊天：请先开启允许完全访问")
         isPanelVisible = true
         nineKeyView?.isHidden = true
         mentorPanel?.isHidden = false

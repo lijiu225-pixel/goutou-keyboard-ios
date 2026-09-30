@@ -54,6 +54,8 @@ def main():
     repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     files = sorted(glob.glob(os.path.join(repo, "Keyboard", "*.swift")))
     files += sorted(glob.glob(os.path.join(repo, "App", "*.swift")))
+    files += sorted(glob.glob(os.path.join(repo, "Shared", "*.swift")))
+    files.append(os.path.join(repo, "tools", "SharedChatCheck", "main.swift"))
     files.append(os.path.join(repo, "tools", "NineKeyCheck", "main.swift"))
     bad = 0
     for path in files:

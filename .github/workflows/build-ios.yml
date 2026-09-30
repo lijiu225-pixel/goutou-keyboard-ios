@@ -74,6 +74,12 @@ jobs:
             -o "$RUNNER_TEMP/ninekeycheck"
           "$RUNNER_TEMP/ninekeycheck"
 
+      - name: Smoke test shared chat store
+        run: |
+          swiftc -swift-version 5 Shared/ChatSnapshot.swift Shared/SharedChatStore.swift \
+            tools/SharedChatCheck/main.swift -o "$RUNNER_TEMP/sharedchatcheck"
+          "$RUNNER_TEMP/sharedchatcheck"
+
       - name: Generate Xcode project
         run: |
           xcodegen generate
