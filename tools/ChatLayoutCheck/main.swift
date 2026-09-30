@@ -243,8 +243,17 @@ let fullBack = try GoutouChatClipboardCodec.decode(fullEncoded)
 expect(fullBack == fullPayload, "满负荷内容也必须能往返（编码/解码上限口径一致）")
 
 // 超过上限：在解析之前就报错，不要先去建对象树。
-let oneMessage = versionJSON("1", messages: "[{\"role\":\"me\",\"text\":\"喂\"}]")
-let oversizedText = oneMessage + String(repeating: " ", count: GoutouChatClipboardCodec.maxEncodedLength)
+// 注意不能用「首尾加空白」来凑长度——`decode` 会先 trim，那是正常且必要的行为。
+// 所以这里造一份**内容本身**就超标的合法格式 JSON。
+func oversizedClipboardJSON(messageLength: Int) -> String {
+    let text = String(repeating: "啊", count: messageLength)
+    return "{\"format\":\"goutou-chat\",\"version\":1,\"messages\":[{\"role\":\"me\",\"text\":\"\(text)\"}]}"
+}
+let oversizedText = oversizedClipboardJSON(messageLength: GoutouChatClipboardCodec.maxEncodedLength)
+expect(
+    oversizedText.count > GoutouChatClipboardCodec.maxEncodedLength,
+    "前提：这份下料确实超过总长度上限，实际 \(oversizedText.count)"
+)
 expectClipboardError(
     .inputTooLong(length: oversizedText.count, limit: GoutouChatClipboardCodec.maxEncodedLength),
     "超过总长度上限的剪贴板内容"
