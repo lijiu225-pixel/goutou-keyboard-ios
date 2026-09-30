@@ -57,7 +57,7 @@ struct SimulatedPipeline {
     mutating func reset(generation: Int) {
         self.generation = generation
         gate.reset()
-        _ = system.reset(generation: generation)
+        system.reset(generation: generation)
     }
 
     /// 返回 (是否提交给时间线, 门控结论)。
@@ -70,9 +70,9 @@ struct SimulatedPipeline {
             titleFingerprint: evidence.topBarFingerprint,
             config: sceneConfig
         )
-        if decision.startsNewSession { _ = system.reset(generation: generation) }
+        if decision.startsNewSession { system.reset(generation: generation) }
         guard decision.verdict == .activeChat else { return (false, decision.verdict) }
-        _ = system.ingest(candidates: candidates, timestamp: now, generation: generation, config: geometry)
+        system.ingest(candidates: candidates, timestamp: now, generation: generation, config: geometry)
         return (true, decision.verdict)
     }
 }
@@ -101,7 +101,7 @@ expect(darkPipeline.gate.verdict == .activeChat, "2b. 深色模式聊天页（�
 
 var longPipeline = SimulatedPipeline()
 longPipeline.reset(generation: 1)
-let longScreen = chatScreen(theirs: 1, mine: 1, extra: [
+let longScreen = chatScreen(mine: 1, theirs: 1, extra: [
     observation("这是一条很长的消息占了一大片宽度而且横跨中线", x: 0.08, y: 0.40, width: 0.86),
 ])
 _ = longPipeline.ingest(longScreen, at: t0)
