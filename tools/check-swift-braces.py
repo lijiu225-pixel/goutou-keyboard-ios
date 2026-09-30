@@ -59,6 +59,7 @@ def main():
     files.append(os.path.join(repo, "tools", "ChatLayoutCheck", "main.swift"))
     files.append(os.path.join(repo, "tools", "AppGroupProbeCheck", "main.swift"))
     files.append(os.path.join(repo, "tools", "SharedChatStoreCheck", "main.swift"))
+    files.append(os.path.join(repo, "tools", "RecognizedChatContextCheck", "main.swift"))
     bad = 0
     for path in files:
         with open(path, encoding="utf-8") as handle:

@@ -111,6 +111,18 @@ jobs:
           swiftc -swift-version 5 Shared/SharedConstants.swift Shared/GoutouChatClipboard.swift Shared/SharedChatStore.swift tools/SharedChatStoreCheck/main.swift -o "$RUNNER_TEMP/sharedchatstorecheck"
           "$RUNNER_TEMP/sharedchatstorecheck"
 
+      # 阶段 8：预览 → 使用 → 取消使用 → 重新读取 的状态契约（纯 Foundation + 临时目录，不联网）。
+      - name: Recognized chat context state contract
+        run: |
+          swiftc -swift-version 5 \
+            Shared/SharedConstants.swift \
+            Shared/GoutouChatClipboard.swift \
+            Shared/SharedChatStore.swift \
+            Keyboard/RecognizedChatContext.swift \
+            tools/RecognizedChatContextCheck/main.swift \
+            -o "$RUNNER_TEMP/recognizedchatcontextcheck"
+          "$RUNNER_TEMP/recognizedchatcontextcheck"
+
       - name: Generate Xcode project
         run: |
           xcodegen generate

@@ -42,6 +42,8 @@ struct GoutouPanelSnapshot {
     var memoryPendingDeleteID: UUID? = nil
     var sharedChat: SharedChatSnapshot? = nil
     var sharedChatError: String? = nil
+    /// 键盘正在使用的识别聊天临时上下文；nil = 只是看过预览，没在使用。
+    var activeRecognizedChat: RecognizedChatContext? = nil
 }
 
 enum GoutouPanelAction {
@@ -49,6 +51,10 @@ enum GoutouPanelAction {
     case importConfig
     case readAppGroupProbe
     case readRecognizedChat
+    /// 把当前预览正式变成临时上下文（只改本地状态，阶段 8 不接 AI）。
+    case useRecognizedChat
+    /// 只取消使用，不删共享聊天、不动预览。
+    case cancelRecognizedChatUse
     case clearConfig
     case addSegment(GoutouSpeaker)
     case deleteSegment(Int)
@@ -153,6 +159,7 @@ final class GoutouPanelView: UIView {
     private var confirmingDelete = false
     private var sharedChat: SharedChatSnapshot?
     private var sharedChatError: String?
+    private var activeRecognizedChat: RecognizedChatContext?
     private enum Screen { case main, settings, memory, profiles, sharedChat, contextText }
     private var screen: Screen = .main
 
@@ -331,6 +338,7 @@ final class GoutouPanelView: UIView {
     func render(_ snapshot: GoutouPanelSnapshot) {
         self.sharedChat = snapshot.sharedChat
         self.sharedChatError = snapshot.sharedChatError
+        self.activeRecognizedChat = snapshot.activeRecognizedChat
         self.state = snapshot.state
         self.segments = snapshot.segments
         self.memory = snapshot.memory
@@ -421,6 +429,10 @@ final class GoutouPanelView: UIView {
         }
         if screen == .profiles { buildProfilesBody(); return }
         bodyStack.addArrangedSubview(makeReadChatButton())
+        if let active = activeRecognizedChat {
+            // 主屏也要看得出「正在使用识别聊天」，别和「只是看过预览」混起来。
+            bodyStack.addArrangedSubview(makeNoticeLabel("已使用识别聊天 · \(active.messageCount) 条", color: GoutouTheme.secondary))
+        }
         if showsContextDetail {
             buildContextDetailBody()
         } else {
@@ -529,7 +541,19 @@ final class GoutouPanelView: UIView {
         if chat.isOlderThanThirtyMinutes() {
             bodyStack.addArrangedSubview(makeNoticeLabel("聊天内容可能较旧", color: GoutouTheme.warning))
         }
-        bodyStack.addArrangedSubview(makeNoticeLabel("仅供预览；再次点击读取可刷新。", color: GoutouTheme.secondary))
+        // 「看到了聊天」和「狗头军师正在使用这份聊天」必须一眼分得开。
+        if let active = activeRecognizedChat {
+            bodyStack.addArrangedSubview(makeNoticeLabel("已使用识别聊天 · \(active.messageCount) 条", color: GoutouTheme.text))
+            bodyStack.addArrangedSubview(makeActionButton(title: "取消使用识别聊天", background: GoutouTheme.function, fontSize: 13) {
+                self.delegate?.goutouPanel(self, didTrigger: .cancelRecognizedChatUse)
+            })
+        } else {
+            bodyStack.addArrangedSubview(makeNoticeLabel("已读取 \(chat.messages.count) 条聊天", color: GoutouTheme.secondary))
+            bodyStack.addArrangedSubview(makeActionButton(title: "使用这份聊天", background: GoutouTheme.blue, fontSize: 14) {
+                self.delegate?.goutouPanel(self, didTrigger: .useRecognizedChat)
+            })
+        }
+        bodyStack.addArrangedSubview(makeNoticeLabel("仅供预览与准备上下文；再次点击读取可刷新。", color: GoutouTheme.secondary))
         for (index, message) in chat.messages.enumerated() {
             bodyStack.addArrangedSubview(makeNoticeLabel("\(index + 1). \(message.role.displayName)：\(message.text)", color: GoutouTheme.text))
         }

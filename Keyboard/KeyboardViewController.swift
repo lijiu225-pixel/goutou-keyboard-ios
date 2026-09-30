@@ -70,8 +70,8 @@ final class KeyboardViewController: UIInputViewController {
     private var profiles: [GoutouPersonProfile] = []
     private var activeProfileID: UUID = GoutouProfileStore.activeProfile().id
     private var panelState: GoutouPanelState = .empty(banner: nil)
-    private var sharedChatPreview: SharedChatSnapshot?
-    private var sharedChatPreviewError: String?
+    /// 识别聊天：预览 → 使用 → 取消使用 的状态机（纯内存，不持久化，阶段 8 不接 AI）
+    private var recognizedChat = RecognizedChatSession()
     /// 上一次成功的结果（失败时也留着，结果区不会空掉）
     private var lastResult: GoutouResult?
     private var panelTask: URLSessionTask?
@@ -505,8 +505,9 @@ final class KeyboardViewController: UIInputViewController {
             },
             memoryEditDraft: memoryEditDraft,
             memoryPendingDeleteID: memoryPendingDeleteID,
-            sharedChat: sharedChatPreview,
-            sharedChatError: sharedChatPreviewError
+            sharedChat: recognizedChat.preview,
+            sharedChatError: recognizedChat.errorMessage,
+            activeRecognizedChat: recognizedChat.active
         ))
     }
 
@@ -959,17 +960,24 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
             }
 
         case .readRecognizedChat:
-            // Always discard the previous preview before attempting a fresh read.
-            sharedChatPreview = nil
-            sharedChatPreviewError = nil
-            if !hasFullAccess {
-                sharedChatPreviewError = "没有开启键盘完全访问。请到设置开启「允许完全访问」后重试。"
+            // 重新读取＝先作废旧预览和旧的活动上下文，再读文件（读失败也不会留下旧聊天当上下文）。
+            if hasFullAccess {
+                recognizedChat.read { try SharedChatStore().read() }
             } else {
-                do { sharedChatPreview = try SharedChatStore().read() }
-                catch { sharedChatPreviewError = error.localizedDescription }
+                recognizedChat.invalidate(withError: "没有开启键盘完全访问。请到设置开启「允许完全访问」后重试。")
             }
             refreshPanel()
             panel.showSharedChatPreview()
+
+        case .useRecognizedChat:
+            // 只改本地状态：不读文件、不写人物记忆、不发任何网络请求（阶段 9 才接 AI）。
+            recognizedChat.usePreview()
+            refreshPanel()
+
+        case .cancelRecognizedChatUse:
+            // 只取消使用：预览仍在，共享聊天文件不动。
+            recognizedChat.cancelUse()
+            refreshPanel()
 
         case .importConfig:
             importConfigFromClipboard()
