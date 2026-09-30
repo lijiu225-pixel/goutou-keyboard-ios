@@ -79,7 +79,46 @@ targets:
         SKIP_INSTALL: YES
         VERSIONING_SYSTEM: apple-generic
 
+  GoutouPanelTestHost:
+    type: application
+    platform: iOS
+    sources:
+      - path: tools/PanelUITests/Host
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.goutouinput.paneltesthost
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+
+  GoutouPanelTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: tools/PanelUITests/PanelTests.swift
+      - path: Keyboard
+        excludes: ["Info.plist", "GoutouKeyboard.entitlements", "GoutouSkill.md", "pinyin-chars.tsv", "pinyin-words.tsv"]
+      - path: Shared/GoutouChatClipboard.swift
+      - path: Shared/SharedConstants.swift
+      - path: Shared/AppGroupDiagnostics.swift
+      - path: Shared/SharedChatStore.swift
+    dependencies:
+      - target: GoutouPanelTestHost
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.goutouinput.paneltests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/GoutouPanelTestHost.app/GoutouPanelTestHost"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
 schemes:
+  GoutouPanelTests:
+    build:
+      targets:
+        GoutouPanelTestHost: all
+        GoutouPanelTests: [test]
+    test:
+      targets:
+        - GoutouPanelTests
   GoutouInput:
     build:
       targets:

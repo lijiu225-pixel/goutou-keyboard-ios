@@ -128,6 +128,15 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             COMPILER_INDEX_STORE_ENABLE=NO
 
+      - name: Run keyboard panel UIKit regression (simulator)
+        timeout-minutes: 12
+        run: |
+          SIM_ID=$(xcrun simctl list devices available --json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(v["udid"] for k,vs in d["devices"].items() if "iOS" in k for v in vs if v["name"].startswith("iPhone")))')
+          xcodebuild test -project "$APP_NAME.xcodeproj" -scheme GoutouPanelTests \
+            -destination "platform=iOS Simulator,id=$SIM_ID" \
+            -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO \
+            COMPILER_INDEX_STORE_ENABLE=NO
+
       - name: Resolve build number and version
         run: |
           echo "BUILD_NUM=$(git rev-list --count HEAD)" >> $GITHUB_ENV

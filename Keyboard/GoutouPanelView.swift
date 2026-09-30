@@ -141,6 +141,10 @@ final class GoutouPanelView: UIView {
     private var configSummary = ""
     /// 状态行点开＝看上下文明细；结果区默认只给结论 + 推荐回复，布局稳定
     private var showsContextDetail = false
+    private var contextListPage = 0
+    private var contextTextPage = 0
+    private var contextTextIndex: Int?
+    private static let contextRowsPerPage = 4
     /// 失败时是否展开了技术详情
     private var showsFailureDetail = false
     /// 正在管理哪个人物（重命名 / 删除都放这儿，主界面不放）
@@ -149,7 +153,7 @@ final class GoutouPanelView: UIView {
     private var confirmingDelete = false
     private var sharedChat: SharedChatSnapshot?
     private var sharedChatError: String?
-    private enum Screen { case main, settings, memory, profiles, sharedChat }
+    private enum Screen { case main, settings, memory, profiles, sharedChat, contextText }
     private var screen: Screen = .main
 
     override init(frame: CGRect) {
@@ -406,6 +410,7 @@ final class GoutouPanelView: UIView {
         }
         if screen == .settings { buildSettingsBody(); return }
         if screen == .sharedChat { buildSharedChatBody(); return }
+        if screen == .contextText { buildContextTextBody(); return }
         if screen == .memory {
             if memoryDetail != nil {
                 buildMemoryDetailBody()
@@ -569,8 +574,18 @@ final class GoutouPanelView: UIView {
             ))
             return
         }
-        for (index, segment) in segments.enumerated() {
-            bodyStack.addArrangedSubview(makeSegmentRow(index: index, segment: segment))
+        let pageCount = (segments.count - 1) / Self.contextRowsPerPage + 1
+        contextListPage = min(contextListPage, pageCount - 1)
+        let start = contextListPage * Self.contextRowsPerPage
+        let end = min(start + Self.contextRowsPerPage, segments.count)
+        bodyStack.addArrangedSubview(makeSectionHeader("上下文明细 · 第 \(contextListPage + 1)/\(pageCount) 页 · 共 \(segments.count) 段"))
+        for index in start..<end {
+            bodyStack.addArrangedSubview(makeSegmentRow(index: index, segment: segments[index]))
+        }
+        addPageControls(page: contextListPage, count: pageCount) { [weak self] page in
+            self?.contextListPage = page
+            self?.rebuildBody()
+            self?.bodyScroll.setContentOffset(.zero, animated: false)
         }
         bodyStack.addArrangedSubview(makeActionButton(title: "✕ 清空上下文", background: GoutouTheme.function, fontSize: 13) {
             self.delegate?.goutouPanel(self, didTrigger: .clearSegments)
@@ -584,12 +599,25 @@ final class GoutouPanelView: UIView {
         row.spacing = 6
         row.alignment = .fill
 
+        let pages = GoutouTextPagination.pages(segment.text, characters: 240, lineBreaks: 6)
         let label = makeNoticeLabel(
-            "\(index + 1). \(segment.speaker.promptLabel)：\(segment.text)",
+            "\(index + 1). \(segment.speaker.promptLabel)：\(pages.first ?? "")\(pages.count > 1 ? "…" : "")",
             color: GoutouTheme.text
         )
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        row.addArrangedSubview(label)
+        let content = UIStackView(arrangedSubviews: [label])
+        content.axis = .vertical
+        content.spacing = 4
+        row.addArrangedSubview(content)
+        if pages.count > 1 {
+            content.addArrangedSubview(makeActionButton(title: "查看第 \(index + 1) 段全文（\(segment.text.count) 字）", background: GoutouTheme.function, fontSize: 13) { [weak self] in
+                guard let self = self else { return }
+                self.contextTextIndex = index
+                self.contextTextPage = 0
+                self.setScreen(.contextText)
+                self.bodyScroll.setContentOffset(.zero, animated: false)
+            })
+        }
 
         let delete = NineKeyButton(type: .system)
         delete.setTitle("✕", for: .normal)
@@ -603,6 +631,45 @@ final class GoutouPanelView: UIView {
         delete.widthAnchor.constraint(equalToConstant: 36).isActive = true
         row.addArrangedSubview(delete)
         return row
+    }
+
+    private func buildContextTextBody() {
+        bodyStack.addArrangedSubview(makeActionButton(title: "返回上下文明细", background: GoutouTheme.function, fontSize: 13) { [weak self] in
+            guard let self = self else { return }
+            self.showsContextDetail = true
+            self.setScreen(.main)
+            self.bodyScroll.setContentOffset(.zero, animated: false)
+        })
+        guard let index = contextTextIndex, segments.indices.contains(index) else {
+            bodyStack.addArrangedSubview(makeNoticeLabel("这段上下文已不存在。", color: GoutouTheme.secondary))
+            return
+        }
+        let segment = segments[index]
+        let pages = GoutouTextPagination.pages(segment.text)
+        guard !pages.isEmpty else { return }
+        contextTextPage = min(contextTextPage, pages.count - 1)
+        bodyStack.addArrangedSubview(makeSectionHeader("第 \(index + 1) 段 · \(segment.speaker.promptLabel) · 全文 \(segment.text.count) 字 · 第 \(contextTextPage + 1)/\(pages.count) 页"))
+        bodyStack.addArrangedSubview(makeNoticeLabel(pages[contextTextPage], color: GoutouTheme.text))
+        addPageControls(page: contextTextPage, count: pages.count) { [weak self] page in
+            self?.contextTextPage = page
+            self?.rebuildBody()
+            self?.bodyScroll.setContentOffset(.zero, animated: false)
+        }
+    }
+
+    private func addPageControls(page: Int, count: Int, change: @escaping (Int) -> Void) {
+        guard count > 1 else { return }
+        let row = UIStackView()
+        row.axis = .horizontal
+        row.spacing = 6
+        row.distribution = .fillEqually
+        let previous = makeActionButton(title: "上一页", background: GoutouTheme.function, fontSize: 13) { change(page - 1) }
+        previous.isEnabled = page > 0
+        let next = makeActionButton(title: "下一页", background: GoutouTheme.function, fontSize: 13) { change(page + 1) }
+        next.isEnabled = page + 1 < count
+        row.addArrangedSubview(previous)
+        row.addArrangedSubview(next)
+        bodyStack.addArrangedSubview(row)
     }
 
     private var appGroupDiagnosticStatus = "App Group：尚未测试"
@@ -1068,9 +1135,14 @@ final class GoutouPanelView: UIView {
     }
 
     @objc private func didTapStatus() {
+        screen = .main
+        contextTextIndex = nil
+        contextListPage = 0
         showsContextDetail.toggle()
         renderStatus()
         rebuildBody()
+        updateButtons()
+        bodyScroll.setContentOffset(.zero, animated: false)
     }
 
     @objc private func didTapAnalyze() {
