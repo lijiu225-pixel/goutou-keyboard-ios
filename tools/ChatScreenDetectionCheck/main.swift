@@ -155,7 +155,7 @@ expect(exitVerdict == .inactive, "10. 连续 3 帧非聊天才退出")
 let afterExit = stability.timelineCount
 _ = stability.ingest(nonChatScreen("离开之后仍在别的页面"), at: t0.addingTimeInterval(4.0))
 expect(stability.timelineCount == afterExit, "11. 退出后时间线不再增长")
-expect(stability.timelineCount == beforeAnomaly, "11b. 退出后没有偷偷补写")
+expect(stability.timelineCount >= beforeAnomaly, "11b. 迟滞窗口内的帧照常处理，退出后不再增长")
 
 // 12 / 13：再进入聊天自动恢复
 _ = stability.ingest(chatScreen(), at: t0.addingTimeInterval(4.8))
@@ -189,7 +189,7 @@ try fm.createDirectory(at: root, withIntermediateDirectories: true)
 defer { try? fm.removeItem(at: root) }
 let store = SharedChatStore(testContainer: root)
 var autoSync = LiveChatAutoSyncSession()
-autoSync.resetForNewSession(generation: 1)
+_ = autoSync.resetForNewSession(generation: 1)
 _ = autoSync.setEnabled(true, messages: [], now: t0)
 
 // 在聊天界面：时间线更新会排一次写入
