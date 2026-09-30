@@ -785,6 +785,23 @@ let whitespaceVariant = ChatOCRLineDeduplicator.removingOverlapDuplicates([
 ])
 expect(whitespaceVariant.count == 1, "只差首尾空白的同一行算重复，实际 \(whitespaceVariant.count)")
 
+// 分片重叠区最真实的样子：一片认全了，另一片只认到后半句，于是框更窄、中心点也偏了。
+// 这种情况必须能认出「是同一行」（曾经用中心点距离判，直接判成了两行）。
+expect(
+    ChatOCRLineDeduplicator.isSameLine(
+        ChatLayoutBox(x: 0.05, y: 0.40, width: 0.50, height: 0.03),
+        ChatLayoutBox(x: 0.25, y: 0.402, width: 0.30, height: 0.03)
+    ),
+    "整句和后半句的框必须认成同一行（中心点差了 0.1，但横向重叠够）"
+)
+expect(
+    !ChatOCRLineDeduplicator.isSameLine(
+        ChatLayoutBox(x: 0.05, y: 0.40, width: 0.15, height: 0.03),
+        ChatLayoutBox(x: 0.60, y: 0.40, width: 0.15, height: 0.03)
+    ),
+    "左右分栏的两条同高文字不能认成同一行（横向完全不重叠）"
+)
+
 // 纯逻辑函数本身也要经得起空输入。
 expect(ChatOCRLineDeduplicator.removingOverlapDuplicates([]).isEmpty, "空输入返回空")
 expect(

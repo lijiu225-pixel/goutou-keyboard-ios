@@ -337,22 +337,28 @@ enum ChatOCRLineDeduplicator {
 
     /// 两个框是不是「同一行文字的两次识别」。
     ///
-    /// 判据很窄，避免把上下紧挨着的两条消息误并：
-    /// 纵向要重叠得足够多（相对较矮的那个框），横向中心要基本对齐（相对行高）。
+    /// 判据要窄，但不能窄到认不出同一行：
+    /// - 纵向要重叠得足够多（相对较矮的那个框）；
+    /// - 横向重叠要占**较窄那个框**的相当一部分。
+    ///
+    /// 横向**不能**用「中心点距离」：同一行文字被两片各认了一次时，两边认出的片段长短常常不同
+    /// （一片只认到半句），框宽跟着变，中心点能差出半个框宽；而上下紧挨的两条消息本来就不同文本，
+    /// 靠文本那一关就挡住了，不需要再靠中心点。重叠比例对这两种情形都判得准。
     static func isSameLine(
         _ lhs: ChatLayoutBox,
         _ rhs: ChatLayoutBox,
         minVerticalOverlap: Double = 0.4,
-        centerXTolerance: Double = 0.6
+        minHorizontalOverlap: Double = 0.3
     ) -> Bool {
-        let shorter = min(lhs.height, rhs.height)
-        guard shorter > 0 else { return false }
-        let vertical = lhs.verticalOverlap(with: rhs) / shorter
+        let shorterHeight = min(lhs.height, rhs.height)
+        guard shorterHeight > 0 else { return false }
+        let vertical = lhs.verticalOverlap(with: rhs) / shorterHeight
         guard vertical >= minVerticalOverlap else { return false }
 
-        let centerGap = abs(lhs.centerX - rhs.centerX)
-        let tolerance = max(shorter, 0.0001) * centerXTolerance
-        return centerGap <= tolerance
+        let narrowerWidth = min(lhs.width, rhs.width)
+        guard narrowerWidth > 0 else { return false }
+        let horizontal = lhs.horizontalOverlap(with: rhs) / narrowerWidth
+        return horizontal >= minHorizontalOverlap
     }
 
     /// 重叠区只留一条：先看置信度，再看文字长度（长的说明这一片认全了），最后按原顺序。
@@ -360,7 +366,7 @@ enum ChatOCRLineDeduplicator {
         kept: ChatOCRLine,
         incoming: ChatOCRLine,
         minVerticalOverlap: Double = 0.4,
-        centerXTolerance: Double = 0.6,
+        minHorizontalOverlap: Double = 0.3,
         allowSubstring: Bool = true
     ) -> ChatOCRLineMergeDecision {
         guard isSameText(kept.text, incoming.text, allowSubstring: allowSubstring) else {
@@ -370,7 +376,7 @@ enum ChatOCRLineDeduplicator {
             kept.box,
             incoming.box,
             minVerticalOverlap: minVerticalOverlap,
-            centerXTolerance: centerXTolerance
+            minHorizontalOverlap: minHorizontalOverlap
         ) else {
             return .keepBoth
         }
@@ -394,7 +400,7 @@ enum ChatOCRLineDeduplicator {
     static func removingOverlapDuplicates(
         _ lines: [ChatOCRLine],
         minVerticalOverlap: Double = 0.4,
-        centerXTolerance: Double = 0.6,
+        minHorizontalOverlap: Double = 0.3,
         allowSubstring: Bool = true
     ) -> [ChatOCRLine] {
         guard lines.count > 1 else { return lines }
@@ -408,7 +414,7 @@ enum ChatOCRLineDeduplicator {
                         kept: lines[previous],
                         incoming: incoming,
                         minVerticalOverlap: minVerticalOverlap,
-                        centerXTolerance: centerXTolerance,
+                        minHorizontalOverlap: minHorizontalOverlap,
                         allowSubstring: allowSubstring
                     ) {
                     case .keepBoth:
