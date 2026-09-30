@@ -162,6 +162,25 @@ func expectVersionRejected(_ json: String, _ label: String) {
     }
 }
 
+/// 极端数值专用：Foundation 对超出表示范围的 JSON 数值有两条路 ——
+/// 读成双精度（我们判 `.invalidVersionType`）或者干脆解析失败（`.malformedJSON`）。
+/// 哪条都行，重要的是**绝不能**被当成合法 v1 放进来。这里只锁这个硬要求。
+func expectVersionNotAccepted(_ json: String, _ label: String) {
+    do {
+        let payload = try GoutouChatClipboardCodec.decode(json)
+        fatalError("\(label)：居然被接受了，解析出 \(payload.messages.count) 条")
+    } catch let error as GoutouChatClipboardError {
+        switch error {
+        case .invalidVersionType, .malformedJSON:
+            break
+        default:
+            fatalError("\(label)：期望「version 类型错」或「结构异常」，实际 \(error)")
+        }
+    } catch {
+        fatalError("\(label)：抛了别的错误 \(error)")
+    }
+}
+
 func versionJSON(_ rawVersionLiteral: String, messages: String = "[{\"role\":\"me\",\"text\":\"x\"}]") -> String {
     "{\"format\":\"goutou-chat\",\"version\":\(rawVersionLiteral),\"messages\":\(messages)}"
 }
@@ -177,10 +196,16 @@ expectVersionRejected(versionJSON("\"1\""), "字符串版本（引号形式）")
 expectVersionRejected(versionJSON("\"1.0\""), "字符串版本 1.0")
 expectVersionRejected(versionJSON("[]"), "数组当版本")
 expectVersionRejected(versionJSON("{}"), "对象当版本")
-// 非常大 / 非常小的数值：不许崩，也不许环绕成一个小整数被放行。
-expectVersionRejected(versionJSON("99999999999999999999"), "超过 Int64 的整数")
-expectVersionRejected(versionJSON("1e400"), "变成无穷大的数值")
-expectVersionRejected(versionJSON("9.3e18"), "边界外的双精度整数")
+// 超出表示范围的极端数值：不许崩，也不许环绕成一个小整数被放行。
+expectVersionNotAccepted(versionJSON("99999999999999999999"), "超过 Int64 的整数")
+expectVersionNotAccepted(versionJSON("1e400"), "会变成无穷大的数值")
+expectVersionNotAccepted(versionJSON("-1e400"), "负方向的无穷大")
+expectVersionNotAccepted(versionJSON("9.3e18"), "边界外的双精度整数")
+
+// 带着自家 format 标记、但 JSON 本身坏掉：必须报「结构异常」，不能含糊成「不是我们的格式」。
+expectClipboardError(.malformedJSON, "带自家标记但 JSON 截断了") {
+    _ = try GoutouChatClipboardCodec.decode("{\"format\":\"goutou-chat\",\"version\":1,\"messages\":[")
+}
 
 // 已知版本 1 必须照常接受；数值上等于 1 的浮点也按整数接受（口径写在实现里）。
 let versionOne = try GoutouChatClipboardCodec.decode(versionJSON("1"))

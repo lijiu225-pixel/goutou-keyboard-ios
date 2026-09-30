@@ -57,7 +57,7 @@ enum GoutouChatClipboardError: LocalizedError, Equatable {
         case .notOurFormat:
             return "剪贴板里的内容不是狗头聊天格式（缺少 \(GoutouChatClipboardPayload.format) 标记）。先在 App 里点「复制聊天文字」。"
         case .malformedJSON:
-            return "剪贴板里的聊天 JSON 结构不对（messages 不是数组，或字段类型不对）。"
+            return "剪贴板里的聊天 JSON 结构不对（messages 不是数组、字段类型不对，或某个数值超出 JSON 解析范围）。重新在 App 里复制一次。"
         case .invalidVersionType:
             return "聊天 JSON 的 version 必须是整数（不能是字符串、小数或 true/false）。这份内容可能被改坏了，重新在 App 里复制一次。"
         case .unsupportedVersion(let version):
@@ -157,9 +157,13 @@ enum GoutouChatClipboardCodec {
         }
 
         guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            // 不是 JSON，或者顶层不是对象 —— 都按「不是我们的格式」处理，
-            // 因为用户看到的动作是「导入识别聊天」，提示要指向正确做法。
-            throw GoutouChatClipboardError.notOurFormat
+            // 两条分支要分开：
+            // - 完全不是 JSON（随手复制的句子、配置文本、顶层是数组）→「不是我们的格式」，提示指向正确做法；
+            // - 是我们的格式标记、但 JSON 本身坏了（例如 `1e400` 这种 Foundation 直接拒绝的数值）
+            //   →「结构异常」，这才是它真实的毛病。
+            throw dataLooksLikeOurs(data)
+                ? GoutouChatClipboardError.malformedJSON
+                : GoutouChatClipboardError.notOurFormat
         }
 
         guard let format = object["format"] as? String,
@@ -258,6 +262,14 @@ enum GoutouChatClipboardCodec {
                 )
             }
         }
+    }
+
+    /// JSON 解不出来时，用来判断「这是不是一份坏掉的自家格式」。
+    ///
+    /// 只看有没有我们的 format 标记，不做任何解码；解析失败才走这里，所以不会成为热路径。
+    private static func dataLooksLikeOurs(_ data: Data) -> Bool {
+        guard let text = String(data: data, encoding: .utf8) else { return false }
+        return text.contains(GoutouChatClipboardPayload.format)
     }
 
     // MARK: version 的严格取值
