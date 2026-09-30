@@ -681,14 +681,21 @@ expect(
 )
 
 // 第一片和最后一片的边界也要落在原图范围内（0...1）。
+// 注意这里用的是「片内占 20% 高」的框：整片高的框只有在片正好等于整张工作图时才合法，
+// 拿它去断言是错的（那等于说「这一片就是整张图」）。
 for (offset, tile) in syntheticPlan.tiles.enumerated() {
     let mapped = mapper.map(
-        lines: [ChatOCRLine(text: "行 \(offset)", box: ChatLayoutBox(x: 0, y: 0, width: 1, height: 1), confidence: 1)],
+        lines: [ChatOCRLine(text: "行 \(offset)", box: ChatLayoutBox(x: 0, y: 0, width: 1, height: 0.2), confidence: 1)],
         tileOrigin: tile
     )[0].box
     expect(
         mapped.minX >= -0.0001 && mapped.maxX <= 1.0001 && mapped.minY >= -0.0001 && mapped.maxY <= 1.0001,
         "第 \(offset + 1) 片的换算结果必须落在原图 0...1 内，实际 \(mapped)"
+    )
+    // 片内占 20% 高 → 工作图 0.2×6000=1200 像素 → 原图 2400 像素 → 归一化 0.2
+    expect(
+        abs((mapped.maxY - mapped.minY) - 0.2) < 0.0005,
+        "第 \(offset + 1) 片的行高（原图归一化）应该是 0.2，实际 \(mapped.maxY - mapped.minY)"
     )
 }
 // 逐片检查：片内贴顶的一行换算到原图，必须正好落在这一片的实际起点上（不能整体偏上或偏下）。
