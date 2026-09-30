@@ -140,6 +140,7 @@ jobs:
             Shared/GoutouChatClipboard.swift \
             Shared/SharedChatStore.swift \
             Keyboard/GoutouConfig.swift \
+            App/ScreenCapture/LiveOCRObservation.swift \
             App/ScreenCapture/LiveOCRSnapshot.swift \
             App/ScreenCapture/LiveScreenCaptureState.swift \
             App/ScreenCapture/LiveScreenOCRProcessor.swift \
