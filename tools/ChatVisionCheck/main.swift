@@ -263,80 +263,14 @@ func runVisionSyntheticCheck(dark: Bool) -> [String] {
         failures.append("\(label)：820x2900 应该走单次识别，实际 \(result.strategy)")
     }
 
-    print("[\(label)] Vision 认出的原始行（含气泡证据）：")
-    for line in result.lines {
-        let bubbleText = line.bubble.map { evidence in
-            "气泡=[\(round(evidence.span.minX * 1000) / 1000),\(round(evidence.span.maxX * 1000) / 1000)]"
-                + " 头像=\(evidence.avatarSide.rawValue)"
-        } ?? "无气泡"
-        let boxText = "[\(round(line.box.minX * 1000) / 1000),\(round(line.box.minY * 1000) / 1000),"
-            + "\(round(line.box.maxX * 1000) / 1000),\(round(line.box.maxY * 1000) / 1000)]"
-        print("    box=\(boxText) \(bubbleText) \(line.text)")
-    }
-
-    // 分析图自检：确认「行 0 是图像顶部」这个假设成立，并看清每一行到底有没有色块。
-    if let scan = ChatOCRScanContext.make(from: image) {
-        let bg = scan.background
-        print(
-            "[\(label)] 分析图 \(scan.rows.width)x\(scan.rows.height) "
-                + "底色=(\(round(bg.red * 255)),\(round(bg.green * 255)),\(round(bg.blue * 255)))"
-        )
-        for probe in [0.02, 0.06, 0.10, 0.14, 0.19, 0.24, 0.31, 0.90, 0.96] {
-            let rowIndex = scan.rows.rowIndex(forNormalizedY: probe)
-            let row = scan.rows.row(atIndex: rowIndex)
-            var first = -1
-            var last = -1
-            var count = 0
-            for (offset, pixel) in row.enumerated() where pixel.distance(to: bg) > 0.06 {
-                count += 1
-                if first < 0 { first = offset }
-                last = offset
-            }
-            print("    分析行 y=\(probe) row=\(rowIndex) 非底色列=\(count) 首=\(first) 尾=\(last)")
-        }
-        // 直接对第一条消息那一行做一次并集，看清色块到底切成什么样。
-        var unionColumns = [Bool](repeating: false, count: scan.rows.width)
-        for probeY in [0.094, 0.097, 0.100, 0.103, 0.106] {
-            let probeRow = scan.rows.row(atIndex: scan.rows.rowIndex(forNormalizedY: probeY))
-            for (offset, pixel) in probeRow.enumerated() where pixel.distance(to: bg) > 0.06 {
-                unionColumns[offset] = true
-            }
-        }
-        var probeRuns: [String] = []
-        var runStart = -1
-        for offset in 0..<unionColumns.count {
-            if unionColumns[offset] {
-                if runStart < 0 { runStart = offset }
-            } else if runStart >= 0 {
-                probeRuns.append("\(runStart)-\(offset - 1)")
-                runStart = -1
-            }
-        }
-        if runStart >= 0 {
-            probeRuns.append("\(runStart)-\(unionColumns.count - 1)")
-        }
-        print("    第一条并集色块: " + probeRuns.joined(separator: ","))
-
-        let probeBox = ChatLayoutBox(x: 0.179, y: 0.094, width: 0.259, height: 0.012)
-        if let probe = ChatBubbleScanner.evidence(forText: probeBox, rows: scan.rows, background: bg) {
-            print("    第一条 probe -> 气泡=[" + "\(probe.span.minX)," + "\(probe.span.maxX)]")
-        } else {
-            print("    第一条 probe -> nil")
-        }
-    }
     let analysis = ChatLayoutParser.analyze(lines: result.lines)
 
-    // 把这次真 OCR 认出来的每一行都写进日志（都是合成文字，不含任何真实内容），
-    // 断言失败时能一眼看出是「没认出来」还是「认出来了但判错」。
-    print("[\(label)] Vision 认出的行：")
-    for message in analysis.messages {
-        let reason = message.kind.reason.map { "非聊天(\($0.displayName))" } ?? "聊天"
-        print(
-            "    \(reason) role=\(message.role.displayName) "
-                + "box=[\(round(message.box.minX * 1000) / 1000),\(round(message.box.minY * 1000) / 1000)] "
-                + "\(message.text)"
-        )
-    }
+    // 一行汇总：真 OCR 认出来的每一条（都是合成文字），失败时够分辨是漏认还是判错。
+    let summary = analysis.messages.map { message -> String in
+        let kind = message.kind.reason.map { "非聊天:\($0.displayName)" } ?? "聊天"
+        return "\(kind)/\(message.role.displayName)"
+    }.joined(separator: " ")
+    print("[\(label)] 逐条：" + summary)
     let excludedText = analysis.excludedCounts
         .map { "\($0.reason.displayName) \($0.count)" }
         .joined(separator: "、")
