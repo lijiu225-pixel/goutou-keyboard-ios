@@ -171,6 +171,7 @@ final class GoutouPanelView: UIView {
     private var sharedChat: SharedChatSnapshot?
     private var sharedChatError: String?
     private var activeRecognizedChat: RecognizedChatContext?
+    private var pendingSharedChat: PendingSharedChatUpdate?
     private var recognizedChatAnalysis: RecognizedChatAnalysisState = .idle
     private enum Screen { case main, settings, memory, profiles, sharedChat, contextText }
     private var screen: Screen = .main
@@ -351,6 +352,7 @@ final class GoutouPanelView: UIView {
         self.sharedChat = snapshot.sharedChat
         self.sharedChatError = snapshot.sharedChatError
         self.activeRecognizedChat = snapshot.activeRecognizedChat
+        self.pendingSharedChat = snapshot.pendingSharedChat
         self.recognizedChatAnalysis = snapshot.recognizedChatAnalysis
         self.state = snapshot.state
         self.segments = snapshot.segments
