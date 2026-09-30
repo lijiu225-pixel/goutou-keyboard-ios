@@ -4,7 +4,7 @@ import SwiftUI
 ///
 /// 配置在这里填（这里能用系统键盘、能粘贴），点「复制配置」，
 /// 回键盘的「军师 → ⚙ 设置 → 从剪贴板导入」。
-/// 接口配置仍走原有剪贴板通道；共享聊天单独使用 App Group。
+/// 接口配置仍走原有剪贴板通道；聊天内容改走「截图 OCR → 剪贴板」通道，不依赖 App Group。
 struct ContentView: View {
     @State private var draft = ""
     @State private var baseURL = ""
@@ -45,7 +45,17 @@ struct ContentView: View {
                     Text("九键：按 6 4 4 2 6 出「你好」。顶栏「军师」进面板。")
                 }
 
-                SharedChatTestSection()
+                Section {
+                    NavigationLink {
+                        ChatOCRView()
+                    } label: {
+                        Label("识别聊天截图", systemImage: "text.viewfinder")
+                    }
+                } header: {
+                    Text("聊天截图识别")
+                } footer: {
+                    Text("截一张聊天图 → 本机识别 → 你检查并修正归属 → 点「复制聊天文字」。截图只在这台手机上处理，不保存、不上传；剪贴板只在你自己点复制时才写。这一步只到你手上为止：键盘那边还没有导入入口，识别结果暂时不会进 AI 分析。")
+                }
 
                 Section {
                     TextField("Base URL，例如 https://api.example.com/v1", text: $baseURL)
@@ -85,6 +95,14 @@ struct ContentView: View {
                     StepRow(index: 1, text: "长按对方的消息 → 复制")
                     StepRow(index: 2, text: "键盘顶栏点「军师」→ 点 👤对方（自己的话点 🙋我，背景点 📝背景）")
                     StepRow(index: 3, text: "点 ⟳ 分析 → 选一条话术上屏（不会自动发送）")
+                }
+
+                Section("用截图 OCR 聊天记录（本阶段只到复制为止）") {
+                    StepRow(index: 1, text: "截图工具截下聊天界面，回这里点「识别聊天截图」并选那张图")
+                    StepRow(index: 2, text: "检查识别结果：改错的字、定「未确定」的归属、左滑删掉状态栏和标题")
+                    StepRow(index: 3, text: "点「复制聊天文字」，结果 JSON 进剪贴板。键盘侧「导入识别聊天」还没做，复制完先放着")
+                } footer: {
+                    Text("这一步不联网、不上传截图、不保存图片，也不会自动写剪贴板。下一阶段才接键盘导入和 AI 分析。")
                 }
 
                 Section("关于") {

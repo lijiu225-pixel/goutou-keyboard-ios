@@ -23,7 +23,7 @@ settings:
     ENABLE_USER_SCRIPT_SANDBOXING: NO
 
 targets:
-  # 宿主 App：只负责说明怎么启用键盘 + 一个自测输入框
+  # 宿主 App：配置军师接口 + 截图 OCR → 剪贴板
   GoutouInput:
     type: application
     platform: iOS
@@ -36,7 +36,6 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.goutouinput
         PRODUCT_NAME: GoutouInput
-        CODE_SIGN_ENTITLEMENTS: App/App.entitlements
         INFOPLIST_FILE: App/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         VERSIONING_SYSTEM: apple-generic
@@ -45,7 +44,7 @@ targets:
         embed: true
         codeSign: true
 
-  # 键盘扩展：最小 QWERTY
+  # 键盘扩展：最小 QWERTY + 九键 + 军师面板
   GoutouKeyboard:
     type: app-extension
     platform: iOS
@@ -55,7 +54,9 @@ targets:
           - "GoutouSkill.md"
           - "pinyin-chars.tsv"
           - "pinyin-words.tsv"
-      - path: Shared
+      # 只编剪贴板契约这一份：键盘只读它，不需要 OCR 的界面和几何代码。
+      # 没有 App Group 之后，App 与键盘之间只靠剪贴板交换数据。
+      - path: Shared/GoutouChatClipboard.swift
       # 军师人格：和 Android / Web 共用同一个 SKILL.md，打进键盘 bundle 当 system prompt。
       - path: Keyboard/GoutouSkill.md
         buildPhase: resources
@@ -68,7 +69,6 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.goutouinput.keyboard
         PRODUCT_NAME: GoutouKeyboard
-        CODE_SIGN_ENTITLEMENTS: Keyboard/Keyboard.entitlements
         INFOPLIST_FILE: Keyboard/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         APPLICATION_EXTENSION_API_ONLY: YES

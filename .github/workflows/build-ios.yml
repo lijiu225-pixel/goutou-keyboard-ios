@@ -74,11 +74,16 @@ jobs:
             -o "$RUNNER_TEMP/ninekeycheck"
           "$RUNNER_TEMP/ninekeycheck"
 
-      - name: Smoke test shared chat store
+      # 剪贴板契约（两端共用）+ 版式解析 + 长图分片几何：纯 Foundation，不用模拟器就能验。
+      - name: Smoke test chat clipboard codec and layout parser
         run: |
-          swiftc -swift-version 5 Shared/ChatSnapshot.swift Shared/SharedChatStore.swift \
-            tools/SharedChatCheck/main.swift -o "$RUNNER_TEMP/sharedchatcheck"
-          "$RUNNER_TEMP/sharedchatcheck"
+          swiftc -swift-version 5 \
+            Shared/GoutouChatClipboard.swift \
+            App/ChatLayoutParser.swift \
+            Shared/GoutouChatOCRGeometry.swift \
+            tools/ChatLayoutCheck/main.swift \
+            -o "$RUNNER_TEMP/chatlayoutcheck"
+          "$RUNNER_TEMP/chatlayoutcheck"
 
       - name: Generate Xcode project
         run: |

@@ -25,16 +25,29 @@
 4. 接口配置在宿主 App 填 → 「复制配置」→ 键盘 ⚙「从剪贴板导入」，key 只存在手机上
 5. 没开「允许完全访问」时面板顶部直接提示，一键复制开启步骤
 
-**当前增量**：屏幕聊天提取第一阶段已加入 App Group 数据层与通信自测入口，尚待 macOS 编译和正确签名后的真机验收。详细文件、签名要求与验收步骤见 [第一阶段说明](docs/phase-1-shared-chat.md)。屏幕捕获与 OCR 尚未实现。
+**当前增量（截图 OCR 第一阶段）**：主 App 新增「识别聊天截图」页 —— 你自己选一张聊天截图 →
+本机 Vision OCR（不保存图片、不上传）→ 整理消息并按版式判断归属（判不出来标「未确定」）→
+你改文字 / 改归属 / 删无关行 → 点「复制聊天文字」写出带 `format`/`version` 标记的 JSON。
+
+**本阶段到「复制」为止**：键盘侧的「导入识别聊天」入口**还没做**，AI 分析也不读这份 JSON，
+主 App 里不会指引你去点一个不存在的按钮。文件、长截图支持范围与限制见
+[截图 OCR 第一阶段说明](docs/phase-1-chat-ocr.md)。早期那套 App Group 共享缓存路线已废弃：
+相关代码、状态行和两份 entitlement 都已删除，App 与键盘之间只剩剪贴板这一条通道。
 
 ## 工程结构
 
 ```
 project.yml                          XcodeGen 工程描述（仓库里不放 .xcodeproj）
-App/                                 宿主 App：启用向导 + 自测输入框
+App/                                 宿主 App：配置接口 + 截图 OCR
   GoutouInputApp.swift
-  ContentView.swift
+  ContentView.swift                  入口：自测输入框 + 配置 + 「识别聊天截图」入口
+  ChatOCRView.swift                  选图 / 可编辑结果 / 复制（识别任务带请求标识，可取消可作废）
+  ChatOCRService.swift               本机 Vision OCR：长图按计划分片识别，坐标换算回原图归一化
+  ChatLayoutParser.swift             阅读顺序整理 + 按左右边缘/宽度判归属（纯 Foundation）
   Info.plist
+Shared/                              两端共用（只有剪贴板契约会被编进键盘）
+  GoutouChatClipboard.swift          goutou-chat JSON 契约与编解码（含 version 严格校验与体量上限）
+  GoutouChatOCRGeometry.swift        长图分片几何：缩放口径 / 切片 / 坐标换算 / 重叠去重（纯 Foundation）
 Keyboard/                            键盘扩展：UIInputViewController + Auto Layout
   KeyboardViewController.swift       两种布局的控制器 + textDocumentProxy 上屏
   NineKeyKeyboardView.swift          中文九键界面（对标 Android 布局与配色）
@@ -58,6 +71,7 @@ Keyboard/                            键盘扩展：UIInputViewController + Auto
   GoutouSkill.md                     军师人格，从 Android 仓库原样拷来（口径只有一份）
   Info.plist                         NSExtension: com.apple.keyboard-service
 tools/NineKeyCheck/main.swift        九键逻辑冒烟测试（CI 上 swiftc 直接跑，不需要模拟器）
+tools/ChatLayoutCheck/main.swift      剪贴板契约 / 版式解析 / 长图分片几何冒烟测试（同样纯 Foundation）
 .github/workflows/build-ios.yml      无 Mac 构建流水线
 ```
 
@@ -80,12 +94,22 @@ Android 专属的 `InputMethodService`、`View` 树、JNI 一律没搬，按 Key
 
 ### 军师链的通道
 
-现有接口配置和手动聊天上下文继续使用系统剪贴板。新共享聊天缓存单独使用 App Group，当前阶段只显示通信状态，尚未送入 AI。此通道需要两端正确签名的 App Group 权限。
+现有接口配置和手动聊天上下文继续使用系统剪贴板。**App 与键盘之间只有剪贴板这一条通道**：
+早期那套「共享聊天缓存走 App Group」的路线已经废弃删除（买的签名服务不能定制 App Group，
+那份通道在两端口令不一致时还会假装通信成功）。
 
 ```
 宿主 App 填 Base URL/Model/Key ──「复制配置」──▶ 剪贴板 ──键盘 ⚙「从剪贴板导入」──▶ 键盘 UserDefaults
 聊天里长按消息 → 复制 ─────────────────────────▶ 剪贴板 ──👤对方 / 🙋我 / 📝背景──▶ 上下文（段数不限）
 上下文 ──键盘内直接发请求（要「允许完全访问」）──▶ 一行判断 + 4～6 条话术 ──点一条──▶ 当前输入框
+```
+
+截图 OCR 那一半（**做到复制为止，键盘侧的导入还没接**）：
+
+```
+主 App「识别聊天截图」← 你主动选图 ──▶ 本机 Vision OCR ──▶ 整理 + 判归属 ──▶ 你改 ──▶ 点「复制聊天文字」
+                                                                                      └─▶ 剪贴板里是 goutou-chat JSON
+                                                                                          （键盘暂时还读不到它）
 ```
 
 任务/风格写死成 Android 面板的两个默认值（`分析她/他说什么意思` + `自然`）；`relationship`
@@ -232,6 +256,8 @@ git tag adhoc-v1.0.0 && git push origin adhoc-v1.0.0
 
 ## 下一阶段（现在没做）
 
+- **截图 OCR 第二半**：键盘侧「导入识别聊天」入口、把导入的聊天送进 AI 分析、回复插入。
+  现在主 App 只做到「复制聊天 JSON」；键盘里点不到这个入口，页面上也没有这个按钮。
 - 整句输入 / 联想（现在是"数字串切拼音 + 词库命中"，没有再往上做整句模型；要更进一步就得考虑 RIME）
 - 任务/风格选择器（iOS 面板现在写死 Android 的两个默认值）
 - 宿主 App 里的完整面板 + 历史（现在是"键盘内面板 + 剪贴板传配置"）
