@@ -596,30 +596,16 @@ expectGeometryError(.tooTall(pixelHeight: extremeHeight, tileCount: extremeTiles
         config: heightFocusedConfig
     )
 }
-// 原图本来就窄的（200 像素宽）：不可能靠放大「救回来」，`min(1, ...)` 只保证不放大，
-// 于是按原尺寸走分片；真正拦不住的窄图另有 widthTooSmall（见下面的合成用例）。
-let narrowOriginal = try ChatOCRTilingPlanner.plan(pixelWidth: 200, pixelHeight: 9000)
-expect(narrowOriginal.scale == 1, "窄图不许被放大，实际 \(narrowOriginal.scale)")
-expect(
-    abs(narrowOriginal.workingWidth - 200) < 0.001,
-    "窄图按原尺寸处理，实际 \(narrowOriginal.workingWidth)"
-)
-expect(narrowOriginal.strategy == .tiled, "9000 高必须分片，实际 \(narrowOriginal.strategy)")
-expect(
-    narrowOriginal.tiles.count == 7,
-    "9000 ÷ ceil(9000/1400)=7 片，实际 \(narrowOriginal.tiles.count)"
-)
-
-// widthTooSmall 这条兜底逻辑用配置构造：把最小宽度提到 700，200 像素宽的图就无路可走。
-var strictWidthConfig = ChatOCRTilingConfig.default
-strictWidthConfig.minimumPixelDimension = 700
-expectGeometryError(.widthTooSmall(pixelWidth: 200, minimum: 700), "最小宽度高于原图宽度") {
-    _ = try ChatOCRTilingPlanner.plan(
-        pixelWidth: 200,
-        pixelHeight: 9000,
-        config: strictWidthConfig
-    )
+// 原图本来就窄（200 像素宽）：宽度保护只保证不放大，救不回来，所以直接明确报错，
+// 而不是按 200 像素宽硬识（结果一定是错的，用户还得一条条删）。这条就是 widthTooSmall 的真实用途。
+expectGeometryError(.widthTooSmall(pixelWidth: 200, minimum: 480), "原图本身太窄") {
+    _ = try ChatOCRTilingPlanner.plan(pixelWidth: 200, pixelHeight: 9000)
 }
+// 宽度刚好挂在可读下限上就放行（1290×12000 正是这个位置）。
+expect(
+    abs(longScreenshot.workingWidth - ChatOCRTilingConfig.default.minimumPixelDimension) < 0.001,
+    "宽度正好等于下限时要放行，实际 \(longScreenshot.workingWidth)"
+)
 
 // 每种支持范围问题的说明都必须能直接给用户看（非空、不含内部坐标）。
 for error: ChatOCRGeometryError in [

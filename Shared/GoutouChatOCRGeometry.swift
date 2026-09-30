@@ -161,7 +161,9 @@ enum ChatOCRTilingPlanner {
 
         let workingWidth = max(1, pixelWidth * scale)
         let workingHeight = max(1, pixelHeight * scale)
-        guard workingWidth >= min(config.minimumPixelDimension, pixelWidth) else {
+        // 宽度保护只保证「不放大」，救不回本来就窄的图（200 像素宽不可能变清楚）。
+        // 与其按 200 像素宽硬识（结果一定是错的，用户还得多删），不如直接说清楚。
+        guard workingWidth >= config.minimumPixelDimension else {
             throw ChatOCRGeometryError.widthTooSmall(
                 pixelWidth: pixelWidth,
                 minimum: config.minimumPixelDimension
