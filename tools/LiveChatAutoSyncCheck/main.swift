@@ -381,6 +381,22 @@ coordinatorQueue.sync {
 
 // MARK: - 53~56：源码级保证（不调用 AI / 键盘 Context / 输入代理 / 人物记忆）
 
+// MARK: - 57 / 58：离开聊天界面不能把用户开着的自动同步显示成「未开启」
+
+var chrome = AutoSyncHarness(store: store)
+chrome.resetForNewSession(generation: 1)
+chrome.setEnabled(true, messages: [], now: t0.addingTimeInterval(500))
+expect(chrome.session.state == .waitingForChat, "57. 开了开关但还没有聊天 → 等待聊天（不是已关闭）")
+expect(chrome.session.enabled, "57b. 开关状态确实是开着")
+chrome.noteTimeline([candidate("稳定消息", role: .other)], now: t0.addingTimeInterval(500))
+expect(chrome.session.state == .scheduled, "57c. 有稳定聊天就排队等待写入")
+chrome.clearLiveChat(now: t0.addingTimeInterval(501))
+expect(chrome.session.enabled, "58. 离开聊天界面不会偷偷把开关关掉")
+expect(chrome.session.state == .waitingForChat, "58b. 离开聊天界面显示「等待聊天」，不是「自动同步未开启」")
+expect(chrome.scheduledDeadline == nil, "58c. 离开聊天界面取消排队中的写入")
+chrome.noteTimeline([candidate("重新进来的聊天", role: .other)], now: t0.addingTimeInterval(510))
+expect(chrome.session.state == .scheduled, "58d. 重新进入聊天后自动恢复排队")
+
 let autoSyncFiles = [
     "App/ScreenCapture/LiveChatAutoSyncConfiguration.swift",
     "App/ScreenCapture/LiveChatAutoSyncState.swift",

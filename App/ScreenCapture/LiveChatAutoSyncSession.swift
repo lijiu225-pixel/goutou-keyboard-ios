@@ -173,8 +173,19 @@ struct LiveChatAutoSyncSession {
     }
 
     /// 「清空实时聊天」：只取消排队，不动已经共享出去的聊天。
+    ///
+    /// 开关状态不受影响：离开聊天界面只是「这轮没有可同步的聊天」，不是「用户关掉了自动同步」。
+    /// 所以开着的时候回落到等待聊天，界面上不会变成「自动同步未开启」。
     mutating func clearLiveChat() -> LiveChatAutoSyncEffect {
         pending = nil
+        if manualPause {
+            state = .pausedAfterManualSave
+        } else if enabled {
+            if case .blockedUnknown = state { /* 保留未确定提示，等它自己消失 */ }
+            else { state = .waitingForChat }
+        } else {
+            state = .disabled
+        }
         return .cancelScheduled
     }
 

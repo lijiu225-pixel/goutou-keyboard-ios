@@ -28,6 +28,28 @@ struct LiveScreenCaptureView: View {
                 Text("点「开始」后会弹出系统内容共享选择，请选整屏 / Entire Display，然后切到微信测试。识别全部在本机进行，本阶段不会上传屏幕图像，也不会自动分析聊天。")
             }
 
+            Section {
+                if let diagnostics = manager.sceneDiagnostics {
+                    LabeledContent("置信度", value: String(format: "%.2f", Double(diagnostics.confidence)))
+                    LabeledContent("顶部导航", value: diagnostics.hasNavigationBar ? "是" : "否")
+                    LabeledContent("底部输入栏", value: diagnostics.hasInputBar ? "是" : "否")
+                    LabeledContent("左消息行", value: "\(diagnostics.leftCount)")
+                    LabeledContent("右消息行", value: "\(diagnostics.rightCount)")
+                    LabeledContent("正文行", value: "\(diagnostics.messageRowCount)")
+                    LabeledContent("居中系统行", value: "\(diagnostics.centeredCount)")
+                    LabeledContent("底部 tab 命中", value: "\(diagnostics.tabBarLineCount)")
+                    LabeledContent("进入连续帧", value: "\(diagnostics.enterStreak)")
+                    LabeledContent("退出连续帧", value: "\(diagnostics.exitStreak)")
+                } else {
+                    Text("还没有检测帧。开始动态识别并切到微信后这里会显示每项证据。")
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("门控诊断")
+            } footer: {
+                Text("只显示结构与计数，不含聊天正文。判定规则：底部有输入栏且（顶部有导航条或中部有消息行）→ 已进入聊天；或者中部同时有偏左和偏右的气泡行（列表与信息流做不到）也判为已进入聊天。")
+            }
+
             Section("统计") {
                 LabeledContent("收到屏幕帧", value: "\(manager.model.framesReceived)")
                 LabeledContent("执行识别次数", value: "\(manager.model.ocrRuns)")

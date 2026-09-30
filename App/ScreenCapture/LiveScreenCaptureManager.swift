@@ -32,6 +32,8 @@ final class LiveScreenCaptureManager: ObservableObject {
     @Published private(set) var autoSyncState: LiveChatAutoSyncState = .disabled
     /// 阶段 12E：当前屏幕是不是聊天会话界面（门控结果，只用来显示，不含任何正文）。
     @Published private(set) var sceneVerdict: ChatSceneVerdict = .unknown
+    /// 门控诊断：哪一项证据没满足（只显示结构与计数，不含任何正文）。
+    @Published private(set) var sceneDiagnostics: LiveSceneDiagnostics?
     @Published private(set) var autoSyncLastSyncAt: Date?
     @Published private(set) var autoSyncLastCount = 0
 
@@ -138,6 +140,7 @@ final class LiveScreenCaptureManager: ObservableObject {
         // 阶段 12B：重新开始 = 新 session，实时聊天与稳定化状态一起清零，避免跨会话误拼。
         chat = .empty
         sceneVerdict = .unknown
+        sceneDiagnostics = nil
         autoSyncState = .disabled
         autoSyncLastSyncAt = nil
         autoSyncLastCount = 0
@@ -214,7 +217,9 @@ final class LiveScreenCaptureManager: ObservableObject {
 
     /// 用户主动开关「自动同步给狗头军师」。默认关闭，而且要每个 capture session 重新授权。
     func setAutoSyncEnabled(_ enabled: Bool) {
-        guard model.state.isCapturing else { return }
+        // 只要这一轮 capture 还活着就接受用户的选择：开始捕获的过程中（正在建 stream）
+        // 就打开开关时不能把用户的操作静默丢掉。
+        guard model.state.isCapturing || model.state == .starting else { return }
         let sync = autoSync
         let engine = chatEngine
         ocrQueue.async {
@@ -385,8 +390,10 @@ final class LiveScreenCaptureManager: ObservableObject {
             }
             let chatSnapshot = engine.pipeline.snapshot()
             let verdict = engine.pipeline.verdict
+            let diagnostics = engine.pipeline.diagnostics
             Task { @MainActor in
-                self?.finishOCR(result, chat: chatSnapshot, verdict: verdict, generation: generation)
+                self?.finishOCR(result, chat: chatSnapshot, verdict: verdict,
+                                diagnostics: diagnostics, generation: generation)
             }
         }
     }
@@ -395,11 +402,13 @@ final class LiveScreenCaptureManager: ObservableObject {
         _ result: Result<LiveOCRSnapshot, LiveOCRFailure>,
         chat chatSnapshot: LiveChatSnapshot?,
         verdict: ChatSceneVerdict?,
+        diagnostics: LiveSceneDiagnostics?,
         generation: Int
     ) {
         guard generation == model.generation, model.state.isCapturing else { return }
         if let chatSnapshot { chat = chatSnapshot }
         if let verdict { sceneVerdict = verdict }
+        if let diagnostics { sceneDiagnostics = diagnostics }
         // 灵动岛 / 锁屏只要「状态 + 计数」：规划器会去重 + 节流，不会每帧都推。
         captureActivity.stateChanged(captureActivityContent())
         // 代际号对不上（已经停止 / 重新开始）时，模型一个字都不写。

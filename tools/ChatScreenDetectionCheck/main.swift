@@ -45,6 +45,100 @@ func nonChatScreen(_ label: String) -> [LiveOCRObservation] {
     ]
 }
 
+// MARK: - 真实微信版式的几何 fixture（全部虚构，不含任何真实聊天内容）
+
+/// 真实微信版式：导航带（头像旁的名字 + 在线状态，偏左、多行）、左右气泡、居中日期、
+/// 底部输入栏。输入栏**只给几何**——真机上微信输入框是空的，读不到「输入」两个字。
+func weChatChatScreen(
+    top: String = "合成联系人",
+    mine: Int = 3,
+    theirs: Int = 3,
+    extraObservations: [LiveOCRObservation] = [],
+    extraRectangles: [CGRect] = []
+) -> (observations: [LiveOCRObservation], rectangles: [CGRect]) {
+    var observations = [
+        observation(top, x: 0.17, y: 0.050, width: 0.26),                     // 头像右边的名字
+        observation("在线", x: 0.17, y: 0.085, width: 0.12),                   // 在线状态
+        observation("9月30日 星期三 01:44", x: 0.36, y: 0.29, width: 0.28),    // 居中系统时间
+    ]
+    var y: CGFloat = 0.20
+    for index in 0..<theirs {
+        observations.append(observation("对方第\(index)条", x: 0.13, y: y, width: 0.34))
+        y += 0.07
+    }
+    for index in 0..<mine {
+        observations.append(observation("我第\(index)条", x: 0.34, y: y, width: 0.40))
+        y += 0.07
+    }
+    var rectangles = [CGRect(x: 0.13, y: 0.63, width: 0.34, height: 0.05)]      // 图片消息占位
+    rectangles.append(CGRect(x: 0.13, y: 0.925, width: 0.72, height: 0.028))    // 底部输入框
+    return (observations + extraObservations, rectangles + extraRectangles)
+}
+
+/// 微信首页 / 联系人列表：通栏行 + 底部 tab，没有输入栏
+func weChatListScreen() -> (observations: [LiveOCRObservation], rectangles: [CGRect]) {
+    var observations = [observation("微信", x: 0.45, y: 0.05, width: 0.10)]
+    var y: CGFloat = 0.16
+    for index in 0..<6 {
+        observations.append(observation("会话\(index)", x: 0.19, y: y, width: 0.52))
+        y += 0.10
+    }
+    for (index, tab) in ["微信", "通讯录", "发现", "我"].enumerated() {
+        observations.append(observation(tab, x: 0.08 + CGFloat(index) * 0.25, y: 0.94, width: 0.08))
+    }
+    return (observations, [])
+}
+
+/// 朋友圈 / 信息流：通栏内容块，没有左右气泡、没有输入栏
+func weChatFeedScreen() -> (observations: [LiveOCRObservation], rectangles: [CGRect]) {
+    var observations = [observation("朋友圈", x: 0.45, y: 0.05, width: 0.14)]
+    var y: CGFloat = 0.16
+    for index in 0..<5 {
+        observations.append(observation("动态第\(index)条横跨整屏的一行字", x: 0.05, y: y, width: 0.90))
+        y += 0.13
+    }
+    return (observations, [])
+}
+
+/// 抖音短视频：顶部关注 / 推荐，左下文案，右侧竖排窄图标
+func shortVideoScreen() -> (observations: [LiveOCRObservation], rectangles: [CGRect]) {
+    var observations = [
+        observation("关注", x: 0.18, y: 0.05, width: 0.08),
+        observation("推荐", x: 0.40, y: 0.05, width: 0.08),
+        observation("合成作者", x: 0.06, y: 0.62, width: 0.30),
+        observation("合成文案", x: 0.06, y: 0.70, width: 0.44),
+    ]
+    var y: CGFloat = 0.55
+    for _ in 0..<4 {
+        observations.append(observation("1.2万", x: 0.88, y: y, width: 0.09))
+        y += 0.09
+    }
+    return (observations, [])
+}
+
+/// 普通网页 / 设置页：通栏正文，没有气泡也没有输入栏
+func articleScreen() -> (observations: [LiveOCRObservation], rectangles: [CGRect]) {
+    var observations = [observation("合成网页标题", x: 0.10, y: 0.05, width: 0.40)]
+    var y: CGFloat = 0.16
+    for index in 0..<6 {
+        observations.append(observation("正文第\(index)段横跨整屏的一行字", x: 0.08, y: y, width: 0.84))
+        y += 0.09
+    }
+    return (observations, [])
+}
+
+/// 跑若干帧真实版式，返回最终结论。
+func runRealLayout(_ screen: (observations: [LiveOCRObservation], rectangles: [CGRect]),
+                   frames: Int = 3) -> (verdict: ChatSceneVerdict, allows: Bool, messages: Int) {
+    var pipeline = LiveChatScenePipeline()
+    for frame in 0..<frames {
+        pipeline.detect(ChatSceneDetector.probeEvidence(observations: screen.observations,
+                                                        rectangles: screen.rectangles))
+        _ = pipeline.ingest(screen.observations, at: t0.addingTimeInterval(Double(frame) * 0.8))
+    }
+    return (pipeline.verdict, pipeline.allowsFullRecognition, pipeline.snapshot().messages.count)
+}
+
 /// 和控制器里那条规则一致的判定：先算候选块，再看门控；只有 activeChat 才提交给时间线。
 struct SimulatedPipeline {
     var core = LiveChatScenePipeline()
@@ -73,10 +167,13 @@ expect(pipeline.gate.verdict == .activeChat, "1. 标准左右聊天页面连续�
 expect(submitted, "1b. 进入聊天界面后开始向时间线提交")
 expect(pipeline.timelineCount > 0, "1c. 时间线真的开始积累")
 
-// 深色模式：我们只吃几何，不看颜色，所以同样的版面同样判成聊天
+// 只有顶部标题、没有消息行：设置页 / 详情页那种结构不能算聊天
 expect(ChatSceneDetector.isChatScene(
-    ChatSceneDetector.evidence(observations: chatScreen(), candidates: [], config: config), config: config) == false,
-       "2. 只有 observations、没有候选块时不算聊天（避免误判）")
+    ChatSceneDetector.probeEvidence(
+        observations: [observation("合成会话", x: 0.4, y: 0.06, width: 0.2)],
+        rectangles: [CGRect(x: 0.10, y: 0.30, width: 0.50, height: 0.12)]),
+    config: config) == false,
+       "2. 只有顶部标题、没有消息行时不算聊天（避免把设置页 / 详情页判成聊天）")
 var darkPipeline = SimulatedPipeline()
 darkPipeline.reset(generation: 1)
 _ = darkPipeline.ingest(chatScreen(top: "李四"), at: t0)
@@ -192,6 +289,90 @@ let chatFile = root
     .appendingPathComponent(SharedConstants.chatDirectory)
     .appendingPathComponent(SharedConstants.latestChatFilename)
 expect(!fm.fileExists(atPath: chatFile.path), "16. 没有提交就没有写盘（不会因为离开界面写一份残缺聊天）")
+
+// MARK: - 真实版式回归：浅色 / 深色 / 单侧 / 图片语音为主都要判成聊天
+
+expect(runRealLayout(weChatChatScreen()).verdict == .activeChat,
+       "20. 浅色微信标准聊天（导航带 + 左右气泡 + 居中日期 + 底部输入栏）→ activeChat")
+expect(runRealLayout(weChatChatScreen(top: "合成另一个联系人")).verdict == .activeChat,
+       "21. 深色微信标准聊天（同版面，门控只看几何不看颜色）→ activeChat")
+expect(runRealLayout(weChatChatScreen(mine: 0, theirs: 4)).verdict == .activeChat,
+       "22. 只有左侧消息 + 输入栏 → activeChat")
+expect(runRealLayout(weChatChatScreen(mine: 4, theirs: 0)).verdict == .activeChat,
+       "23. 只有右侧消息 + 输入栏 → activeChat")
+expect(runRealLayout((
+    observations: [observation("合成会话", x: 0.4, y: 0.06, width: 0.20)],
+    rectangles: [CGRect(x: 0.10, y: 0.20, width: 0.42, height: 0.16),
+                 CGRect(x: 0.45, y: 0.40, width: 0.42, height: 0.16),
+                 CGRect(x: 0.10, y: 0.60, width: 0.42, height: 0.12),
+                 CGRect(x: 0.13, y: 0.925, width: 0.72, height: 0.028)])).verdict == .activeChat,
+       "24. 图片多、文字少（只有气泡几何）→ activeChat")
+expect(runRealLayout((
+    observations: [observation("合成会话", x: 0.4, y: 0.06, width: 0.20),
+                   observation("语音 3″", x: 0.13, y: 0.22, width: 0.16)],
+    rectangles: [CGRect(x: 0.10, y: 0.20, width: 0.34, height: 0.05),
+                 CGRect(x: 0.52, y: 0.34, width: 0.36, height: 0.05),
+                 CGRect(x: 0.10, y: 0.48, width: 0.30, height: 0.05),
+                 CGRect(x: 0.13, y: 0.925, width: 0.72, height: 0.028)])).verdict == .activeChat,
+       "25. 语音多、文字少 → activeChat")
+let avatarTitle = weChatChatScreen()
+let avatarEvidence = ChatSceneDetector.probeEvidence(observations: avatarTitle.observations,
+                                                    rectangles: avatarTitle.rectangles)
+expect(avatarEvidence.navigationLineCount >= 2 && avatarEvidence.hasInputBar,
+       "26. 标题带头像 + 在线状态：导航带算多行文字，不要求居中纯文字")
+expect(runRealLayout(avatarTitle).verdict == .activeChat, "26b. 带头像 + 在线状态 → activeChat")
+
+// 本次真机 Bug 的核心回归：灵动岛展开 / 通知横幅挡住导航栏，输入框也没被几何检测到，
+// 只要中部同时有偏左和偏右的气泡行，仍然必须判成聊天。
+let covered = weChatChatScreen()
+let coveredEvidence = ChatSceneDetector.probeEvidence(
+    observations: covered.observations.filter { $0.box.midY > 0.20 },
+    rectangles: covered.rectangles.filter { $0.minY < 0.90 })
+expect(!coveredEvidence.hasInputBar, "27. 这一帧确实没有检测到输入栏")
+expect(!coveredEvidence.hasNavigationBar, "27b. 这一帧确实没有导航文字（被灵动岛挡住了）")
+expect(ChatSceneDetector.isChatScene(coveredEvidence, config: config),
+       "27c. 导航被挡 + 输入栏没识别到，只要左右气泡都在就仍然判聊天（修掉真机假阴性）")
+expect(runRealLayout((observations: covered.observations.filter { $0.box.midY > 0.20 },
+                      rectangles: covered.rectangles.filter { $0.minY < 0.90 })).verdict == .activeChat,
+       "27d. 这种帧连续出现也要进 activeChat")
+
+// MARK: - 真实版式回归：非聊天页面必须保持 inactive
+
+for (index, screen) in [weChatListScreen(), weChatFeedScreen(),
+                        shortVideoScreen(), articleScreen()].enumerated() {
+    let result = runRealLayout(screen)
+    let name = ["联系人列表 / 微信首页", "朋友圈 / 信息流", "抖音短视频", "普通网页 / 设置页"][index]
+    expect(result.verdict == .inactive, "28.\(index)a \(name) → inactive")
+    expect(result.messages == 0, "28.\(index)b \(name) 不写时间线")
+    expect(result.allows == false, "28.\(index)c \(name) 不进入完整识别")
+}
+
+// MARK: - 真实版式回归：滚动 / 动画的单帧异常不掉出聊天
+
+var scrollPipeline = LiveChatScenePipeline()
+let scrollScreen = weChatChatScreen(mine: 2, theirs: 2)
+for frame in 0..<3 {
+    scrollPipeline.detect(ChatSceneDetector.probeEvidence(observations: scrollScreen.observations,
+                                                          rectangles: scrollScreen.rectangles))
+    _ = scrollPipeline.ingest(scrollScreen.observations, at: t0.addingTimeInterval(Double(frame) * 0.8))
+}
+expect(scrollPipeline.verdict == .activeChat, "29. 先进入聊天")
+let glitchScreen = ([observation("合成会话", x: 0.4, y: 0.06, width: 0.20)], [CGRect]())
+scrollPipeline.detect(ChatSceneDetector.probeEvidence(observations: glitchScreen.0, rectangles: glitchScreen.1))
+_ = scrollPipeline.ingest(glitchScreen.0, at: t0.addingTimeInterval(2.4))
+expect(scrollPipeline.verdict == .activeChat, "30. 滚动 / 动画的一帧异常不掉出 activeChat")
+scrollPipeline.detect(ChatSceneDetector.probeEvidence(observations: glitchScreen.0, rectangles: glitchScreen.1))
+_ = scrollPipeline.ingest(glitchScreen.0, at: t0.addingTimeInterval(3.2))
+expect(scrollPipeline.verdict == .activeChat, "30b. 两帧异常仍然保持聊天（退出要连续 3 帧）")
+scrollPipeline.detect(ChatSceneDetector.probeEvidence(observations: scrollScreen.observations,
+                                                      rectangles: scrollScreen.rectangles))
+_ = scrollPipeline.ingest(scrollScreen.observations, at: t0.addingTimeInterval(4.0))
+expect(scrollPipeline.verdict == .activeChat, "30c. 滚动结束后仍然 activeChat")
+
+// 诊断文案只说结构，不含聊天正文
+expect(!avatarEvidence.diagnostics.contains("对方第"), "31. 门控诊断不含聊天正文")
+expect(avatarEvidence.diagnostics.contains("nav=yes") && avatarEvidence.diagnostics.contains("input=yes"),
+       "31b. 门控诊断带 nav / input 标记")
 
 // MARK: - 结构保证：门控只读像素与几何，不碰 AI / 输入代理 / 发送
 
