@@ -1,6 +1,8 @@
 import Foundation
 
-#if canImport(ActivityKit)
+// ActivityKit 只在 iOS 上真正可用：`os(iOS)` 让这段代码在别的平台（比如 CI 上的 macOS
+// 契约测试）自动退化成「什么都不做」的存根，不需要为它准备另一套假实现。
+#if canImport(ActivityKit) && os(iOS)
 import ActivityKit
 #endif
 
@@ -33,7 +35,7 @@ final class GoutouCaptureActivityController {
     // MARK: - ActivityKit
 
     private func apply(_ action: GoutouCaptureActivityAction) {
-        #if canImport(ActivityKit)
+        #if canImport(ActivityKit) && os(iOS)
         if #available(iOS 16.2, *) {
             switch action {
             case .none:
@@ -78,7 +80,7 @@ final class GoutouCaptureActivityController {
         // 系统不支持 Live Activity（或 SDK 里没有 ActivityKit）：什么都不做，其余功能照常
     }
 
-    #if canImport(ActivityKit)
+    #if canImport(ActivityKit) && os(iOS)
     @available(iOS 16.2, *)
     private static func state(
         from content: GoutouCaptureActivityContent
