@@ -73,7 +73,9 @@ expect(model.ocrDidFinish(generation: model.generation, result: .success(third),
 
 let failuresBefore = model.ocrFailures
 model.ocrDidStart(at: t0.addingTimeInterval(4.5))
-expect(!model.ocrDidFinish(generation: model.generation, result: .failure("这一帧识别失败"), at: t0.addingTimeInterval(4.6)),
+expect(!model.ocrDidFinish(generation: model.generation,
+                           result: .failure(LiveOCRFailure("这一帧识别失败")),
+                           at: t0.addingTimeInterval(4.6)),
        "失败时没有 pending 帧就什么都不做")
 expect(model.state == .capturing, "OCR 失败不影响捕获状态")
 expect(model.ocrFailures == failuresBefore + 1, "失败次数 +1")

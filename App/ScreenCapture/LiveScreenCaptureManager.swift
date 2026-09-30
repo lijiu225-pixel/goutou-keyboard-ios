@@ -158,7 +158,7 @@ final class LiveScreenCaptureManager: ObservableObject {
         model.ocrDidStart(at: Date())
         let languages = ChatOCRService.defaultLanguageHints
         ocrQueue.async { [weak self] in
-            let result: Result<LiveOCRSnapshot, String>
+            let result: Result<LiveOCRSnapshot, LiveOCRFailure>
             do {
                 result = .success(try LiveScreenOCRProcessor.recognize(
                     pixelBuffer: pixelBuffer,
@@ -166,7 +166,7 @@ final class LiveScreenCaptureManager: ObservableObject {
                     languages: languages
                 ))
             } catch {
-                result = .failure("这一帧识别失败")
+                result = .failure(LiveOCRFailure("这一帧识别失败"))
             }
             Task { @MainActor in
                 self?.finishOCR(result, generation: generation)
@@ -174,7 +174,7 @@ final class LiveScreenCaptureManager: ObservableObject {
         }
     }
 
-    private func finishOCR(_ result: Result<LiveOCRSnapshot, String>, generation: Int) {
+    private func finishOCR(_ result: Result<LiveOCRSnapshot, LiveOCRFailure>, generation: Int) {
         // 代际号对不上（已经停止 / 重新开始）时，模型一个字都不写。
         let runPending = model.ocrDidFinish(generation: generation, result: result, at: Date())
         if runPending, let pending = pendingFrame {

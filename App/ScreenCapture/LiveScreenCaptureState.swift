@@ -1,5 +1,14 @@
 import Foundation
 
+/// 一帧 OCR 失败的原因：一句话，给人看，不回显内部对象。
+struct LiveOCRFailure: Error, Equatable {
+    let message: String
+
+    init(_ message: String) {
+        self.message = message
+    }
+}
+
 /// 阶段 12A：动态屏幕识别的状态。一个状态一个值，不用一堆互相矛盾的 Bool。
 enum LiveScreenCaptureState: Equatable {
     /// 系统版本不够（低于 iOS 27），旧功能不受影响
@@ -194,7 +203,7 @@ struct LiveScreenCaptureModel: Equatable {
     /// 返回 true 表示「还有最新一帧在等着，而且节流允许」——调用方应当立刻再跑一次它。
     mutating func ocrDidFinish(
         generation: Int,
-        result: Result<LiveOCRSnapshot, String>,
+        result: Result<LiveOCRSnapshot, LiveOCRFailure>,
         at now: Date
     ) -> Bool {
         guard generation == self.generation else { return false }
@@ -203,10 +212,10 @@ struct LiveScreenCaptureModel: Equatable {
         switch result {
         case .success(let snapshot):
             self.snapshot = snapshot      // 新结果直接替换旧的，不累积
-        case .failure(let reason):
+        case .failure(let failure):
             // OCR 失败不停 stream：记一笔，后续帧继续。
             ocrFailures += 1
-            lastErrorReason = reason
+            lastErrorReason = failure.message
         }
         guard hasPendingFrame else { return false }
         hasPendingFrame = false
