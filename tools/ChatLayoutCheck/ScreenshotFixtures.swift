@@ -168,10 +168,12 @@ func runStageTwoChecks() {
         (0.04, stageLightCanvas),
         (0.10, stageAvatarTwo),
     ]
-    guard let leftRows = stageTwoRows(leftRowSegments, width: 200, height: 1) else {
+    // 高度取 20 行：气泡判定要看「色块纵向厚度 vs 文字框高度」，
+    // 只有一行的图量不出厚度。
+    guard let leftRows = stageTwoRows(leftRowSegments, width: 200, height: 20) else {
         fatalError("造不出测试像素行")
     }
-    guard let rightRows = stageTwoRows(rightRowSegments, width: 200, height: 1) else {
+    guard let rightRows = stageTwoRows(rightRowSegments, width: 200, height: 20) else {
         fatalError("造不出测试像素行")
     }
 
@@ -198,7 +200,7 @@ func runStageTwoChecks() {
 
     // 文字框落在白气泡里 → 气泡证据指向它，头像在左边。
     let leftEvidence = ChatBubbleScanner.evidence(
-        forText: ChatLayoutBox(x: 0.20, y: 0, width: 0.06, height: 1),
+        forText: ChatLayoutBox(x: 0.22, y: 0.4, width: 0.14, height: 0.2),
         rows: leftRows,
         background: lightBackground ?? stageLightCanvas
     )
@@ -213,7 +215,7 @@ func runStageTwoChecks() {
     // 右边：绿气泡 + 右侧头像。
     let rightBackground = ChatBubbleScanner.background(of: rightRows)
     let rightEvidence = ChatBubbleScanner.evidence(
-        forText: ChatLayoutBox(x: 0.65, y: 0, width: 0.06, height: 1),
+        forText: ChatLayoutBox(x: 0.64, y: 0.4, width: 0.14, height: 0.2),
         rows: rightRows,
         background: rightBackground ?? stageLightCanvas
     )
@@ -255,6 +257,37 @@ func runStageTwoChecks() {
     expect(
         abs(holeSpans[0].minX - 0.50) < 0.02 && abs(holeSpans[0].maxX - 0.905) < 0.02,
         "补完缝隙之后的宽度要对，实际 \(holeSpans[0].minX)...\(holeSpans[0].maxX)"
+    )
+
+    // ── 3b. 裸文字（居中日期、状态栏时间）不能当成气泡 ────────────────
+
+    // 一行只有笔画、没有气泡填充的文字：色块只有字那么宽、笔画之间露出底色、
+    // 纵向厚度就是字高。这三条任何一条过不了都不该给气泡证据。
+    var textOnlyPixels = [ChatRGB](repeating: stageLightCanvas, count: 200 * 20)
+    for row in 8...12 {
+        var column = 60
+        while column < 140 {
+            for offset in 0..<8 where column + offset < 200 {
+                textOnlyPixels[row * 200 + column + offset] = ChatRGB(
+                    byteRed: 60,
+                    byteGreen: 60,
+                    blue: 60
+                )
+            }
+            column += 10
+        }
+    }
+    guard let textOnlyRows = ChatPixelRows(width: 200, height: 20, pixels: textOnlyPixels) else {
+        fatalError("造不出裸文字像素")
+    }
+    let textOnlyEvidence = ChatBubbleScanner.evidence(
+        forText: ChatLayoutBox(x: 0.32, y: 8.0 / 19.0, width: 0.36, height: 5.0 / 19.0),
+        rows: textOnlyRows,
+        background: stageLightCanvas
+    )
+    expect(
+        textOnlyEvidence == nil,
+        "一行孤零零的文字（居中日期那种）不能当成气泡，实际 \(String(describing: textOnlyEvidence?.span))"
     )
 
     // ── 4. 真实（匿名）版式：这就是上一阶段翻车的那张图 ────────────────

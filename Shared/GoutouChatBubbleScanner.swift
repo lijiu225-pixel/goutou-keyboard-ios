@@ -145,6 +145,23 @@ struct ChatBubbleScanConfig: Equatable {
     /// 头像色块的宽度必须落在这个区间里才认。
     var avatarWidthRange: ClosedRange<Double> = 0.03...0.16
 
+    // MARK: 把「气泡」和「裸文字」分开
+    //
+    // 文字本身也是「非底色」：一行孤零零的居中日期、状态栏时间，同样会扫出一整条色块。
+    // 真机实测（微信浅色截图、384 宽分析图）：
+    //   * 气泡行：色块把文字框包住，左右各留 0.030 上下，完全对称，纵向厚度是行高的 2 倍以上；
+    //   * 居中日期：色块只有文字笔画那么宽，厚度就是字高（比值 1.0 上下）；
+    //   * 导航栏那种带渐变的大色块：文字偏在一侧，左右留白 0.026 / 0.444，严重不对称。
+
+    /// 气泡必须在文字左右各留出这么多空白（相对图宽）。
+    var minimumBubblePadding: Double = 0.010
+    /// 左右留白的不对称下限（较小 / 较大）。气泡是抱着文字的，大片背景色块不是。
+    var paddingSymmetryFloor: Double = 0.25
+    /// 色块内部被填充的比例下限（裸文字的笔画之间会露出底色）。
+    var minimumBubbleFill: Double = 0.85
+    /// 色块纵向厚度 / 文字框高度 的下限（气泡上下有填充，裸文字没有）。
+    var bubbleThicknessFactor: Double = 1.5
+
     static let standard = ChatBubbleScanConfig()
 }
 
@@ -276,6 +293,20 @@ enum ChatBubbleScanner {
         guard chosenIndex >= 0, chosenIndex < allSpans.count else { return nil }
         let bubble = allSpans[chosenIndex]
 
+        // 扫出来的可能只是「文字本身的墨迹」，不是气泡。过不了这一关就当没有气泡证据，
+        // 让调用方退回老口径 —— 宁可标「未确定」，也不要把居中日期当成一条聊天气泡。
+        guard isBubbleLike(
+            bubble,
+            textBox: box,
+            columns: columns,
+            rows: rows,
+            background: background,
+            sampleIndexes: sampleIndexes,
+            config: config
+        ) else {
+            return nil
+        }
+
         // 头像：同一批采样行里，气泡左右两侧如果还有宽度像头像的独立色块，就记下来。
         var hasLeftAvatar = false
         var hasRightAvatar = false
@@ -300,6 +331,87 @@ enum ChatBubbleScanner {
     }
 
     // MARK: 内部
+
+    /// 这条色块是不是「一个装着文字的气泡」，而不是「一段裸文字」。
+    private static func isBubbleLike(
+        _ span: ChatBubbleSpan,
+        textBox box: ChatLayoutBox,
+        columns: [Bool],
+        rows: ChatPixelRows,
+        background: ChatRGB,
+        sampleIndexes: [Int],
+        config: ChatBubbleScanConfig
+    ) -> Bool {
+        // 1. 色块要把文字框包在里面，左右各留出一点空白。
+        let leftPadding = box.minX - span.minX
+        let rightPadding = span.maxX - box.maxX
+        guard leftPadding >= config.minimumBubblePadding,
+              rightPadding >= config.minimumBubblePadding else {
+            return false
+        }
+        let wider = max(leftPadding, rightPadding)
+        let narrower = min(leftPadding, rightPadding)
+        guard wider <= 0 || narrower / wider >= config.paddingSymmetryFloor else {
+            return false
+        }
+
+        // 2. 色块内部基本被填满（裸文字的笔画之间会露出底色）。
+        let from = max(0, min(columns.count - 1, Int((span.minX * Double(rows.width)).rounded(.down))))
+        let rawTo = Int((span.maxX * Double(rows.width)).rounded(.up)) - 1
+        let to = max(0, min(columns.count - 1, rawTo))
+        guard from <= to else { return false }
+        var marked = 0
+        for offset in from...to where columns[offset] {
+            marked += 1
+        }
+        let fill = Double(marked) / Double(to - from + 1)
+        guard fill >= config.minimumBubbleFill else { return false }
+
+        // 3. 纵向厚度要明显大于这一行文字的高度（气泡上下还有填充）。
+        var thickness = 0.0
+        for fraction in [0.25, 0.5, 0.75] {
+            let column = min(
+                rows.width - 1,
+                max(0, Int((span.minX + span.width * fraction) * Double(rows.width)).rounded(.down))
+            )
+            thickness = max(
+                thickness,
+                verticalThickness(
+                    atColumn: column,
+                    sampleIndexes: sampleIndexes,
+                    rows: rows,
+                    background: background,
+                    tolerance: config.tolerance
+                )
+            )
+        }
+        guard thickness >= box.height * config.bubbleThicknessFactor else { return false }
+        return true
+    }
+
+    /// 某一列上，「不是底色」的连续纵向长度（相对图高）。
+    private static func verticalThickness(
+        atColumn column: Int,
+        sampleIndexes: [Int],
+        rows: ChatPixelRows,
+        background: ChatRGB,
+        tolerance: Double
+    ) -> Double {
+        guard rows.width >= 1, rows.height >= 1, column >= 0, column < rows.width else { return 0 }
+        func isMarked(_ row: Int) -> Bool {
+            guard row >= 0, row < rows.height else { return false }
+            return rows.pixels[row * rows.width + column].distance(to: background) > tolerance
+        }
+        var thickness = 0.0
+        for start in sampleIndexes where isMarked(start) {
+            var top = start
+            while top - 1 >= 0 && isMarked(top - 1) { top -= 1 }
+            var bottom = start
+            while bottom + 1 < rows.height && isMarked(bottom + 1) { bottom += 1 }
+            thickness = max(thickness, Double(bottom - top + 1) / Double(rows.height))
+        }
+        return thickness
+    }
 
     private static func bucketIndex(_ value: Double, levels: Int) -> Int {
         let scaled = Int((min(max(value, 0), 1) * Double(levels)).rounded(.down))

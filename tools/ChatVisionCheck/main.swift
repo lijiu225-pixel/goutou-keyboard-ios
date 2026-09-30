@@ -74,9 +74,12 @@ func renderSyntheticChat(
     let canvas = dark
         ? CGColor(red: 0.066, green: 0.066, blue: 0.066, alpha: 1)
         : CGColor(red: 0.925, green: 0.925, blue: 0.925, alpha: 1)
+    // 页眉/页脚条的颜色刻意贴近画布：真机上微信的导航栏和输入栏底色也只比聊天区
+    // 深/浅一点点（距离 0.05 上下，低于扫描阈值 0.06）。这里要测的是「按内容边界剔页眉页脚」，
+    // 不是「认出一块和画布不一样的大色块」，所以不能让它们自己变成伪气泡。
     let headerFill = dark
-        ? CGColor(red: 0.11, green: 0.11, blue: 0.11, alpha: 1)
-        : CGColor(red: 0.96, green: 0.96, blue: 0.96, alpha: 1)
+        ? CGColor(red: 0.070, green: 0.070, blue: 0.070, alpha: 1)
+        : CGColor(red: 0.928, green: 0.928, blue: 0.928, alpha: 1)
     let bubbleMine = dark
         ? CGColor(red: 0.16, green: 0.38, blue: 0.22, alpha: 1)
         : CGColor(red: 0.60, green: 0.925, blue: 0.42, alpha: 1)
@@ -114,19 +117,19 @@ func renderSyntheticChat(
         imageHeight: height
     )
 
-    // 底部输入条（也要被剔掉）
+    // 底部输入条（也要被剔掉）。这里画一条灰色的输入提示文字：
+    // 它在聊天区下方，必须按「内容边界」被判成页脚，而不是靠一个固定高度的裁切带。
     context.setFillColor(headerFill)
     context.fill(topRect(0, Double(height) - 170, Double(width), 170, imageHeight: height))
-    context.setFillColor(bubbleOther)
-    context.addPath(
-        CGPath(
-            roundedRect: topRect(90, Double(height) - 140, Double(width) - 180, 100, imageHeight: height),
-            cornerWidth: 14,
-            cornerHeight: 14,
-            transform: nil
-        )
+    let placeholderLine = chatLine("输入消息", font: bodyFont, color: systemColor)
+    drawText(
+        placeholderLine,
+        font: bodyFont,
+        x: 120,
+        baselineFromTop: Double(height) - 105,
+        context: context,
+        imageHeight: height
     )
-    context.fillPath()
 
     // 聊天内容
     var top = 240.0
