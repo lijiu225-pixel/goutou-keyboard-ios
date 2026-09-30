@@ -278,16 +278,16 @@ expectThrows(.badJSON("不是 JSON"), "响应体不是 JSON") { _ = try GoutouAI
 
 // 走完一整轮「开始 → 成功 → 读取新聊天作废」，容器里不该多出任何文件。
 let fm = FileManager.default
-let root = fm.temporaryDirectory.appendingPathComponent("RecognizedChatAnalysisCheck-\(UUID().uuidString)", isDirectory: true)
-try fm.createDirectory(at: root, withIntermediateDirectories: true)
-defer { try? fm.removeItem(at: root) }
-let beforeRun = try fm.contentsOfDirectory(atPath: root.path)
+let probeRoot = fm.temporaryDirectory.appendingPathComponent("RecognizedChatAnalysisCheck-\(UUID().uuidString)", isDirectory: true)
+try fm.createDirectory(at: probeRoot, withIntermediateDirectories: true)
+defer { try? fm.removeItem(at: probeRoot) }
+let beforeRun = try fm.contentsOfDirectory(atPath: probeRoot.path)
 var cycle = RecognizedChatAnalysisSession()
 if case .started(let cycleGeneration) = cycle.begin(hasFullAccess: true, config: config, skillAvailable: true, context: context) {
     cycle.complete(generation: cycleGeneration, result: .success("一轮分析"))
 }
 cycle.invalidate()
-let afterRun = try fm.contentsOfDirectory(atPath: root.path)
+let afterRun = try fm.contentsOfDirectory(atPath: probeRoot.path)
 expect(beforeRun == afterRun, "分析不往磁盘多写任何文件")
 expect(cycle.state == .idle, "一轮走完回到 idle")
 expect(UserDefaults.standard.object(forKey: "goutou.recognizedChat.analysis") == nil, "分析结果不写 UserDefaults")
