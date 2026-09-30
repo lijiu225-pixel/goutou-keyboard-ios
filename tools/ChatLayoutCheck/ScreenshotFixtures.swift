@@ -271,7 +271,7 @@ func runStageTwoChecks() {
                 textOnlyPixels[row * 200 + column + offset] = ChatRGB(
                     byteRed: 60,
                     byteGreen: 60,
-                    blue: 60
+                    byteBlue: 60
                 )
             }
             column += 10
