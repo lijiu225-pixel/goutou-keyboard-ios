@@ -449,4 +449,18 @@ delivery.release()
 expect(delivery.acquire(), "delivery resumes after completion")
 delivery.release()
 
+// Missing navigation is uncertainty, never proof that the current contact owns this frame.
+var hiddenTitle = LiveChatScenePipeline()
+for frame in 0..<3 {
+    hiddenTitle.detect(ChatSceneDetector.probeEvidence(observations: chatScreen(), rectangles: []))
+    _ = hiddenTitle.ingest(chatScreen(), at: t0.addingTimeInterval(Double(frame)))
+}
+let hiddenTitleCount = hiddenTitle.snapshot().messages.count
+let coveredOther = chatScreen(top: "另一个人").filter { $0.box.midY > 0.17 }
+hiddenTitle.detect(ChatSceneDetector.probeEvidence(observations: coveredOther, rectangles: []))
+_ = hiddenTitle.ingest(coveredOther, at: t0.addingTimeInterval(4))
+expect(hiddenTitle.verdict == .activeChat, "covered title preserves recognition display")
+expect(!hiddenTitle.allowsFullRecognition, "covered title quarantines messages instead of authorizing submission")
+expect(hiddenTitle.snapshot().messages.count == hiddenTitleCount, "unconfirmed frames leave the official timeline intact")
+
 print("ChatScreenDetectionCheck passed (\(checks) assertions; pure logic only; synthetic screens; no network)")
