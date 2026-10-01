@@ -723,3 +723,25 @@ jobs:
             tools/ChatVisionCheck/main.swift \
             -o "$RUNNER_TEMP/chatvisioncheck"
           "$RUNNER_TEMP/chatvisioncheck"
+
+      - name: Live chat Vision device layout regression (macOS)
+        run: |
+          swiftc -swift-version 5 \
+            Shared/GoutouChatClipboard.swift \
+            App/ScreenCapture/LiveOCRObservation.swift \
+            App/ScreenCapture/LiveOCRSnapshot.swift \
+            App/ScreenCapture/LiveScreenCaptureState.swift \
+            App/ScreenCapture/LiveScreenOCRProcessor.swift \
+            App/ScreenCapture/LiveChatGeometryConfiguration.swift \
+            App/ScreenCapture/LiveChatCandidate.swift \
+            App/ScreenCapture/LiveChatRoleClassifier.swift \
+            App/ScreenCapture/LiveChatBlockGrouper.swift \
+            App/ScreenCapture/LiveChatStabilizer.swift \
+            App/ScreenCapture/LiveChatTimeline.swift \
+            App/ScreenCapture/LiveChatSystem.swift \
+            App/ScreenCapture/ChatSceneGate.swift \
+            App/ScreenCapture/ChatSceneProbe.swift \
+            App/ScreenCapture/LiveChatScenePipeline.swift \
+            tools/LiveChatVisionCheck/main.swift \
+            -o "$RUNNER_TEMP/livechatvisioncheck"
+          "$RUNNER_TEMP/livechatvisioncheck"
