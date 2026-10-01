@@ -423,7 +423,8 @@ for frame in 0..<4 {
 expect(isolation.core.chatGeneration > oldGeneration, "production pipeline rotates generation")
 expect(isolation.timelineCount == 2, "production pipeline contains only new contact messages")
 
-let keyboardScreen = chatScreen() + [observation("键盘合成文本", x: 0.05, y: 0.70, width: 0.30)]
+let keyboardScreen = chatScreen().filter { $0.text != "输入消息" }
+    + [observation("键盘合成文本", x: 0.05, y: 0.70, width: 0.30)]
 let keyboardEvidence = ChatSceneDetector.probeEvidence(observations: keyboardScreen,
     rectangles: [CGRect(x: 0.18, y: 0.56, width: 0.62, height: 0.04)])
 expect(keyboardEvidence.inputTopRatio == 0.56, "input area follows keyboard height")
@@ -647,14 +648,28 @@ expect(tenBubbleChat.messages.count == 10, "all ten text bubbles survive croppin
 expect(tenBubbleChat.messages.first?.text == "第一条长消息的开头第一条长消息的中间第一条长消息的结尾", "the first multiline bubble is complete")
 expect(tenBubbleChat.messages.map(\.role) == [.me, .me, .other, .other, .other, .other, .other, .other, .other, .me], "real text insets identify both speakers")
 expect(tenBubbleChat.unknownCount == 0, "ten unambiguous bubbles do not require manual roles")
-let keyboardEvidence = ChatSceneDetector.probeEvidence(
+let labeledKeyboardEvidence = ChatSceneDetector.probeEvidence(
     observations: [observation("按住 说话", x: 0.30, y: 0.60, width: 0.25)],
     rectangles: [CGRect(x: 0.11, y: 0.595, width: 0.69, height: 0.044),
                  CGRect(x: 0.23, y: 0.89, width: 0.50, height: 0.044)])
-expect(keyboardEvidence.inputTopRatio == 0.60, "an explicit input control wins over a keyboard space bar")
+expect(labeledKeyboardEvidence.inputTopRatio == 0.60, "an explicit input control wins over a keyboard space bar")
 let proseInputEvidence = ChatSceneDetector.probeEvidence(
     observations: [observation("这条消息谈到了输入方法", x: 0.17, y: 0.65, width: 0.45)],
     rectangles: tenBubbleRectangles)
 expect(proseInputEvidence.inputTopRatio == 0.918, "ordinary prose mentioning input cannot move the viewport")
+for title in ["动态识别测试", "确认实时聊天", "狗头军师输入法"] {
+    let ownPage = ChatSceneDetector.probeEvidence(
+        observations: [observation(title, x: 0.35, y: 0.074, width: 0.30)] + tenBubbleLines,
+        rectangles: tenBubbleRectangles)
+    expect(ChatSceneDetector.isClearlyNonChatScene(ownPage), "our own capture/review pages cannot become a contact")
+    let retainedCount = tenBubblePipeline.snapshot().messages.count
+    for frame in 0..<3 {
+        tenBubblePipeline.detect(ownPage)
+        _ = tenBubblePipeline.ingest(ownPage.isCaptureDiagnosticsPage ? [] : tenBubbleLines,
+                                     at: t0.addingTimeInterval(Double(frame + 10)))
+    }
+    expect(!tenBubblePipeline.shouldRunOCR && tenBubblePipeline.snapshot().messages.count == retainedCount,
+           "opening review holds submission without erasing the already recognized conversation")
+}
 
 print("ChatScreenDetectionCheck passed (\(checks) assertions; pure logic only; synthetic screens; no network)")

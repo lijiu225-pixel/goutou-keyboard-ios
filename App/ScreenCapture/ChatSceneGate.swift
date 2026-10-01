@@ -170,7 +170,14 @@ enum ChatSceneDetector {
         evidence.hasNonChatNavigation = !navigationLabels.intersection(["朋友圈", "设置", "桌面", "联系人列表", "微信首页", "短视频"]).isEmpty
             || navigationLabels.isSuperset(of: ["关注", "推荐"])
         evidence.topBarFingerprint = titleFingerprint(observations, config: config)
-        evidence.isCaptureDiagnosticsPage = evidence.topBarFingerprint == LiveChatText.normalize("动态识别测试")
+        // Review labels may be deliberately excluded from contact fingerprints.
+        // Inspect the actual navigation text, so returning to our editor cannot
+        // replace the contact or feed its form fields into the live timeline.
+        let ownTitles = ["动态识别测试", "确认实时聊天", "狗头军师输入法"].map(LiveChatText.normalize)
+        evidence.isCaptureDiagnosticsPage = navigation.contains {
+            $0.box.midY >= config.titleBandStart && $0.box.midY <= config.titleBandEnd
+                && ownTitles.contains(LiveChatText.normalize($0.text))
+        }
 
         // 底部输入区：占位文字，或者「宽而扁」的输入框几何。两个都没有才算没有输入区。
         let placeholder = observations.filter {
