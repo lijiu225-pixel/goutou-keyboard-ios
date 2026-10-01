@@ -379,4 +379,50 @@ let metadataChat = metadataSystem.ingest(observations: metadataFrame, timestamp:
 expect(metadataChat.messages.map(\.text) == ["8月20日 星期四 01:51", "聊一聊星期四的安排"],
        "centered dates and retractions are excluded, while identical side-aligned message text survives")
 
+// Pixel evidence augments geometry; missing, invalid and contradictory evidence never guesses a speaker.
+let insetBox = CGRect(x: 0.33, y: 0.32, width: 0.12, height: 0.025)
+let insetOther = LiveOCRObservation(text: "收到了", confidence: 0.95, box: insetBox,
+    bubble: .init(minX: 0.145, maxX: 0.665, isGreen: false, avatarSide: .left))
+let insetMe = LiveOCRObservation(text: "好呀", confidence: 0.95,
+    box: CGRect(x: 0.57, y: 0.47, width: 0.08, height: 0.025),
+    bubble: .init(minX: 0.335, maxX: 0.855, isGreen: true, avatarSide: .right))
+expect(LiveChatRoleClassifier.classify(box: insetBox) == .unknown, "inset text alone remains ambiguous")
+expect(LiveChatRoleClassifier.classify(insetOther) == .other, "neutral left bubble recovers counterpart role")
+expect(LiveChatRoleClassifier.classify(insetMe) == .me, "green right bubble recovers self role")
+let pixelCandidates = LiveChatBlockGrouper.group([insetOther, insetMe], timestamp: t0)
+expect(pixelCandidates.map(\.role) == [.other, .me], "grouper carries pixel roles into candidates")
+expect(pixelCandidates.map(\.text) == ["收到了", "好呀"], "pixel evidence never rewrites text")
+var missingPixels = insetMe
+missingPixels.bubble = nil
+expect(LiveChatRoleClassifier.classify(missingPixels) == .unknown, "missing pixels preserve geometry fallback")
+var contradictory = insetOther
+contradictory.bubble = .init(minX: 0.145, maxX: 0.665, isGreen: true, avatarSide: .left)
+expect(LiveChatRoleClassifier.classify(contradictory) == .unknown, "green left bubble conflicts with left-side evidence")
+expect(LiveChatRoleClassifier.classify(block: [contradictory, insetOther], box: insetBox) == .unknown,
+       "another line cannot conceal contradictory pixel evidence")
+var invalidPixels = insetOther
+invalidPixels.bubble = .init(minX: .nan, maxX: 0.9, isGreen: true)
+expect(LiveChatRoleClassifier.classify(invalidPixels) == .unknown, "nonfinite pixel coordinates fall back safely")
+var wrongBounds = insetOther
+wrongBounds.bubble = .init(minX: 0.7, maxX: 0.9, isGreen: true)
+expect(LiveChatRoleClassifier.classify(wrongBounds) == .unknown, "unrelated bubble bounds cannot assign a role")
+var ambiguousNeutral = insetOther
+ambiguousNeutral.bubble = .init(minX: 0.145, maxX: 0.855, isGreen: false)
+expect(LiveChatRoleClassifier.classify(ambiguousNeutral) == .unknown, "full-width neutral bubble without avatar remains unknown")
+var ambiguousGreen = ambiguousNeutral
+ambiguousGreen.bubble = .init(minX: 0.145, maxX: 0.855, isGreen: true)
+expect(LiveChatRoleClassifier.classify(ambiguousGreen) == .me, "green can resolve an otherwise ambiguous wide bubble")
+let bubbleDate = LiveOCRObservation(text: "昨天 17:11", confidence: 0.9,
+    box: CGRect(x: 0.36, y: 0.6, width: 0.28, height: 0.025),
+    bubble: .init(minX: 0.3, maxX: 0.855, isGreen: true, avatarSide: .right))
+expect(LiveChatBlockGrouper.group([bubbleDate]).first?.role == .me, "a date inside a verified message bubble is not a system row")
+var nearOther = insetOther
+nearOther = LiveOCRObservation(text: nearOther.text, confidence: nearOther.confidence,
+    box: CGRect(x: 0.36, y: 0.443, width: 0.26, height: 0.025), bubble: nearOther.bubble)
+expect(!LiveChatBlockGrouper.canMerge(nearOther, insetMe), "opposite bubble roles cannot merge when text boxes overlap")
+var pixelSystem = LiveChatSystem()
+pixelSystem.reset(generation: 1)
+_ = pixelSystem.ingest(observations: [insetOther, insetMe], timestamp: t0, generation: 1)
+let stabilizedPixels = pixelSystem.ingest(observations: [insetOther, insetMe], timestamp: t0.addingTimeInterval(1), generation: 1)
+expect(stabilizedPixels.messages.map(\.role) == [.other, .me], "pixel roles use existing two-frame stabilizer and timeline")
 print("LiveChatRecognitionCheck passed (\(checks) assertions; pure logic only; no ScreenCaptureKit, no network)")

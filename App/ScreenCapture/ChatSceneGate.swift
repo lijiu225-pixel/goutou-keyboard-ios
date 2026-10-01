@@ -112,6 +112,9 @@ struct ChatSceneEvidence: Equatable {
     /// 诊断用的综合置信度 0～1
     var confidence: CGFloat = 0
     var hasNonChatNavigation = false
+    /// A page title together with at least two independent fixed UI controls.
+    /// A contact name or one occurrence of a UI word is never enough.
+    var hasNonChatControls = false
     var isCaptureDiagnosticsPage = false
 
     var hasNavigationBar: Bool { navigationLineCount > 0 }
@@ -127,6 +130,7 @@ struct ChatSceneEvidence: Equatable {
             "right=\(rightMessageCount)",
             "center=\(centeredMessageCount)",
             "tab=\(tabBarLineCount)",
+            "nonChatControls=\(hasNonChatControls ? "yes" : "no")",
         ]
         if let inputTopRatio { parts.append("inputTop=\(String(format: "%.2f", Double(inputTopRatio)))") }
         return parts.joined(separator: " ")
@@ -169,6 +173,18 @@ enum ChatSceneDetector {
         let navigationLabels = Set(navigation.map { $0.text.trimmed })
         evidence.hasNonChatNavigation = !navigationLabels.intersection(["朋友圈", "设置", "桌面", "联系人列表", "微信首页", "短视频"]).isEmpty
             || navigationLabels.isSuperset(of: ["关注", "推荐"])
+        let bodyLabels = Set(observations.filter {
+            $0.box.minY >= config.navigationBandEnd && $0.box.maxY < 0.86
+        }.map { LiveChatText.normalize($0.text) })
+        let fixedControls: [String: Set<String>] = [
+            "设置": ["账号与安全", "消息通知", "通用", "帮助与反馈", "关于微信", "朋友权限", "个人信息与权限"],
+            "搜索": ["联系人", "聊天记录", "公众号", "小程序", "朋友圈", "搜一搜"],
+            "通讯录": ["新的朋友", "群聊", "标签", "公众号"],
+            "发现": ["朋友圈", "视频号", "扫一扫", "小程序", "直播"],
+        ]
+        evidence.hasNonChatControls = fixedControls.contains { title, controls in
+            navigationLabels.contains(title) && bodyLabels.intersection(controls).count >= 2
+        }
         evidence.topBarFingerprint = titleFingerprint(observations, config: config)
         // Review labels may be deliberately excluded from contact fingerprints.
         // Inspect the actual navigation text, so returning to our editor cannot
@@ -260,6 +276,7 @@ enum ChatSceneDetector {
         result.inputTopRatio = result.inputTopRatio ?? accurate.inputTopRatio
         result.tabBarLineCount = max(result.tabBarLineCount, accurate.tabBarLineCount)
         result.hasNonChatNavigation = result.hasNonChatNavigation || accurate.hasNonChatNavigation
+        result.hasNonChatControls = result.hasNonChatControls || accurate.hasNonChatControls
         result.isCaptureDiagnosticsPage = result.isCaptureDiagnosticsPage || accurate.isCaptureDiagnosticsPage
         if let title = titleFingerprint(observations, config: config) {
             result.topBarFingerprint = title
@@ -278,6 +295,7 @@ enum ChatSceneDetector {
     /// 微信底部 tab 命中两个以上的一律判非聊天。
     static func isChatScene(_ evidence: ChatSceneEvidence, config: ChatSceneGateConfiguration = .default) -> Bool {
         guard !evidence.isCaptureDiagnosticsPage else { return false }
+        guard !evidence.hasNonChatControls else { return false }
         guard evidence.tabBarLineCount < config.tabBarDisqualifyCount else { return false }
         guard evidence.messageRowCount >= 1 else { return false }
         let inputBacked = evidence.hasInputBar
@@ -291,6 +309,7 @@ enum ChatSceneDetector {
     /// Missing input/title/message evidence is uncertainty, not an exit signal.
     static func isClearlyNonChatScene(_ evidence: ChatSceneEvidence, config: ChatSceneGateConfiguration = .default) -> Bool {
         if evidence.isCaptureDiagnosticsPage { return true }
+        if evidence.hasNonChatControls { return true }
         if evidence.tabBarLineCount >= config.tabBarDisqualifyCount { return true }
         guard !isChatScene(evidence, config: config), !evidence.hasInputBar else { return false }
         return evidence.hasNonChatNavigation
@@ -299,6 +318,7 @@ enum ChatSceneDetector {
     /// 诊断用的综合置信度：只做展示与调参参考，判定本身走 `isChatScene`。
     static func confidence(_ evidence: ChatSceneEvidence, config: ChatSceneGateConfiguration = .default) -> CGFloat {
         guard evidence.tabBarLineCount < config.tabBarDisqualifyCount else { return 0 }
+        guard !evidence.hasNonChatControls else { return 0 }
         var score: CGFloat = 0
         if evidence.hasNavigationBar { score += 0.25 }
         if evidence.hasInputBar { score += 0.30 }

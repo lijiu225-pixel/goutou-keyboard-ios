@@ -682,4 +682,25 @@ let falseInput = CGRect(x: 0.11, y: 0.91, width: 0.69, height: 0.04)
 let settingsEvidence = ChatSceneDetector.probeEvidence(observations: settingsControls, rectangles: [falseInput])
 expect(!ChatSceneDetector.isChatScene(settingsEvidence), "settings controls cannot become chat through a wide input rectangle")
 expect(ChatSceneDetector.isClearlyNonChatScene(settingsEvidence), "confirmed controls stop expensive OCR before submission")
+expect(settingsEvidence.confidence == 0, "explicit non-chat controls cannot claim chat confidence")
+expect(settingsEvidence.diagnostics.contains("nonChatControls=yes"), "diagnostics expose the decision without body text")
+var controlsPipeline = LiveChatScenePipeline()
+for _ in 0..<3 {
+    controlsPipeline.detect(settingsEvidence)
+    expect(!controlsPipeline.shouldRunOCR && !controlsPipeline.allowsFullRecognition, "non-chat controls immediately hold recognition")
+}
+expect(controlsPipeline.verdict == .inactive, "non-chat controls preserve exit hysteresis")
+let searchControls = [observation("搜索", x: 0.42, y: 0.06, width: 0.16),
+    observation("联系人", x: 0.1, y: 0.22, width: 0.2),
+    observation("聊天记录", x: 0.1, y: 0.32, width: 0.2)]
+expect(ChatSceneDetector.isClearlyNonChatScene(ChatSceneDetector.probeEvidence(observations: searchControls, rectangles: [falseInput])),
+       "search controls cannot become a conversation through a wide search field")
+let contactNamedSettings = chatScreen(top: "设置", extra: [observation("通用", x: 0.05, y: 0.65, width: 0.2)])
+expect(ChatSceneDetector.isChatScene(ChatSceneDetector.probeEvidence(observations: contactNamedSettings, rectangles: [])),
+       "contact name and only one menu word cannot disqualify a real chat")
+let uiWordsInBody = chatScreen(extra: [observation("打开账号与安全看看消息通知", x: 0.05, y: 0.65, width: 0.65)])
+expect(ChatSceneDetector.isChatScene(ChatSceneDetector.probeEvidence(observations: uiWordsInBody, rectangles: [])),
+       "UI words inside a normal sentence never match whole fixed controls")
+let mergedControls = ChatSceneDetector.refining(ChatSceneEvidence(), with: settingsControls)
+expect(ChatSceneDetector.isClearlyNonChatScene(mergedControls), "accurate refinement preserves non-chat evidence")
 print("ChatScreenDetectionCheck passed (\(checks) assertions; pure logic only; synthetic screens; no network)")

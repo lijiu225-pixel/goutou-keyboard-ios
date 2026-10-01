@@ -1,12 +1,52 @@
 import CoreGraphics
 import Foundation
 
-/// 角色判断：**只看文字块的水平几何**，不研究气泡颜色 / 头像 / 微信内部结构。
+/// 优先使用经过扫描校验的气泡边缘和底色；没有像素证据时保留文字几何判断。
 ///
 /// 长消息可能横跨屏幕中线，所以不能只看 centerX：这里比较左右两侧的**边距**
 /// （leftGap / rightGap）判断到底是贴着哪一边。
 /// 两边都贴（几乎铺满整行）或两边都不贴 → unknown：宁可判不出来，也别错误归属。
 enum LiveChatRoleClassifier {
+
+    static func classify(_ observation: LiveOCRObservation,
+                         config: LiveChatGeometryConfiguration = .default) -> LiveChatRole {
+        guard let bubble = observation.bubble,
+              bubble.minX.isFinite, bubble.maxX.isFinite,
+              bubble.minX >= 0, bubble.maxX <= 1, bubble.maxX - bubble.minX >= 0.03,
+              bubble.minX <= observation.box.minX + 0.012,
+              bubble.maxX >= observation.box.maxX - 0.012 else {
+            return classify(box: observation.box, config: config)
+        }
+        let span = CGRect(x: bubble.minX, y: observation.box.minY,
+                          width: bubble.maxX - bubble.minX, height: observation.box.height)
+        let geometry = classify(box: span, config: config)
+        let avatar: LiveChatRole?
+        switch bubble.avatarSide {
+        case .left: avatar = .other
+        case .right: avatar = .me
+        case .none: avatar = nil
+        }
+        // Verified cues may disagree (media or a custom theme): hold for review.
+        if let avatar = avatar, (geometry == .me || geometry == .other), avatar != geometry { return .unknown }
+        if bubble.isGreen {
+            if geometry == .other || avatar == .other { return .unknown }
+            return .me
+        }
+        if let avatar = avatar { return avatar }
+        return geometry == .me || geometry == .other ? geometry : .unknown
+    }
+
+    static func classify(block: [LiveOCRObservation], box: CGRect,
+                         config: LiveChatGeometryConfiguration = .default) -> LiveChatRole {
+        guard block.contains(where: { $0.bubble != nil }) else { return classify(box: box, config: config) }
+        if block.contains(where: {
+            guard let bubble = $0.bubble else { return false }
+            return (bubble.isGreen || bubble.avatarSide != .none) && classify($0, config: config) == .unknown
+        }) { return .unknown }
+        let roles = block.map { classify($0, config: config) }.filter { $0 == .me || $0 == .other }
+        guard let first = roles.first, roles.allSatisfy({ $0 == first }) else { return .unknown }
+        return first
+    }
 
     /// Require centered placement AND a whole system label. Mentioning a date in
     /// a speaker's bubble must not remove that message from the conversation.

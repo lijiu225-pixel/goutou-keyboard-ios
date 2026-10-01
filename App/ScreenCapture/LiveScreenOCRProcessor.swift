@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreImage
 import CoreVideo
 import Foundation
 import ImageIO
@@ -7,9 +8,10 @@ import Vision
 /// 阶段 12A：把一帧屏幕画面在本机 OCR 成文字。
 ///
 /// 设置与截图 OCR 保持一致（`.accurate` + 语言纠正 + 简体中文/英文），
-/// 但**不碰**截图那条链路的气泡 / 左右归属 / 版式算法——这里只要「屏幕 → 文字」。
+/// 复用截图链路的气泡扫描，附加轻量角色证据；不改变截图识别或 Vision 识字参数。
 /// 不生成图片文件、不落盘、不上传。
 enum LiveScreenOCRProcessor {
+    private static let pixelContext = CIContext(options: [.cacheIntermediates: false])
 
     /// 一行识别结果：文字 + Vision 给的归一化位置（原点在左下角，y 越大越靠上）。
     struct Line: Equatable {
@@ -59,6 +61,37 @@ enum LiveScreenOCRProcessor {
                 boundingBox: observation.boundingBox
             )
         }
-        return LiveOCRSnapshot(timestamp: now, strings: readingOrder(lines), observations: observations)
+        let enriched = attachBubbleEvidence(to: observations, pixelBuffer: pixelBuffer, orientation: orientation)
+        return LiveOCRSnapshot(timestamp: now, strings: readingOrder(lines), observations: enriched)
+    }
+
+    /// Only a small, oriented analysis image exists temporarily. The original frame is not copied or retained.
+    static func attachBubbleEvidence(to observations: [LiveOCRObservation], pixelBuffer: CVPixelBuffer,
+                                     orientation: CGImagePropertyOrientation) -> [LiveOCRObservation] {
+        guard !observations.isEmpty, observations.count <= 200 else { return observations }
+        let image = CIImage(cvPixelBuffer: pixelBuffer).oriented(orientation)
+        guard image.extent.width > 0, image.extent.height > 0 else { return observations }
+        let scale = min(1, min(384 / image.extent.width, 1536 / image.extent.height))
+        let small = image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        guard let cgImage = pixelContext.createCGImage(small, from: small.extent),
+              let scan = ChatOCRScanContext.make(from: cgImage) else { return observations }
+        return observations.map { observation in
+            // Header and input/keyboard pixels are not speaker evidence.
+            guard observation.box.minY >= 0.11, observation.box.maxY <= 0.94,
+                  let evidence = ChatBubbleScanner.evidence(
+                    forText: ChatLayoutBox(x: Double(observation.box.minX), y: Double(observation.box.minY),
+                        width: Double(observation.box.width), height: Double(observation.box.height)),
+                    rows: scan.rows, background: scan.background) else { return observation }
+            let avatar: LiveChatBubbleHint.AvatarSide
+            switch evidence.avatarSide {
+            case .left: avatar = .left
+            case .right: avatar = .right
+            case .none: avatar = .none
+            }
+            var enriched = observation
+            enriched.bubble = LiveChatBubbleHint(minX: CGFloat(evidence.span.minX), maxX: CGFloat(evidence.span.maxX),
+                isGreen: evidence.span.tone == .greenish, avatarSide: avatar)
+            return enriched
+        }
     }
 }

@@ -12,6 +12,8 @@ struct LiveOCRObservation: Equatable {
     let confidence: Double
     /// 左上角原点、归一化的包围盒。
     let box: CGRect
+    /// Small, value-only pixel evidence. Never retain a frame or image in the timeline.
+    var bubble: LiveChatBubbleHint? = nil
 
     /// Vision 的 `boundingBox` 原点是左下角：这里换算成左上角原点。
     static func fromVision(text: String, confidence: Double, boundingBox: CGRect) -> LiveOCRObservation {
@@ -26,4 +28,12 @@ struct LiveOCRObservation: Equatable {
             )
         )
     }
+}
+
+struct LiveChatBubbleHint: Equatable {
+    enum AvatarSide: Equatable { case left, right, none }
+    let minX: CGFloat
+    let maxX: CGFloat
+    let isGreen: Bool
+    var avatarSide: AvatarSide = .none
 }

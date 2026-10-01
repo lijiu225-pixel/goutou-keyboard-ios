@@ -46,6 +46,8 @@ struct LiveScreenCaptureView: View {
                     LabeledContent("联系人归属已确认", value: diagnostics.hasConfirmedTitle ? "是" : "否")
                     LabeledContent("允许消息提交", value: diagnostics.allowsSubmission ? "是" : "否")
                     LabeledContent("完整 OCR 行数", value: "\(diagnostics.rawObservationCount)")
+                    LabeledContent("气泡像素证据", value: "\(diagnostics.bubbleEvidenceCount)")
+                    LabeledContent("非聊天控件", value: diagnostics.hasNonChatControls ? "是" : "否")
                     LabeledContent("暂存识别帧", value: "\(diagnostics.bufferedFrames)")
                     LabeledContent("聊天代际", value: "\(diagnostics.chatGeneration)")
                     if let reason = diagnostics.recognitionHoldReason {
@@ -166,7 +168,7 @@ struct LiveScreenCaptureView: View {
             } header: {
                 Text("时间线（按识别顺序）")
             } footer: {
-                Text("「未确定」表示从几何上看不出归属，它不会被自动算成「我」或「对方」。")
+                Text("「未确定」表示位置和气泡证据不足或存在冲突，它不会被自动算成「我」或「对方」。")
             }
 
             if case .unsupported = manager.model.state {

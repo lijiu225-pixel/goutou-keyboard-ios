@@ -34,6 +34,8 @@ struct LiveSceneDiagnostics: Equatable {
     var bufferedFrames: Int
     var chatGeneration: Int
     var recognitionHoldReason: String?
+    var hasNonChatControls = false
+    var bubbleEvidenceCount = 0
 }
 
 struct LiveChatScenePipeline {
@@ -54,6 +56,7 @@ struct LiveChatScenePipeline {
     }
     private var pendingFrames: [PendingFrame] = []
     private var rawObservationCount = 0
+    private var bubbleEvidenceCount = 0
     var pendingFrameCount: Int { pendingFrames.count }
     var pendingObservationCount: Int { pendingFrames.reduce(0) { $0 + $1.observations.count } }
     var pendingCharacterCount: Int { pendingFrames.reduce(0) { total, frame in
@@ -85,7 +88,9 @@ struct LiveChatScenePipeline {
             rawObservationCount: rawObservationCount,
             bufferedFrames: pendingFrameCount,
             chatGeneration: chatGeneration,
-            recognitionHoldReason: recognitionHoldReason
+            recognitionHoldReason: recognitionHoldReason,
+            hasNonChatControls: evidence.hasNonChatControls,
+            bubbleEvidenceCount: bubbleEvidenceCount
         )
     }
 
@@ -97,6 +102,7 @@ struct LiveChatScenePipeline {
         startsNewSession = false
         discardPendingRecognition()
         rawObservationCount = 0
+        bubbleEvidenceCount = 0
         lastEvidence = nil
         newChat()
     }
@@ -119,6 +125,7 @@ struct LiveChatScenePipeline {
 
     mutating func ingest(_ observations: [LiveOCRObservation], at now: Date) -> LiveChatSnapshot {
         rawObservationCount = observations.count
+        bubbleEvidenceCount = observations.filter { $0.bubble != nil }.count
         guard shouldRunOCR else { return system.snapshot() }
         if !allowsFullRecognition, gate.hasConfirmedTitle,
            let evidence = lastEvidence, evidence.topBarFingerprint == nil,

@@ -159,5 +159,27 @@ for dark in [false, true] {
     let replies = LiveChatBlockGrouper.group(observations)
     expect(replies.map(\.text) == ["收到了", "好呀"], "real OCR reads both inset samples")
     expect(replies.map(\.role) == [.other, .me], "bubble pixels recover roles when short text is away from both anchors")
+    expect(observations.allSatisfy { $0.bubble != nil }, "both themes produce verified bubble evidence from actual pixels")
 }
+// Rotate raw pixels independently of Vision/CoreImage, then supply the matching orientation.
+let orientedSource = renderTenBubbles(dark: true, insetSamples: true)
+let width = CVPixelBufferGetWidth(orientedSource), height = CVPixelBufferGetHeight(orientedSource)
+var rotated: CVPixelBuffer?
+precondition(CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, nil, &rotated) == kCVReturnSuccess)
+let rotatedBuffer = rotated!
+CVPixelBufferLockBaseAddress(orientedSource, .readOnly)
+CVPixelBufferLockBaseAddress(rotatedBuffer, [])
+let source = CVPixelBufferGetBaseAddress(orientedSource)!.assumingMemoryBound(to: UInt32.self)
+let dest = CVPixelBufferGetBaseAddress(rotatedBuffer)!.assumingMemoryBound(to: UInt32.self)
+let sourceStride = CVPixelBufferGetBytesPerRow(orientedSource) / 4
+let destStride = CVPixelBufferGetBytesPerRow(rotatedBuffer) / 4
+for y in 0..<height {
+    for x in 0..<width { dest[y * destStride + x] = source[(height - 1 - y) * sourceStride + width - 1 - x] }
+}
+CVPixelBufferUnlockBaseAddress(rotatedBuffer, [])
+CVPixelBufferUnlockBaseAddress(orientedSource, .readOnly)
+let rotatedOCR = try LiveScreenOCRProcessor.recognize(pixelBuffer: rotatedBuffer, orientation: .down)
+let rotatedMessages = rotatedOCR.observations.filter { $0.box.midY > 0.29 && $0.box.midY < 0.6 }
+expect(LiveChatBlockGrouper.group(rotatedMessages).map(\.role) == [.other, .me], "pixel and Vision coordinates agree after orientation correction")
+expect(rotatedMessages.allSatisfy { $0.bubble != nil }, "orientation correction retains bubble scan evidence")
 print("LiveChatVisionCheck passed (\(checks) assertions; anonymous device proportions; actual live Vision path)")

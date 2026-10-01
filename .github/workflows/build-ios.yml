@@ -145,6 +145,10 @@ jobs:
             App/ScreenCapture/LiveOCRSnapshot.swift \
             App/ScreenCapture/LiveScreenCaptureState.swift \
             App/ScreenCapture/LiveScreenOCRProcessor.swift \
+            Shared/GoutouChatBubbleScanner.swift \
+            App/ChatLayoutParser.swift \
+            Shared/GoutouChatOCRGeometry.swift \
+            App/ChatOCRService.swift \
             tools/LiveScreenCaptureCheck/main.swift \
             -o "$RUNNER_TEMP/livescreencapturecheck"
           "$RUNNER_TEMP/livescreencapturecheck"
@@ -745,6 +749,10 @@ jobs:
             App/ScreenCapture/LiveOCRSnapshot.swift \
             App/ScreenCapture/LiveScreenCaptureState.swift \
             App/ScreenCapture/LiveScreenOCRProcessor.swift \
+            Shared/GoutouChatBubbleScanner.swift \
+            App/ChatLayoutParser.swift \
+            Shared/GoutouChatOCRGeometry.swift \
+            App/ChatOCRService.swift \
             App/ScreenCapture/LiveChatGeometryConfiguration.swift \
             App/ScreenCapture/LiveChatCandidate.swift \
             App/ScreenCapture/LiveChatRoleClassifier.swift \
