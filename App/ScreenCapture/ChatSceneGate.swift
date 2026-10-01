@@ -81,6 +81,10 @@ struct ChatSceneGateConfiguration: Equatable {
     var requiredInactiveFrames = 3
     /// 顶部文字连续变化多少帧后认为「换了聊天会话」
     var requiredTitleChangeFrames = 2
+    /// Unconfirmed OCR stays bounded in memory, never in the shared store.
+    var maximumPendingFrames = 8
+    var maximumPendingObservations = 200
+    var maximumPendingCharacters = 16_384
 
     static let `default` = ChatSceneGateConfiguration()
 }
@@ -104,6 +108,8 @@ struct ChatSceneEvidence: Equatable {
     var inputTopRatio: CGFloat?
     /// 诊断用的综合置信度 0～1
     var confidence: CGFloat = 0
+    var wideBodyRowCount = 0
+    var hasNonChatNavigation = false
 
     var hasNavigationBar: Bool { navigationLineCount > 0 }
 
@@ -157,6 +163,9 @@ enum ChatSceneDetector {
                 && !LiveChatText.normalize($0.text).isEmpty
         }.sorted { $0.box.minY < $1.box.minY }
         evidence.navigationLineCount = navigation.count
+        let navigationLabels = Set(navigation.map { $0.text.trimmed })
+        evidence.hasNonChatNavigation = !navigationLabels.intersection(["朋友圈", "设置", "桌面", "联系人列表", "短视频"]).isEmpty
+            || navigationLabels.isSuperset(of: ["关注", "推荐"])
         evidence.topBarFingerprint = navigation.isEmpty ? nil : navigation.map {
             LiveChatText.normalize($0.text)
         }.joined(separator: "|")
@@ -185,12 +194,16 @@ enum ChatSceneDetector {
         let candidateBoxes = candidates.filter { $0.role != .system }.map(\.box)
         let body = observations.map(\.box) + candidateBoxes + rectangles
         var rows: [CGFloat] = []
+        var wideRows: [CGFloat] = []
         for box in body {
             guard box.minY >= config.bodyTopRatio, box.maxY <= bodyLowerBound,
                   box.width >= config.minimumBlockWidth, box.width <= config.maximumBlockWidth,
                   box.height >= config.minimumBlockHeight else { continue }
             // 一个矩形套着一个文字框时不能算两条消息：同一纵向位置只记一次
             if !rows.contains(where: { abs($0 - box.midY) < 0.025 }) { rows.append(box.midY) }
+            if box.width >= 0.70, !wideRows.contains(where: { abs($0 - box.midY) < 0.025 }) {
+                wideRows.append(box.midY)
+            }
             if box.midX <= config.leftAnchorMidX {
                 evidence.leftMessageCount += 1
             } else if box.midX >= config.rightAnchorMidX, box.width >= config.minimumRightBlockWidth {
@@ -200,6 +213,7 @@ enum ChatSceneDetector {
             }
         }
         evidence.messageRowCount = rows.count
+        evidence.wideBodyRowCount = wideRows.count
         evidence.confidence = confidence(evidence, config: config)
         return evidence
     }
@@ -220,6 +234,13 @@ enum ChatSceneDetector {
             && evidence.rightMessageCount > 0
             && evidence.messageRowCount >= config.minimumTwoSidedBlocks
         return inputBacked || bubbleBacked
+    }
+
+    /// Missing input/title/message evidence is uncertainty, not an exit signal.
+    static func isClearlyNonChatScene(_ evidence: ChatSceneEvidence, config: ChatSceneGateConfiguration = .default) -> Bool {
+        if evidence.tabBarLineCount >= config.tabBarDisqualifyCount { return true }
+        guard !isChatScene(evidence, config: config), !evidence.hasInputBar else { return false }
+        return evidence.hasNonChatNavigation || evidence.wideBodyRowCount >= 2
     }
 
     /// 诊断用的综合置信度：只做展示与调参参考，判定本身走 `isChatScene`。
@@ -255,10 +276,19 @@ struct ChatSceneGate {
     mutating func update(
         isChatFrame: Bool,
         titleFingerprint: String? = nil,
+        isClearlyNonChatFrame: Bool = true,
         config: ChatSceneGateConfiguration = .default
     ) -> (verdict: ChatSceneVerdict, startsNewSession: Bool) {
         allowsSubmission = false
         if !isChatFrame {
+            if !isClearlyNonChatFrame {
+                activeStreak = 0
+                inactiveStreak = 0
+                titleChangeStreak = 0
+                pendingTitle = nil
+                verdict = stableVerdict
+                return (verdict, false)
+            }
             if stableVerdict == .activeChat { needsNewSessionOnResume = true }
             activeStreak = 0
             inactiveStreak = min(inactiveStreak + 1, config.requiredInactiveFrames)
@@ -282,7 +312,7 @@ struct ChatSceneGate {
             observedTitle = titleFingerprint
             needsNewSessionOnResume = false
             titleChangeStreak = 0
-            allowsSubmission = true
+            allowsSubmission = titleFingerprint != nil
             return (verdict, true)
         }
         verdict = .activeChat
@@ -291,12 +321,11 @@ struct ChatSceneGate {
             needsNewSessionOnResume = false
             observedTitle = titleFingerprint
             titleChangeStreak = 0
-            allowsSubmission = true
+            allowsSubmission = titleFingerprint != nil
             return (verdict, true)
         }
         if titleFingerprint != observedTitle {
-            // 标题读不到（nil）不算「换了聊天」：灵动岛展开、通知横幅都可能挡住导航栏，
-            // 这时候既不能隔离这一帧，也不能重开 timeline，否则一被遮挡就什么都识别不了。
+            // Missing title preserves display/OCR but never authorizes timeline submission.
             if let titleFingerprint {
                 // Do not overwrite the confirmed title on the first differing frame.
                 if pendingTitle == titleFingerprint { titleChangeStreak += 1 }
@@ -312,7 +341,7 @@ struct ChatSceneGate {
         }
         titleChangeStreak = 0
         pendingTitle = nil
-        allowsSubmission = true
+        allowsSubmission = titleFingerprint != nil
         return (verdict, false)
     }
 

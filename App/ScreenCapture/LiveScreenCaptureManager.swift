@@ -174,7 +174,8 @@ final class LiveScreenCaptureManager: ObservableObject {
         autoSyncState = .disabled
         pendingFrame = nil
         let sync = autoSync
-        ocrQueue.async { sync.stop() }      // 取消排队 + 关闭开关；已共享成功的聊天不动
+        let engine = chatEngine
+        ocrQueue.async { sync.stop(); engine.pipeline.discardPendingRecognition() }
         #if canImport(ScreenCaptureKit)
         if #available(iOS 27.0, *) {
             let current = stream as? SCStream
@@ -323,7 +324,8 @@ final class LiveScreenCaptureManager: ObservableObject {
         pendingFrame = nil
         captureFence.invalidate()
         let sync = autoSync
-        ocrQueue.async { sync.stop() }
+        let engine = chatEngine
+        ocrQueue.async { sync.stop(); engine.pipeline.discardPendingRecognition() }
         model.captureDidStopWithError(reason)
         autoSyncState = .disabled
         noteCaptureActivityStopped()   // 系统结束了共享：把灵动岛状态也收掉
@@ -371,21 +373,28 @@ final class LiveScreenCaptureManager: ObservableObject {
                 guard fence.isCurrent(generation) else { return }
                 engine.pipeline.detect(evidence)
                 if engine.pipeline.startsNewSession { sync.beginChatGeneration(engine.pipeline.chatGeneration) }
-                if engine.pipeline.allowsFullRecognition {
+                if !engine.pipeline.allowsFullRecognition { sync.noteLeftChatScene() }
+                if engine.pipeline.shouldRunOCR {
                     let snapshot = try LiveScreenOCRProcessor.recognize(pixelBuffer: pixelBuffer,
                         orientation: orientation, languages: languages)
                     guard fence.isCurrent(generation) else { return }
                     let before = engine.pipeline.chatGeneration
                     let chat = engine.pipeline.ingest(snapshot.observations, at: snapshot.timestamp)
                     if engine.pipeline.chatGeneration != before { sync.beginChatGeneration(engine.pipeline.chatGeneration) }
-                    sync.noteTimeline(chat.messages, generation: engine.pipeline.chatGeneration)
-                    result = .success(snapshot)
+                    if engine.pipeline.allowsFullRecognition {
+                        sync.noteTimeline(chat.messages, generation: engine.pipeline.chatGeneration)
+                        result = .success(snapshot)
+                    } else {
+                        // Unconfirmed OCR belongs only to the bounded in-memory buffer.
+                        result = .success(LiveOCRSnapshot(timestamp: snapshot.timestamp, strings: [], observations: []))
+                    }
                 } else {
                     sync.noteLeftChatScene()
                     result = .success(LiveOCRSnapshot(timestamp: Date(), strings: [], observations: []))
                 }
             } catch {
                 sync.noteLeftChatScene()
+                engine.pipeline.discardPendingRecognition()
                 result = .failure(LiveOCRFailure("这一帧识别失败"))
             }
             let chatSnapshot = engine.pipeline.snapshot()

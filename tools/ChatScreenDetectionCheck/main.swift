@@ -462,5 +462,96 @@ _ = hiddenTitle.ingest(coveredOther, at: t0.addingTimeInterval(4))
 expect(hiddenTitle.verdict == .activeChat, "covered title preserves recognition display")
 expect(!hiddenTitle.allowsFullRecognition, "covered title quarantines messages instead of authorizing submission")
 expect(hiddenTitle.snapshot().messages.count == hiddenTitleCount, "unconfirmed frames leave the official timeline intact")
+expect(hiddenTitle.shouldRunOCR && hiddenTitle.pendingFrameCount == 1, "covered title continues OCR into memory only")
+
+// Long weak-evidence runs must not turn missing features into a non-chat verdict.
+let retainedGeneration = hiddenTitle.chatGeneration
+let weakEvidence = ChatSceneDetector.probeEvidence(observations: [], rectangles: [])
+for frame in 0..<20 {
+    hiddenTitle.detect(weakEvidence)
+    _ = hiddenTitle.ingest(coveredOther, at: t0.addingTimeInterval(Double(frame + 5)))
+}
+expect(hiddenTitle.verdict == .activeChat && hiddenTitle.exitStreak == 0, "weak evidence never accumulates exit frames")
+expect(hiddenTitle.shouldRunOCR && !hiddenTitle.allowsFullRecognition, "weak evidence permits OCR but forbids submission")
+expect(hiddenTitle.chatGeneration == retainedGeneration, "weak evidence does not rotate contact generation")
+expect(hiddenTitle.pendingFrameCount == config.maximumPendingFrames, "pending frame capacity evicts oldest frames")
+expect(hiddenTitle.pendingObservationCount <= config.maximumPendingObservations, "pending observation capacity is bounded")
+expect(hiddenTitle.pendingCharacterCount <= config.maximumPendingCharacters, "pending text capacity is bounded")
+hiddenTitle.detect(ChatSceneDetector.probeEvidence(observations: chatScreen(), rectangles: []))
+_ = hiddenTitle.ingest(chatScreen(), at: t0.addingTimeInterval(30))
+expect(hiddenTitle.allowsFullRecognition && hiddenTitle.pendingFrameCount == 0, "restored title drains corroborated pending frames")
+expect(hiddenTitle.chatGeneration == retainedGeneration, "same-chat recovery preserves timeline generation")
+
+// A message seen in two obscured frames is recovered only with two confirmed anchors.
+var recovery = LiveChatScenePipeline()
+let anchors = chatScreen(mine: 1, theirs: 2)
+for frame in 0..<3 {
+    recovery.detect(ChatSceneDetector.probeEvidence(observations: anchors, rectangles: []))
+    _ = recovery.ingest(anchors, at: t0.addingTimeInterval(Double(frame)))
+}
+let earlier = observation("之前短暂可见的合成消息", x: 0.05, y: 0.174, width: 0.34, height: 0.012)
+let obscured = anchors.filter { $0.box.midY > 0.17 } + [earlier]
+for frame in 0..<2 {
+    recovery.detect(ChatSceneDetector.probeEvidence(observations: obscured, rectangles: []))
+    _ = recovery.ingest(obscured, at: t0.addingTimeInterval(Double(frame + 3)))
+}
+expect(!recovery.snapshot().messages.contains { $0.text == earlier.text }, "pending content is absent from official messages")
+recovery.detect(ChatSceneDetector.probeEvidence(observations: anchors, rectangles: []))
+_ = recovery.ingest(anchors, at: t0.addingTimeInterval(6))
+expect(recovery.snapshot().messages.contains { $0.text == earlier.text }, "two-frame stable pending message is recovered through confirmed anchors")
+
+// Explicit non-chat immediately cancels OCR/submission/cache, with display hysteresis.
+let home = weChatListScreen()
+recovery.detect(weakEvidence)
+_ = recovery.ingest(obscured, at: t0.addingTimeInterval(7))
+expect(recovery.pendingFrameCount > 0, "pending data exists before explicit departure")
+for _ in 0..<config.requiredInactiveFrames {
+    recovery.detect(ChatSceneDetector.probeEvidence(observations: home.observations, rectangles: home.rectangles))
+    _ = recovery.ingest(home.observations, at: t0.addingTimeInterval(8))
+    expect(!recovery.shouldRunOCR && !recovery.allowsFullRecognition, "non-chat cannot submit during display hysteresis")
+    expect(recovery.pendingFrameCount == 0, "explicit departure clears pending messages immediately")
+}
+expect(recovery.verdict == .inactive, "continuous explicit departure pauses recognition")
+
+// Returning after a title-covered contact switch must discard the old pending content.
+var changed = LiveChatScenePipeline()
+for frame in 0..<3 {
+    changed.detect(ChatSceneDetector.probeEvidence(observations: anchors, rectangles: []))
+    _ = changed.ingest(anchors, at: t0.addingTimeInterval(Double(frame)))
+}
+let changedGeneration = changed.chatGeneration
+changed.detect(weakEvidence)
+_ = changed.ingest(obscured, at: t0.addingTimeInterval(4))
+let otherContact = chatScreen(top: "联系人乙").map { item in
+    LiveOCRObservation(text: item.text + "乙", confidence: item.confidence, box: item.box)
+}
+for frame in 0..<3 {
+    changed.detect(ChatSceneDetector.probeEvidence(observations: otherContact, rectangles: []))
+    _ = changed.ingest(otherContact, at: t0.addingTimeInterval(Double(frame + 5)))
+}
+expect(changed.chatGeneration > changedGeneration && changed.pendingFrameCount == 0, "confirmed contact change rotates generation and drops pending data")
+expect(!changed.snapshot().messages.contains { $0.text == earlier.text }, "old pending message never enters another contact")
+expect(changed.snapshot().messages.allSatisfy { $0.text.hasSuffix("乙") }, "new timeline contains only the new contact")
+
+// Unmatched and oversized pending frames must never be recovered.
+changed.detect(weakEvidence)
+_ = changed.ingest([observation(String(repeating: "长", count: config.maximumPendingCharacters + 1),
+    x: 0.05, y: 0.3, width: 0.34)], at: t0.addingTimeInterval(10))
+expect(changed.pendingFrameCount == 0, "oversized pending frame is rejected whole")
+let unrelated = [observation("完全无关合成页面第一行", x: 0.05, y: 0.2, width: 0.34),
+                 observation("完全无关合成页面第二行", x: 0.62, y: 0.4, width: 0.32)]
+for frame in 0..<2 {
+    changed.detect(weakEvidence)
+    _ = changed.ingest(unrelated, at: t0.addingTimeInterval(Double(frame + 11)))
+}
+changed.detect(ChatSceneDetector.probeEvidence(observations: otherContact, rectangles: []))
+_ = changed.ingest(otherContact, at: t0.addingTimeInterval(13))
+expect(!changed.snapshot().messages.contains { $0.text.contains("完全无关") }, "unmatched pending content is discarded")
+changed.detect(weakEvidence)
+_ = changed.ingest(unrelated, at: t0.addingTimeInterval(14))
+changed.discardPendingRecognition()
+expect(changed.pendingFrameCount == 0, "capture stop discards pending recognition")
+changed.reset()
+expect(changed.pendingFrameCount == 0 && !changed.shouldRunOCR, "new capture resets pending state and OCR permission")
 
 print("ChatScreenDetectionCheck passed (\(checks) assertions; pure logic only; synthetic screens; no network)")
