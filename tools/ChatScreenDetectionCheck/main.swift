@@ -224,12 +224,12 @@ _ = stability.ingest(chatScreen(), at: t0.addingTimeInterval(0.8))
 expect(stability.gate.verdict == .activeChat, "9. 先进入聊天")
 
 let beforeAnomaly = stability.timelineCount
-_ = stability.ingest(nonChatScreen("滚动中的一帧"), at: t0.addingTimeInterval(1.6))
+_ = stability.ingest(nonChatScreen("设置"), at: t0.addingTimeInterval(1.6))
 expect(stability.gate.verdict == .activeChat, "9b. 单帧异常（滚动 / 动画）不会退出聊天")
-_ = stability.ingest(nonChatScreen("动画中的一帧"), at: t0.addingTimeInterval(2.4))
+_ = stability.ingest(nonChatScreen("设置"), at: t0.addingTimeInterval(2.4))
 expect(stability.gate.verdict == .activeChat, "9c. 两帧异常仍然保持聊天（退出要连续 3 帧）")
 
-let exitVerdict = stability.ingest(nonChatScreen("真的离开了"), at: t0.addingTimeInterval(3.2)).verdict
+let exitVerdict = stability.ingest(nonChatScreen("设置"), at: t0.addingTimeInterval(3.2)).verdict
 expect(exitVerdict == .inactive, "10. 连续 3 帧非聊天才退出")
 let afterExit = stability.timelineCount
 _ = stability.ingest(nonChatScreen("离开之后仍在别的页面"), at: t0.addingTimeInterval(4.0))
@@ -342,7 +342,8 @@ for (index, screen) in [weChatListScreen(), weChatFeedScreen(),
                         shortVideoScreen(), articleScreen()].enumerated() {
     let result = runRealLayout(screen)
     let name = ["联系人列表 / 微信首页", "朋友圈 / 信息流", "抖音短视频", "普通网页 / 设置页"][index]
-    expect(result.verdict == .inactive, "28.\(index)a \(name) → inactive")
+    expect(result.verdict == (index == 3 ? .unknown : .inactive),
+           "28.\(index)a known non-chat → inactive; ambiguous article geometry → unknown")
     expect(result.messages == 0, "28.\(index)b \(name) 不写时间线")
     expect(result.allows == false, "28.\(index)c \(name) 不进入完整识别")
 }
@@ -474,6 +475,14 @@ for frame in 0..<20 {
 expect(hiddenTitle.verdict == .activeChat && hiddenTitle.exitStreak == 0, "weak evidence never accumulates exit frames")
 expect(hiddenTitle.shouldRunOCR && !hiddenTitle.allowsFullRecognition, "weak evidence permits OCR but forbids submission")
 expect(hiddenTitle.chatGeneration == retainedGeneration, "weak evidence does not rotate contact generation")
+let wideMessages = [observation("长消息第一行的合成内容", x: 0.05, y: 0.2, width: 0.90),
+                    observation("长消息第二行的合成内容", x: 0.05, y: 0.3, width: 0.90),
+                    observation("长消息第三行的合成内容", x: 0.05, y: 0.4, width: 0.90)]
+let wideEvidence = ChatSceneDetector.probeEvidence(observations: wideMessages, rectangles: [])
+expect(!ChatSceneDetector.isClearlyNonChatScene(wideEvidence), "wide text alone is not affirmative non-chat evidence")
+for _ in 0..<4 { hiddenTitle.detect(wideEvidence) }
+expect(hiddenTitle.verdict == .activeChat && hiddenTitle.shouldRunOCR && !hiddenTitle.allowsFullRecognition,
+       "covered single-sided long messages keep OCR active and submission held")
 expect(hiddenTitle.pendingFrameCount == config.maximumPendingFrames, "pending frame capacity evicts oldest frames")
 expect(hiddenTitle.pendingObservationCount <= config.maximumPendingObservations, "pending observation capacity is bounded")
 expect(hiddenTitle.pendingCharacterCount <= config.maximumPendingCharacters, "pending text capacity is bounded")

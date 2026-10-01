@@ -108,7 +108,6 @@ struct ChatSceneEvidence: Equatable {
     var inputTopRatio: CGFloat?
     /// 诊断用的综合置信度 0～1
     var confidence: CGFloat = 0
-    var wideBodyRowCount = 0
     var hasNonChatNavigation = false
 
     var hasNavigationBar: Bool { navigationLineCount > 0 }
@@ -164,7 +163,7 @@ enum ChatSceneDetector {
         }.sorted { $0.box.minY < $1.box.minY }
         evidence.navigationLineCount = navigation.count
         let navigationLabels = Set(navigation.map { $0.text.trimmed })
-        evidence.hasNonChatNavigation = !navigationLabels.intersection(["朋友圈", "设置", "桌面", "联系人列表", "短视频"]).isEmpty
+        evidence.hasNonChatNavigation = !navigationLabels.intersection(["朋友圈", "设置", "桌面", "联系人列表", "微信首页", "短视频"]).isEmpty
             || navigationLabels.isSuperset(of: ["关注", "推荐"])
         evidence.topBarFingerprint = navigation.isEmpty ? nil : navigation.map {
             LiveChatText.normalize($0.text)
@@ -194,16 +193,12 @@ enum ChatSceneDetector {
         let candidateBoxes = candidates.filter { $0.role != .system }.map(\.box)
         let body = observations.map(\.box) + candidateBoxes + rectangles
         var rows: [CGFloat] = []
-        var wideRows: [CGFloat] = []
         for box in body {
             guard box.minY >= config.bodyTopRatio, box.maxY <= bodyLowerBound,
                   box.width >= config.minimumBlockWidth, box.width <= config.maximumBlockWidth,
                   box.height >= config.minimumBlockHeight else { continue }
             // 一个矩形套着一个文字框时不能算两条消息：同一纵向位置只记一次
             if !rows.contains(where: { abs($0 - box.midY) < 0.025 }) { rows.append(box.midY) }
-            if box.width >= 0.70, !wideRows.contains(where: { abs($0 - box.midY) < 0.025 }) {
-                wideRows.append(box.midY)
-            }
             if box.midX <= config.leftAnchorMidX {
                 evidence.leftMessageCount += 1
             } else if box.midX >= config.rightAnchorMidX, box.width >= config.minimumRightBlockWidth {
@@ -213,7 +208,6 @@ enum ChatSceneDetector {
             }
         }
         evidence.messageRowCount = rows.count
-        evidence.wideBodyRowCount = wideRows.count
         evidence.confidence = confidence(evidence, config: config)
         return evidence
     }
@@ -240,7 +234,7 @@ enum ChatSceneDetector {
     static func isClearlyNonChatScene(_ evidence: ChatSceneEvidence, config: ChatSceneGateConfiguration = .default) -> Bool {
         if evidence.tabBarLineCount >= config.tabBarDisqualifyCount { return true }
         guard !isChatScene(evidence, config: config), !evidence.hasInputBar else { return false }
-        return evidence.hasNonChatNavigation || evidence.wideBodyRowCount >= 2
+        return evidence.hasNonChatNavigation
     }
 
     /// 诊断用的综合置信度：只做展示与调参参考，判定本身走 `isChatScene`。
