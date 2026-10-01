@@ -451,3 +451,12 @@ expect(UserDefaults.standard.object(forKey: "goutou.recognizedChat.analysis") ==
 expect(Mirror(reflecting: session).displayStyle == .struct, "分析状态机是值类型，不持有网络客户端")
 
 print("RecognizedChatAnalysisCheck passed (\(checks) assertions; prompts and state only; no network)")
+
+// Jev-style structured candidates must remain usable through the existing chat path.
+let structuredCandidates = try GoutouAIClient.parseRecognizedChatFields(data: response("""
+{"analysis":"保持轻松","tone":"友好","candidates":[{"text":"好啊，晚点聊","reason":"接住话题","tradeoff":"推进较慢"},{"text":"今晚有空吗","reason":"明确邀请","tradeoff":"需要对方表态"},{"text":"那我先占个位置","reason":"轻松回应","tradeoff":"玩笑可能不合时宜"}]}
+"""))
+guard case .success(let structuredResult) = RecognizedChatResult.normalized(structuredCandidates) else {
+    fatalError("StructuredReplyCheck: structured candidates were lost")
+}
+expect(structuredResult.replies.count == 3, "structured candidates retain exactly three reply texts")
