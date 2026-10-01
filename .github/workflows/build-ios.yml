@@ -370,6 +370,7 @@ jobs:
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/unsigned/$APP_NAME.xcarchive" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUM" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -382,6 +383,16 @@ jobs:
           cd "$RUNNER_TEMP/unsigned"
           mkdir -p Payload
           cp -R "$RUNNER_TEMP/unsigned/$APP_NAME.xcarchive/Products/Applications/$APP_NAME.app" Payload/
+          # Filename and the version displayed on-device must agree in all three bundles.
+          for bundle in "Payload/$APP_NAME.app" \
+            "Payload/$APP_NAME.app/PlugIns/GoutouKeyboard.appex" \
+            "Payload/$APP_NAME.app/PlugIns/GoutouCaptureWidget.appex"; do
+            ACTUAL_BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$bundle/Info.plist")
+            if [ "$ACTUAL_BUILD" != "$BUILD_NUM" ]; then
+              echo "Unexpected build number in $bundle: $ACTUAL_BUILD (expected $BUILD_NUM)"
+              exit 1
+            fi
+          done
           ls -la Payload/$APP_NAME.app
           echo "--- 扩展是否被正确嵌进 App ---"
           ls -la "Payload/$APP_NAME.app/PlugIns/" || echo "!! PlugIns 目录不存在，扩展没被嵌入"
