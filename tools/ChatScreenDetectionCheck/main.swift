@@ -563,4 +563,18 @@ expect(changed.pendingFrameCount == 0, "capture stop discards pending recognitio
 changed.reset()
 expect(changed.pendingFrameCount == 0 && !changed.shouldRunOCR, "new capture resets pending state and OCR permission")
 
+// Anonymous device layout: the compact island and status clock sit above the contact.
+// Neither a changing clock nor our own message counter may identify a conversation.
+func deviceNavigation(counter: String, clock: String) -> [LiveOCRObservation] {
+    [observation(clock, x: 0.08, y: 0.028, width: 0.14, height: 0.02),
+     observation(counter, x: 0.32, y: 0.030, width: 0.04, height: 0.02),
+     observation("合成联系人甲", x: 0.36, y: 0.075, width: 0.28, height: 0.025),
+     observation("顶部被裁切的合成消息", x: 0.19, y: 0.12, width: 0.60, height: 0.03)]
+}
+let deviceBase = chatScreen().filter { $0.box.minY > 0.17 }
+let deviceBefore = ChatSceneDetector.probeEvidence(observations: deviceNavigation(counter: "0", clock: "17:10") + deviceBase, rectangles: [])
+let deviceAfter = ChatSceneDetector.probeEvidence(observations: deviceNavigation(counter: "5", clock: "17:11") + deviceBase, rectangles: [])
+expect(deviceBefore.topBarFingerprint == deviceAfter.topBarFingerprint,
+       "live island counter and clock must not change contact identity")
+
 print("ChatScreenDetectionCheck passed (\(checks) assertions; pure logic only; synthetic screens; no network)")
