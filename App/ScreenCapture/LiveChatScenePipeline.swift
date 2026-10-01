@@ -28,6 +28,12 @@ struct LiveSceneDiagnostics: Equatable {
     var enterStreak: Int
     var exitStreak: Int
     var verdict: ChatSceneVerdict
+    var hasConfirmedTitle: Bool
+    var allowsSubmission: Bool
+    var rawObservationCount: Int
+    var bufferedFrames: Int
+    var chatGeneration: Int
+    var recognitionHoldReason: String?
 }
 
 struct LiveChatScenePipeline {
@@ -47,6 +53,7 @@ struct LiveChatScenePipeline {
         var title: String?
     }
     private var pendingFrames: [PendingFrame] = []
+    private var rawObservationCount = 0
     var pendingFrameCount: Int { pendingFrames.count }
     var pendingObservationCount: Int { pendingFrames.reduce(0) { $0 + $1.observations.count } }
     var pendingCharacterCount: Int { pendingFrames.reduce(0) { total, frame in
@@ -72,7 +79,13 @@ struct LiveChatScenePipeline {
             tabBarLineCount: evidence.tabBarLineCount,
             enterStreak: gate.enterStreak,
             exitStreak: gate.exitStreak,
-            verdict: verdict
+            verdict: verdict,
+            hasConfirmedTitle: gate.hasConfirmedTitle,
+            allowsSubmission: allowsFullRecognition,
+            rawObservationCount: rawObservationCount,
+            bufferedFrames: pendingFrameCount,
+            chatGeneration: chatGeneration,
+            recognitionHoldReason: recognitionHoldReason
         )
     }
 
@@ -83,6 +96,7 @@ struct LiveChatScenePipeline {
         shouldRunOCR = false
         startsNewSession = false
         discardPendingRecognition()
+        rawObservationCount = 0
         lastEvidence = nil
         newChat()
     }
@@ -104,7 +118,16 @@ struct LiveChatScenePipeline {
     }
 
     mutating func ingest(_ observations: [LiveOCRObservation], at now: Date) -> LiveChatSnapshot {
+        rawObservationCount = observations.count
         guard shouldRunOCR else { return system.snapshot() }
+        if !allowsFullRecognition, gate.hasConfirmedTitle,
+           let evidence = lastEvidence, evidence.topBarFingerprint == nil,
+           ChatSceneDetector.isChatScene(evidence),
+           reliableOverlap(candidates(observations, at: now, geometry: geometry), system.snapshot().messages) {
+            // A previously confirmed contact can remain identified by two reliable anchors.
+            // This never bootstraps a contact from an arbitrary title-free page.
+            allowsFullRecognition = true
+        }
         guard allowsFullRecognition else {
             buffer(observations, at: now)
             return system.snapshot()
@@ -134,6 +157,16 @@ struct LiveChatScenePipeline {
     }
 
     func snapshot() -> LiveChatSnapshot { system.snapshot() }
+
+    private var recognitionHoldReason: String? {
+        guard shouldRunOCR else { return nil }
+        if !allowsFullRecognition { return "聊天归属待确认 · 暂存 \(pendingFrameCount) 帧" }
+        let chat = system.snapshot()
+        guard chat.messages.isEmpty else { return nil }
+        if rawObservationCount == 0 { return "未识别到消息文字" }
+        if chat.candidatesThisFrame == 0 { return "消息区域暂无候选" }
+        return "消息稳定确认中"
+    }
 
     mutating func discardPendingRecognition() { pendingFrames.removeAll() }
 

@@ -90,7 +90,8 @@ final class LiveScreenCaptureManager: ObservableObject {
             timelineCount: chat.messages.count,
             unknownCount: chat.unknownCount,
             syncedCount: autoSyncLastCount,
-            lastSyncAt: autoSyncLastSyncAt
+            lastSyncAt: autoSyncLastSyncAt,
+            recognitionHoldReason: sceneDiagnostics?.recognitionHoldReason
         )
     }
 
@@ -368,16 +369,17 @@ final class LiveScreenCaptureManager: ObservableObject {
             guard fence.isCurrent(generation) else { return }
             var result: Result<LiveOCRSnapshot, LiveOCRFailure>
             do {
-                let evidence = try ChatSceneProbe.recognize(pixelBuffer: pixelBuffer,
+                let probe = try ChatSceneProbe.recognize(pixelBuffer: pixelBuffer,
                     orientation: orientation, languages: languages)
                 guard fence.isCurrent(generation) else { return }
-                engine.pipeline.detect(evidence)
-                if engine.pipeline.startsNewSession { sync.beginChatGeneration(engine.pipeline.chatGeneration) }
-                if !engine.pipeline.allowsFullRecognition { sync.noteLeftChatScene() }
-                if engine.pipeline.shouldRunOCR {
+                if !ChatSceneDetector.isClearlyNonChatScene(probe) {
                     let snapshot = try LiveScreenOCRProcessor.recognize(pixelBuffer: pixelBuffer,
                         orientation: orientation, languages: languages)
                     guard fence.isCurrent(generation) else { return }
+                    let evidence = ChatSceneDetector.refining(probe, with: snapshot.observations)
+                    // One gate update per real captured frame; accurate OCR can recover the title.
+                    engine.pipeline.detect(evidence)
+                    if engine.pipeline.startsNewSession { sync.beginChatGeneration(engine.pipeline.chatGeneration) }
                     let before = engine.pipeline.chatGeneration
                     let chat = engine.pipeline.ingest(snapshot.observations, at: snapshot.timestamp)
                     if engine.pipeline.chatGeneration != before { sync.beginChatGeneration(engine.pipeline.chatGeneration) }
@@ -385,10 +387,13 @@ final class LiveScreenCaptureManager: ObservableObject {
                         sync.noteTimeline(chat.messages, generation: engine.pipeline.chatGeneration)
                         result = .success(snapshot)
                     } else {
+                        sync.noteLeftChatScene()
                         // Unconfirmed OCR belongs only to the bounded in-memory buffer.
                         result = .success(LiveOCRSnapshot(timestamp: snapshot.timestamp, strings: [], observations: []))
                     }
                 } else {
+                    engine.pipeline.detect(probe)
+                    _ = engine.pipeline.ingest([], at: Date())
                     sync.noteLeftChatScene()
                     result = .success(LiveOCRSnapshot(timestamp: Date(), strings: [], observations: []))
                 }

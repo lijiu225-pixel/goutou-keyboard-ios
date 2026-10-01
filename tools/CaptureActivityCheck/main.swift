@@ -319,4 +319,15 @@ expect(counter.stateChanged(content(timeline: 3), now: t0.addingTimeInterval(6))
 expect(!content(timeline: 8, unknown: 2).summary.contains(sensitiveLine),
        "compact state never carries chat text")
 
+var ownershipHold = content(timeline: 0)
+ownershipHold.recognitionHoldReason = "聊天归属待确认 · 暂存 3 帧"
+expect(ownershipHold.statusText == ownershipHold.recognitionHoldReason,
+       "expanded island explains why detected chat has no committed messages")
+expect(ownershipHold.compactText == "确认" && ownershipHold.minimalText == "?",
+       "compact island shows an ownership hold instead of an unexplained zero")
+var waitingPlanner = GoutouCaptureActivityPlanner()
+_ = waitingPlanner.captureStarted(sessionID: "hold", content: content(timeline: 0), now: t0)
+expect(waitingPlanner.stateChanged(ownershipHold, now: t0.addingTimeInterval(2)) == .update(ownershipHold),
+       "waiting reason changes update the island even when the message count remains zero")
+
 print("CaptureActivityCheck passed (\(checks) assertions; pure logic + source contract; no network)")

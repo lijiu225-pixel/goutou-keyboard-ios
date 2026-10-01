@@ -457,7 +457,9 @@ for frame in 0..<3 {
     _ = hiddenTitle.ingest(chatScreen(), at: t0.addingTimeInterval(Double(frame)))
 }
 let hiddenTitleCount = hiddenTitle.snapshot().messages.count
-let coveredOther = chatScreen(top: "另一个人").filter { $0.box.midY > 0.17 }
+let coveredOther = chatScreen(top: "另一个人").filter { $0.box.midY > 0.17 }.map {
+    LiveOCRObservation(text: $0.text + "乙", confidence: $0.confidence, box: $0.box)
+}
 hiddenTitle.detect(ChatSceneDetector.probeEvidence(observations: coveredOther, rectangles: []))
 _ = hiddenTitle.ingest(coveredOther, at: t0.addingTimeInterval(4))
 expect(hiddenTitle.verdict == .activeChat, "covered title preserves recognition display")
@@ -501,7 +503,7 @@ for frame in 0..<3 {
 let earlier = observation("之前短暂可见的合成消息", x: 0.05, y: 0.174, width: 0.34, height: 0.012)
 let obscured = anchors.filter { $0.box.midY > 0.17 } + [earlier]
 for frame in 0..<2 {
-    recovery.detect(ChatSceneDetector.probeEvidence(observations: obscured, rectangles: []))
+    recovery.detect(weakEvidence)
     _ = recovery.ingest(obscured, at: t0.addingTimeInterval(Double(frame + 3)))
 }
 expect(!recovery.snapshot().messages.contains { $0.text == earlier.text }, "pending content is absent from official messages")
@@ -576,5 +578,35 @@ let deviceBefore = ChatSceneDetector.probeEvidence(observations: deviceNavigatio
 let deviceAfter = ChatSceneDetector.probeEvidence(observations: deviceNavigation(counter: "5", clock: "17:11") + deviceBase, rectangles: [])
 expect(deviceBefore.topBarFingerprint == deviceAfter.topBarFingerprint,
        "live island counter and clock must not change contact identity")
+expect(deviceBefore.topBarFingerprint == LiveChatText.normalize("合成联系人甲"), "contact identity excludes a clipped message below navigation")
+var deviceLoop = LiveChatScenePipeline()
+var deviceGeneration: Int?
+for frame in 0..<12 {
+    let screen = deviceNavigation(counter: String(frame), clock: "17:\(10 + frame)") + deviceBase
+    deviceLoop.detect(ChatSceneDetector.probeEvidence(observations: screen, rectangles: []))
+    _ = deviceLoop.ingest(screen, at: t0.addingTimeInterval(Double(frame)))
+    if frame == 2 { deviceGeneration = deviceLoop.chatGeneration }
+}
+expect(deviceLoop.chatGeneration == deviceGeneration, "island feedback never repeatedly resets the timeline")
+expect(deviceLoop.snapshot().messages.count == 4, "island feedback leaves live messages accumulated")
+
+let noNavigationProbe = ChatSceneDetector.probeEvidence(observations: deviceBase, rectangles: [])
+expect(noNavigationProbe.topBarFingerprint == nil, "cheap probe can miss the contact while recognizing messages")
+let accurateRefinement = ChatSceneDetector.refining(noNavigationProbe,
+    with: deviceNavigation(counter: "0", clock: "17:10") + deviceBase)
+expect(accurateRefinement.topBarFingerprint == deviceBefore.topBarFingerprint && accurateRefinement.hasNavigationBar,
+       "full-frame accurate OCR recovers the contact missed by the probe")
+
+// A covered confirmed contact is recoverable by two reliable message anchors.
+let overlapGeneration = deviceLoop.chatGeneration
+deviceLoop.detect(noNavigationProbe)
+_ = deviceLoop.ingest(deviceBase, at: t0.addingTimeInterval(20))
+expect(deviceLoop.allowsFullRecognition && deviceLoop.chatGeneration == overlapGeneration,
+       "reliable message overlap confirms ownership while the contact title is covered")
+expect(deviceLoop.pendingFrameCount == 0, "corroborated covered messages do not remain stuck in the buffer")
+deviceLoop.detect(weakEvidence)
+_ = deviceLoop.ingest(coveredOther, at: t0.addingTimeInterval(21))
+expect(deviceLoop.diagnostics?.recognitionHoldReason != nil && deviceLoop.diagnostics?.rawObservationCount == coveredOther.count,
+       "diagnostics distinguish OCR results from ownership quarantine")
 
 print("ChatScreenDetectionCheck passed (\(checks) assertions; pure logic only; synthetic screens; no network)")

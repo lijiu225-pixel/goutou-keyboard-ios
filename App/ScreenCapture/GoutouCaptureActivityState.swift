@@ -10,10 +10,12 @@ struct GoutouCaptureActivityContent: Equatable {
     var unknownCount: Int
     var lastSyncAt: Date?
     var errorText: String?
+    var recognitionHoldReason: String? = nil
 
     var statusText: String {
         guard capturing else { return "已停止" }
         if gateText == ChatSceneVerdict.inactive.shortTitle { return "未在聊天界面 · 已暂停识别" }
+        if let recognitionHoldReason { return recognitionHoldReason }
         if unknownCount > 0 { return "\(unknownCount) 条未确定 · 同步暂停" }
         if gateText == ChatSceneVerdict.activeChat.shortTitle { return "已进入聊天 · 识别中" }
         return gateText
@@ -28,6 +30,7 @@ struct GoutouCaptureActivityContent: Equatable {
     var compactText: String {
         guard capturing else { return "停止" }
         guard gateText == ChatSceneVerdict.activeChat.shortTitle else { return "暂停" }
+        if recognitionHoldReason != nil { return "确认" }
         if unknownCount > 0 { return "\(min(timelineCount, 999))·!\(min(unknownCount, 99))" }
         return "\(min(timelineCount, 999))条"
     }
@@ -36,6 +39,7 @@ struct GoutouCaptureActivityContent: Equatable {
     var minimalText: String {
         guard capturing else { return "停" }
         guard gateText == ChatSceneVerdict.activeChat.shortTitle else { return "Ⅱ" }
+        if recognitionHoldReason != nil { return "?" }
         if unknownCount > 0 { return "!\(min(unknownCount, 9))" }
         return "\(min(timelineCount, 99))"
     }
@@ -59,7 +63,8 @@ enum GoutouCaptureActivityContentBuilder {
         timelineCount: Int,
         unknownCount: Int,
         syncedCount: Int,
-        lastSyncAt: Date?
+        lastSyncAt: Date?,
+        recognitionHoldReason: String? = nil
     ) -> GoutouCaptureActivityContent {
         var errorText: String?
         if case .failed = captureState { errorText = "屏幕捕获失败" }
@@ -79,7 +84,8 @@ enum GoutouCaptureActivityContentBuilder {
             syncedCount: syncedCount,
             unknownCount: unknownCount,
             lastSyncAt: lastSyncAt,
-            errorText: errorText
+            errorText: errorText,
+            recognitionHoldReason: recognitionHoldReason
         )
     }
 }

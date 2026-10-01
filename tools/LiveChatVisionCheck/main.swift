@@ -53,15 +53,16 @@ let probe = try ChatSceneProbe.recognize(pixelBuffer: baseline, orientation: .up
 let full = try LiveScreenOCRProcessor.recognize(pixelBuffer: baseline, orientation: .up)
 print("Live OCR observations=\(full.observations.count) nav=\(probe.navigationLineCount) rows=\(probe.messageRowCount)")
 expect(full.observations.filter { $0.text.contains("合成消息") }.count >= 3, "full-frame OCR reads device-sized message text")
-expect(probe.hasNavigationBar, "accurate navigation OCR finds the visible contact")
-expect(probe.topBarFingerprint != nil, "navigation selects a contact identity")
+let refined = ChatSceneDetector.refining(probe, with: full.observations)
+expect(refined.hasNavigationBar, "full-frame OCR recovers navigation missed by the separate title probe")
+expect(refined.topBarFingerprint != nil, "navigation selects a contact identity")
 
 var pipeline = LiveChatScenePipeline()
 for frame in 0..<5 {
     let buffer = renderDevice(counter: String(frame))
     let evidence = try ChatSceneProbe.recognize(pixelBuffer: buffer, orientation: .up, languages: ["zh-Hans", "en-US"])
     let snapshot = try LiveScreenOCRProcessor.recognize(pixelBuffer: buffer, orientation: .up)
-    pipeline.detect(evidence)
+    pipeline.detect(ChatSceneDetector.refining(evidence, with: snapshot.observations))
     _ = pipeline.ingest(snapshot.observations, at: Date(timeIntervalSince1970: Double(frame)))
 }
 expect(pipeline.snapshot().messages.count >= 3, "real live OCR accumulates messages despite changing island counts")

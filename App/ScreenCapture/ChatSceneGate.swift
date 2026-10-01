@@ -46,6 +46,9 @@ struct ChatSceneGateConfiguration: Equatable {
     /// 顶部导航带（聊天标题 / 头像 / 在线状态都在这一带）
     var navigationBandStart: CGFloat = 0.030
     var navigationBandEnd: CGFloat = 0.17
+    /// Identity excludes the status/island band and the first clipped message below navigation.
+    var titleBandStart: CGFloat = 0.045
+    var titleBandEnd: CGFloat = 0.11
     /// 中部消息带的上边界
     var bodyTopRatio: CGFloat = 0.17
     /// 没有找到输入栏时，消息带的下边界
@@ -109,6 +112,7 @@ struct ChatSceneEvidence: Equatable {
     /// 诊断用的综合置信度 0～1
     var confidence: CGFloat = 0
     var hasNonChatNavigation = false
+    var isCaptureDiagnosticsPage = false
 
     var hasNavigationBar: Bool { navigationLineCount > 0 }
 
@@ -165,9 +169,8 @@ enum ChatSceneDetector {
         let navigationLabels = Set(navigation.map { $0.text.trimmed })
         evidence.hasNonChatNavigation = !navigationLabels.intersection(["朋友圈", "设置", "桌面", "联系人列表", "微信首页", "短视频"]).isEmpty
             || navigationLabels.isSuperset(of: ["关注", "推荐"])
-        evidence.topBarFingerprint = navigation.isEmpty ? nil : navigation.map {
-            LiveChatText.normalize($0.text)
-        }.joined(separator: "|")
+        evidence.topBarFingerprint = titleFingerprint(observations, config: config)
+        evidence.isCaptureDiagnosticsPage = evidence.topBarFingerprint == LiveChatText.normalize("动态识别测试")
 
         // 底部输入区：占位文字，或者「宽而扁」的输入框几何。两个都没有才算没有输入区。
         let placeholder = observations.filter {
@@ -212,6 +215,50 @@ enum ChatSceneDetector {
         return evidence
     }
 
+    static func titleFingerprint(_ observations: [LiveOCRObservation],
+                                 config: ChatSceneGateConfiguration = .default) -> String? {
+        let transientLabels = ["在线", "离线", "正在输入", "狗头军师", "自动同步", "实时聊天",
+                               "已同步", "未确定", "尚未同步", "识别中", "确认中", "已暂停"]
+        let labels = observations.filter { item in
+            let value = item.text.trimmed
+            return item.box.midY >= config.titleBandStart && item.box.midY <= config.titleBandEnd
+                && item.box.minX >= 0.12 && item.box.maxX <= 0.88
+                && item.box.width >= 0.045
+                && !LiveChatText.normalize(value).isEmpty
+                && !transientLabels.contains(where: { value.contains($0) })
+                && !value.contains(":") && !value.contains("：")
+        }.sorted { $0.box.midY < $1.box.midY }
+        guard let first = labels.first else { return nil }
+        return labels.filter { abs($0.box.midY - first.box.midY) < 0.012 }
+            .sorted { $0.box.minX < $1.box.minX }
+            .map { LiveChatText.normalize($0.text) }.joined(separator: "|")
+    }
+
+    /// Accurate full-frame OCR can recover a Chinese title missed by the cheap probe.
+    /// Rectangle/input evidence stays intact; the contact identity comes from accurate text.
+    static func refining(_ evidence: ChatSceneEvidence, with observations: [LiveOCRObservation],
+                         config: ChatSceneGateConfiguration = .default) -> ChatSceneEvidence {
+        var result = evidence
+        var accurateConfig = config
+        accurateConfig.bodyBottomRatio = evidence.inputTopRatio ?? config.bodyBottomRatio
+        let accurate = analyze(observations: observations, candidates: [], rectangles: [], config: accurateConfig)
+        result.messageRowCount = max(result.messageRowCount, accurate.messageRowCount)
+        result.leftMessageCount = max(result.leftMessageCount, accurate.leftMessageCount)
+        result.rightMessageCount = max(result.rightMessageCount, accurate.rightMessageCount)
+        result.centeredMessageCount = max(result.centeredMessageCount, accurate.centeredMessageCount)
+        result.hasInputBar = result.hasInputBar || accurate.hasInputBar
+        result.inputTopRatio = result.inputTopRatio ?? accurate.inputTopRatio
+        result.tabBarLineCount = max(result.tabBarLineCount, accurate.tabBarLineCount)
+        result.hasNonChatNavigation = result.hasNonChatNavigation || accurate.hasNonChatNavigation
+        result.isCaptureDiagnosticsPage = result.isCaptureDiagnosticsPage || accurate.isCaptureDiagnosticsPage
+        if let title = titleFingerprint(observations, config: config) {
+            result.topBarFingerprint = title
+            result.navigationLineCount = max(result.navigationLineCount, 1)
+        }
+        result.confidence = confidence(result, config: config)
+        return result
+    }
+
     /// 一帧像不像聊天界面。
     ///
     /// 两个入口，任意一个成立即算聊天：
@@ -220,6 +267,7 @@ enum ChatSceneDetector {
     ///    即使输入栏这次没被检测出来也仍然算聊天。
     /// 微信底部 tab 命中两个以上的一律判非聊天。
     static func isChatScene(_ evidence: ChatSceneEvidence, config: ChatSceneGateConfiguration = .default) -> Bool {
+        guard !evidence.isCaptureDiagnosticsPage else { return false }
         guard evidence.tabBarLineCount < config.tabBarDisqualifyCount else { return false }
         guard evidence.messageRowCount >= 1 else { return false }
         let inputBacked = evidence.hasInputBar
@@ -232,6 +280,7 @@ enum ChatSceneDetector {
 
     /// Missing input/title/message evidence is uncertainty, not an exit signal.
     static func isClearlyNonChatScene(_ evidence: ChatSceneEvidence, config: ChatSceneGateConfiguration = .default) -> Bool {
+        if evidence.isCaptureDiagnosticsPage { return true }
         if evidence.tabBarLineCount >= config.tabBarDisqualifyCount { return true }
         guard !isChatScene(evidence, config: config), !evidence.hasInputBar else { return false }
         return evidence.hasNonChatNavigation

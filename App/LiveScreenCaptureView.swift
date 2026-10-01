@@ -40,6 +40,14 @@ struct LiveScreenCaptureView: View {
                     LabeledContent("底部 tab 命中", value: "\(diagnostics.tabBarLineCount)")
                     LabeledContent("进入连续帧", value: "\(diagnostics.enterStreak)")
                     LabeledContent("退出连续帧", value: "\(diagnostics.exitStreak)")
+                    LabeledContent("联系人归属已确认", value: diagnostics.hasConfirmedTitle ? "是" : "否")
+                    LabeledContent("允许消息提交", value: diagnostics.allowsSubmission ? "是" : "否")
+                    LabeledContent("完整 OCR 行数", value: "\(diagnostics.rawObservationCount)")
+                    LabeledContent("暂存识别帧", value: "\(diagnostics.bufferedFrames)")
+                    LabeledContent("聊天代际", value: "\(diagnostics.chatGeneration)")
+                    if let reason = diagnostics.recognitionHoldReason {
+                        LabeledContent("等待原因", value: reason)
+                    }
                 } else {
                     Text("还没有检测帧。开始动态识别并切到微信后这里会显示每项证据。")
                         .foregroundStyle(.secondary)
@@ -66,7 +74,8 @@ struct LiveScreenCaptureView: View {
             Section {
                 if let snapshot = manager.model.snapshot {
                     if snapshot.strings.isEmpty {
-                        Text("这一帧没有识别到文字。").foregroundStyle(.secondary)
+                        Text(manager.sceneDiagnostics?.recognitionHoldReason ?? "这一帧没有识别到文字。")
+                            .foregroundStyle(.secondary)
                     } else {
                         Text(snapshot.fullText)
                             .font(.footnote)
