@@ -728,6 +728,7 @@ jobs:
         run: |
           swiftc -swift-version 5 \
             Shared/GoutouChatClipboard.swift \
+            Keyboard/GoutouConfig.swift \
             App/ScreenCapture/LiveOCRObservation.swift \
             App/ScreenCapture/LiveOCRSnapshot.swift \
             App/ScreenCapture/LiveScreenCaptureState.swift \
