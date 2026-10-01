@@ -42,7 +42,7 @@ func renderDevice(counter: String) -> CVPixelBuffer {
     return pixelBuffer
 }
 
-func renderTenBubbles(dark: Bool) -> CVPixelBuffer {
+func renderTenBubbles(dark: Bool, insetSamples: Bool = false) -> CVPixelBuffer {
     let width = 1280, height = 2781
     var buffer: CVPixelBuffer?
     precondition(CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, nil, &buffer) == kCVReturnSuccess)
@@ -78,7 +78,9 @@ func renderTenBubbles(dark: Bool) -> CVPixelBuffer {
     text("你撤回了一条消息", x: 0.395, top: 0.222, color: CGColor(gray: 0.50, alpha: 1), size: 32)
     let green = CGColor(red: 0.13, green: 0.72, blue: 0.38, alpha: 1)
     let other = CGColor(gray: dark ? 0.17 : 1, alpha: 1)
-    let rows: [(Bool, CGFloat, [String])] = [
+    let rows: [(Bool, CGFloat, [String])] = insetSamples ? [
+        (false, 0.32, ["收到了"]), (true, 0.47, ["好呀"]),
+    ] : [
         (true, 0.140, ["第一条长消息的开头请完整识别出来", "第一条长消息的中间", "第一条长消息的结尾"]),
         (true, 0.281, ["第二条完整回复的开头这是匿名测试", "第二条完整回复的结尾"]),
         (false, 0.366, ["收到啦"]),
@@ -91,14 +93,14 @@ func renderTenBubbles(dark: Bool) -> CVPixelBuffer {
         (true, 0.823, ["最后一条回复的开头请完整识别出来", "最后一条回复的结尾"]),
     ]
     for (mine, y, lines) in rows {
-        let bubbleWidth: CGFloat = lines.count > 1 ? 0.67 : CGFloat(lines[0].count) * 50 / CGFloat(width) + 0.052
+        let bubbleWidth: CGFloat = insetSamples ? 0.52 : (lines.count > 1 ? 0.67 : CGFloat(lines[0].count) * 50 / CGFloat(width) + 0.052)
         let bubbleX: CGFloat = mine ? 0.855 - bubbleWidth : 0.145
         rect(bubbleX, y - 0.012, bubbleWidth, CGFloat(lines.count - 1) * 0.024 + 0.041, color: mine ? green : other)
         rect(mine ? 0.89 : 0.027, y - 0.012, 0.09, 0.041, color: CGColor(gray: 0.42, alpha: 1))
         for (offset, value) in lines.enumerated() {
             // Multiline right bubbles start at the left padding; short right text
             // is right anchored by its own compact bubble.
-            text(value, x: bubbleX + 0.026, top: y + CGFloat(offset) * 0.024,
+            text(value, x: insetSamples ? (mine ? 0.57 : 0.33) : bubbleX + 0.026, top: y + CGFloat(offset) * 0.024,
                  color: mine ? CGColor(gray: 0.02, alpha: 1) : foreground)
         }
     }
@@ -149,5 +151,13 @@ for dark in [false, true] {
            "actual Vision groups all lines of the first bubble")
     expect(result.messages.map(\.role) == [.me, .me, .other, .other, .other, .other, .other, .other, .other, .me],
            "actual Vision identifies both speakers from text inside bubbles")
+}
+for dark in [false, true] {
+    let buffer = renderTenBubbles(dark: dark, insetSamples: true)
+    let full = try LiveScreenOCRProcessor.recognize(pixelBuffer: buffer, orientation: .up)
+    let observations = full.observations.filter { $0.box.midY > 0.29 && $0.box.midY < 0.60 }
+    let replies = LiveChatBlockGrouper.group(observations)
+    expect(replies.map(\.text) == ["收到了", "好呀"], "real OCR reads both inset samples")
+    expect(replies.map(\.role) == [.other, .me], "bubble pixels recover roles when short text is away from both anchors")
 }
 print("LiveChatVisionCheck passed (\(checks) assertions; anonymous device proportions; actual live Vision path)")
