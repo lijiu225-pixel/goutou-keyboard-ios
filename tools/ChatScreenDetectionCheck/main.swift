@@ -672,4 +672,14 @@ for title in ["动态识别测试", "确认实时聊天", "狗头军师输入法
            "opening review holds submission without erasing the already recognized conversation")
 }
 
+// A page header plus independent fixed controls disqualifies a non-chat page,
+// even when its search/comment field happens to resemble the chat input capsule.
+let settingsControls = [observation("设置", x: 0.42, y: 0.06, width: 0.16),
+    observation("账号与安全", x: 0.10, y: 0.22, width: 0.26),
+    observation("消息通知", x: 0.10, y: 0.32, width: 0.22),
+    observation("通用", x: 0.10, y: 0.42, width: 0.12)]
+let falseInput = CGRect(x: 0.11, y: 0.91, width: 0.69, height: 0.04)
+let settingsEvidence = ChatSceneDetector.probeEvidence(observations: settingsControls, rectangles: [falseInput])
+expect(!ChatSceneDetector.isChatScene(settingsEvidence), "settings controls cannot become chat through a wide input rectangle")
+expect(ChatSceneDetector.isClearlyNonChatScene(settingsEvidence), "confirmed controls stop expensive OCR before submission")
 print("ChatScreenDetectionCheck passed (\(checks) assertions; pure logic only; synthetic screens; no network)")
