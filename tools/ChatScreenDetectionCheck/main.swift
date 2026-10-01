@@ -609,4 +609,43 @@ _ = deviceLoop.ingest(coveredOther, at: t0.addingTimeInterval(21))
 expect(deviceLoop.diagnostics?.recognitionHoldReason != nil && deviceLoop.diagnostics?.rawObservationCount == coveredOther.count,
        "diagnostics distinguish OCR results from ownership quarantine")
 
+// Anonymous dark-mode device proportions: middle bubbles can resemble an input bar.
+let tenBubbleLines = [
+    observation("第一条长消息的开头", x: 0.21, y: 0.140, width: 0.61, height: 0.018),
+    observation("第一条长消息的中间", x: 0.21, y: 0.164, width: 0.60, height: 0.018),
+    observation("第一条长消息的结尾", x: 0.21, y: 0.188, width: 0.39, height: 0.018),
+    observation("8月20日 星期四 01:51", x: 0.34, y: 0.243, width: 0.32, height: 0.015),
+    observation("第二条完整回复的开头", x: 0.20, y: 0.281, width: 0.62, height: 0.018),
+    observation("第二条完整回复的结尾", x: 0.20, y: 0.305, width: 0.62, height: 0.018),
+    observation("收到啦", x: 0.17, y: 0.366, width: 0.11, height: 0.018),
+    observation("别着急，慢慢来", x: 0.17, y: 0.426, width: 0.25, height: 0.018),
+    observation("现在可以了", x: 0.17, y: 0.486, width: 0.20, height: 0.018),
+    observation("第六条长消息的开头", x: 0.17, y: 0.547, width: 0.62, height: 0.018),
+    observation("第六条长消息的结尾", x: 0.17, y: 0.571, width: 0.24, height: 0.018),
+    observation("我还在外面呢", x: 0.17, y: 0.627, width: 0.24, height: 0.018),
+    observation("待会再回去", x: 0.17, y: 0.687, width: 0.22, height: 0.018),
+    observation("第九条长消息的开头", x: 0.17, y: 0.748, width: 0.61, height: 0.018),
+    observation("第九条长消息的结尾", x: 0.17, y: 0.772, width: 0.57, height: 0.018),
+    observation("最后一条回复的开头", x: 0.21, y: 0.823, width: 0.61, height: 0.018),
+    observation("最后一条回复的结尾", x: 0.21, y: 0.847, width: 0.24, height: 0.018),
+]
+let tenBubbleScreen = [observation("合成联系人甲", x: 0.40, y: 0.074, width: 0.20)] + tenBubbleLines
+let tenBubbleRectangles = [
+    CGRect(x: 0.145, y: 0.534, width: 0.67, height: 0.063),
+    CGRect(x: 0.11, y: 0.918, width: 0.69, height: 0.044),
+]
+let tenBubbleEvidence = ChatSceneDetector.probeEvidence(observations: tenBubbleScreen, rectangles: tenBubbleRectangles)
+print("Ten-bubble regression: detected input top=\(tenBubbleEvidence.inputTopRatio ?? -1)")
+expect(tenBubbleEvidence.inputTopRatio == 0.918, "a long message is not the bottom input bar")
+var tenBubblePipeline = LiveChatScenePipeline()
+for frame in 0..<4 {
+    tenBubblePipeline.detect(tenBubbleEvidence)
+    _ = tenBubblePipeline.ingest(tenBubbleScreen, at: t0.addingTimeInterval(Double(frame)))
+}
+let tenBubbleChat = tenBubblePipeline.snapshot()
+expect(tenBubbleChat.messages.count == 10, "all ten text bubbles survive cropping; date is not a message")
+expect(tenBubbleChat.messages.first?.text == "第一条长消息的开头第一条长消息的中间第一条长消息的结尾", "the first multiline bubble is complete")
+expect(tenBubbleChat.messages.map(\.role) == [.me, .me, .other, .other, .other, .other, .other, .other, .other, .me], "real text insets identify both speakers")
+expect(tenBubbleChat.unknownCount == 0, "ten unambiguous bubbles do not require manual roles")
+
 print("ChatScreenDetectionCheck passed (\(checks) assertions; pure logic only; synthetic screens; no network)")
