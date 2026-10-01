@@ -49,6 +49,7 @@ struct GoutouPanelSnapshot {
     var pendingSharedChat: PendingSharedChatUpdate? = nil
     /// 识别聊天分析区的状态（idle / loading / success / failure），由控制器算好。
     var recognizedChatAnalysis: RecognizedChatAnalysisState = .idle
+    var recognizedChatRewriteNotice: String? = nil
 }
 
 enum GoutouPanelAction {
@@ -64,6 +65,7 @@ enum GoutouPanelAction {
     case cancelRecognizedChatUse
     /// 阶段 9：用户主动点「分析这段聊天」——这是唯一会发网络请求的动作。
     case analyzeRecognizedChat
+    case rewriteRecognizedReplies
     case cancelRecognizedChatAnalysis
     /// 阶段 11：用户主动点某条候选回复，把**原文**交给控制器插进输入框（不等于发送）。
     case insertRecognizedReply(String)
@@ -175,6 +177,7 @@ final class GoutouPanelView: UIView {
     private var activeRecognizedChat: RecognizedChatContext?
     private var pendingSharedChat: PendingSharedChatUpdate?
     private var recognizedChatAnalysis: RecognizedChatAnalysisState = .idle
+    private var recognizedChatRewriteNotice: String? = nil
     private enum Screen { case main, settings, memory, profiles, sharedChat, contextText }
     private var screen: Screen = .main
 
@@ -357,6 +360,7 @@ final class GoutouPanelView: UIView {
         self.activeRecognizedChat = snapshot.activeRecognizedChat
         self.pendingSharedChat = snapshot.pendingSharedChat
         self.recognizedChatAnalysis = snapshot.recognizedChatAnalysis
+        self.recognizedChatRewriteNotice = snapshot.recognizedChatRewriteNotice
         self.state = snapshot.state
         self.segments = snapshot.segments
         self.memory = snapshot.memory
@@ -609,6 +613,19 @@ final class GoutouPanelView: UIView {
         switch recognizedChatAnalysis {
         case .success(let result):
             buildRecognizedChatResult(result)
+            bodyStack.addArrangedSubview(makeActionButton(title: "更像我", background: GoutouTheme.function, fontSize: 14) {
+                self.delegate?.goutouPanel(self, didTrigger: .rewriteRecognizedReplies)
+            })
+            bodyStack.addArrangedSubview(makeNoticeLabel("参考这段聊天中你的原话调整口吻；样本不足时使用自然口语。", color: GoutouTheme.secondary))
+            if let notice = recognizedChatRewriteNotice {
+                bodyStack.addArrangedSubview(makeNoticeLabel(notice, color: GoutouTheme.secondary))
+            }
+        case .rewriting(let result):
+            buildRecognizedChatResult(result, canInsert: false)
+            bodyStack.addArrangedSubview(makeNoticeLabel("正在调整口吻…", color: GoutouTheme.secondary))
+            bodyStack.addArrangedSubview(makeActionButton(title: "取消改写", background: GoutouTheme.function, fontSize: 13) {
+                self.delegate?.goutouPanel(self, didTrigger: .cancelRecognizedChatAnalysis)
+            })
         case .idle:
             bodyStack.addArrangedSubview(makeSectionHeader("【聊天分析】"))
             bodyStack.addArrangedSubview(makeNoticeLabel(
@@ -626,6 +643,7 @@ final class GoutouPanelView: UIView {
             bodyStack.addArrangedSubview(makeNoticeLabel(error.message, color: GoutouTheme.warning))
         }
 
+        if case .rewriting = recognizedChatAnalysis { return }
         if case .loading = recognizedChatAnalysis {
             bodyStack.addArrangedSubview(makeActionButton(title: "取消分析", background: GoutouTheme.function, fontSize: 13) {
                 self.delegate?.goutouPanel(self, didTrigger: .cancelRecognizedChatAnalysis)
@@ -644,16 +662,28 @@ final class GoutouPanelView: UIView {
     }
 
     /// 阶段 10 的正式结果：聊天分析 + 对方状态 + 恰好三条推荐回复。
-    private func buildRecognizedChatResult(_ result: RecognizedChatResult) {
+    private func buildRecognizedChatResult(_ result: RecognizedChatResult, canInsert: Bool = true) {
         bodyStack.addArrangedSubview(makeSectionHeader("【聊天分析】"))
         bodyStack.addArrangedSubview(makeNoticeLabel(result.analysis, color: GoutouTheme.text))
         bodyStack.addArrangedSubview(makeSectionHeader("【对方状态】"))
         bodyStack.addArrangedSubview(makeNoticeLabel(result.tone, color: GoutouTheme.text))
         bodyStack.addArrangedSubview(makeSectionHeader("【推荐回复】"))
         for (index, reply) in result.replies.enumerated() {
-            bodyStack.addArrangedSubview(makeReplyCard(index: index, text: reply))
+            let card = makeReplyCard(index: index, text: reply)
+            card.isEnabled = canInsert
+            bodyStack.addArrangedSubview(card)
+            if let advice = result.advice.first(where: { $0.text == reply }) {
+                if !advice.reason.isEmpty {
+                    bodyStack.addArrangedSubview(makeNoticeLabel("理由：\(advice.reason)", color: GoutouTheme.secondary))
+                }
+                if !advice.tradeoff.isEmpty {
+                    bodyStack.addArrangedSubview(makeNoticeLabel("代价：\(advice.tradeoff)", color: GoutouTheme.secondary))
+                }
+            }
         }
-        bodyStack.addArrangedSubview(makeNoticeLabel("点一条候选即可上屏。", color: GoutouTheme.secondary))
+        if canInsert {
+            bodyStack.addArrangedSubview(makeNoticeLabel("点一条候选即可上屏。", color: GoutouTheme.secondary))
+        }
     }
 
     private static let replyCardMarks = ["①", "②", "③"]

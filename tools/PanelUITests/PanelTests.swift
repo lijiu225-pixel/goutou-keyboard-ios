@@ -355,6 +355,51 @@ final class PanelTests: XCTestCase {
         assertBounded(panel)
     }
 
+    @MainActor
+    func testReplyAdviceAndExplicitVoiceRewrite() throws {
+        let replies = ["行，晚点说", "今晚空不空", "给我留个位"]
+        let result = RecognizedChatResult(analysis: "轻松回应即可", tone: "友好", replies: replies,
+            advice: [GoutouAIClient.ReplyAdvice(text: replies[0], reason: "接住话题", tradeoff: "推进较慢")])
+        var snapshot = GoutouPanelSnapshot(state: .empty(banner: nil), segments: [], memory: [], profiles: [],
+            activeProfileID: UUID(), lastResult: nil, configSummary: "", memoryNote: nil)
+        snapshot.activeRecognizedChat = RecognizedChatContext(
+            messages: [GoutouChatClipboardMessage(role: .me, text: "行")], updatedAt: Date())
+        snapshot.recognizedChatAnalysis = .success(result)
+        let panel = GoutouPanelView(frame: CGRect(x: 0, y: 0, width: 390, height: 302))
+        let recorder = PanelActionRecorder()
+        panel.delegate = recorder
+        panel.render(snapshot)
+        panel.layoutIfNeeded()
+        XCTAssertEqual(recorder.actions.count, 0, "rendering cannot request AI")
+        XCTAssertTrue(labels(in: panel).contains("理由：接住话题"))
+        XCTAssertTrue(labels(in: panel).contains("代价：推进较慢"))
+        try tap("① ", in: panel)
+        XCTAssertEqual(recorder.actions.count, 1)
+        XCTAssertTrue(recorder.actions.contains { if case .insertRecognizedReply(let text) = $0 { return text == replies[0] }; return false })
+        try tap("更像我", in: panel)
+        XCTAssertEqual(recorder.actions.count, 2, "one click produces one action")
+        XCTAssertTrue(recorder.actions.contains { if case .rewriteRecognizedReplies = $0 { return true }; return false })
+        snapshot.recognizedChatAnalysis = .rewriting(result)
+        panel.render(snapshot)
+        panel.layoutIfNeeded()
+        XCTAssertTrue(labels(in: panel).contains("轻松回应即可"), "original analysis remains visible")
+        XCTAssertFalse(titles(in: panel).contains("更像我"))
+        XCTAssertFalse(titles(in: panel).contains("重新分析"))
+        let cards = descendants(panel).compactMap { $0 as? UIButton }.filter {
+            ["①", "②", "③"].contains(where: ($0.title(for: .normal) ?? "").hasPrefix)
+        }
+        XCTAssertEqual(cards.count, 3)
+        XCTAssertTrue(cards.allSatisfy { !$0.isEnabled })
+        try tap("取消改写", in: panel)
+        XCTAssertEqual(recorder.actions.count, 3)
+        XCTAssertTrue(recorder.actions.contains { if case .cancelRecognizedChatAnalysis = $0 { return true }; return false })
+        snapshot.recognizedChatAnalysis = .success(result)
+        snapshot.recognizedChatRewriteNotice = "改写未完成，已保留原回复。"
+        panel.render(snapshot)
+        XCTAssertTrue(labels(in: panel).contains("改写未完成，已保留原回复。"))
+        XCTAssertTrue(titles(in: panel).contains("更像我"))
+    }
+
     /// 阶段 12E：发现共享聊天更新时只出现横幅与「使用最新聊天」，
     /// 点它只发一个动作，且不会顺带触发分析。
     @MainActor

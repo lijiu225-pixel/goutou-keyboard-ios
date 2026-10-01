@@ -78,6 +78,7 @@ targets:
       - path: Keyboard
         excludes:
           - "GoutouSkill.md"
+          - "JevChatLicense.txt"
           - "pinyin-chars.tsv"
           - "pinyin-words.tsv"
       # 通信契约、共享存储与 probe：键盘不需要 OCR 的界面和几何代码。
@@ -89,6 +90,8 @@ targets:
       # 阶段 12E：共享聊天指纹两端共用，免得 App 与 Keyboard 对「是不是同一份聊天」判断不一致。
       - path: Shared/SharedChatFingerprint.swift
       - path: Keyboard/GoutouSkill.md
+        buildPhase: resources
+      - path: Keyboard/JevChatLicense.txt
         buildPhase: resources
       # 九键拼音词库（由 tools/fetch-pinyin-data.py 从三份 MIT 数据生成）
       - path: Keyboard/pinyin-chars.tsv

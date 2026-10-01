@@ -460,3 +460,74 @@ guard case .success(let structuredResult) = RecognizedChatResult.normalized(stru
     fatalError("StructuredReplyCheck: structured candidates were lost")
 }
 expect(structuredResult.replies.count == 3, "structured candidates retain exactly three reply texts")
+
+expect(structuredResult.advice.count == 3, "every structured reply retains its advice")
+expect(structuredResult.advice[0].reason == "接住话题", "reason remains associated with its reply")
+expect(structuredResult.advice[1].tradeoff == "需要对方表态", "tradeoff remains associated with its reply")
+let messyAdvice = GoutouAIClient.RecognizedChatFields(analysis: "分析", tone: "友好",
+    replies: ["", " 第一条 ", "第一条", "第二条", "第三条", "第四条"], advice: [
+        .init(text: "第一条", reason: "第一理由", tradeoff: String(repeating: "长", count: 201)),
+        .init(text: "第二条", reason: "第二理由", tradeoff: "第二代价"),
+        .init(text: "第四条", reason: "不应显示", tradeoff: "不应显示")])
+guard case .success(let cleanAdvice) = RecognizedChatResult.normalized(messyAdvice) else { fatalError("valid candidates should normalize") }
+expect(cleanAdvice.replies == ["第一条", "第二条", "第三条"], "empty/duplicate/extra candidates removed")
+expect(cleanAdvice.advice.count == 2, "unselected metadata removed; missing advice not fabricated")
+expect(cleanAdvice.advice[1].text == "第二条", "metadata remains aligned after filtering")
+expect(cleanAdvice.advice[0].tradeoff.count == 201, "long explanations are bounded with an ellipsis")
+let legacyAdvice = RecognizedChatResult.normalized(GoutouAIClient.RecognizedChatFields(
+    analysis: goodResult.analysis, tone: goodResult.tone, replies: goodResult.replies))
+expect(legacyAdvice == .success(goodResult), "legacy string replies still work without fabricated advice")
+var rewriteSession = RecognizedChatAnalysisSession()
+guard case .started(let firstGeneration) = rewriteSession.begin(hasFullAccess: true, config: config,
+    skillAvailable: true, context: context) else { fatalError("initial analysis must start") }
+rewriteSession.complete(generation: firstGeneration, result: .success(structuredResult))
+guard case .started(let rewriteGeneration) = rewriteSession.beginRewrite(hasFullAccess: true,
+    config: config, skillAvailable: true, context: context) else { fatalError("rewrite must start") }
+expect(rewriteSession.isAnalyzing, "rewriting is an in-flight request")
+expect(rewriteSession.beginRewrite(hasFullAccess: true, config: config, skillAvailable: true,
+    context: context) == .blocked(.alreadyRunning), "duplicate rewrite clicks cannot start a second request")
+expect(rewriteSession.begin(hasFullAccess: true, config: config, skillAvailable: true,
+    context: context) == .blocked(.alreadyRunning), "analysis cannot overlap a rewrite")
+expect(rewriteSession.replyToInsert(structuredResult.replies[0]) == nil, "old replies cannot insert while rewriting")
+let rewritten = GoutouAIClient.RecognizedChatFields(analysis: "模型试图改分析", tone: "模型试图改状态",
+    replies: ["嗯，晚点说", "今晚空不空", "先给我留个位"])
+rewriteSession.completeRewrite(generation: rewriteGeneration, result: .success(rewritten))
+guard case .success(let rewrittenResult) = rewriteSession.state else { fatalError("rewrite should succeed") }
+expect(rewrittenResult.analysis == structuredResult.analysis, "rewrite preserves the accepted analysis")
+expect(rewrittenResult.tone == structuredResult.tone, "rewrite preserves the accepted counterpart state")
+expect(rewrittenResult.replies == rewritten.replies, "rewrite replaces only the reply candidates")
+expect(rewriteSession.replyToInsert(structuredResult.replies[0]) == nil, "stale reply cannot insert after rewrite")
+expect(rewriteSession.replyToInsert(rewritten.replies[0]) == rewritten.replies[0], "new reply inserts exact text")
+guard case .started(let failedGeneration) = rewriteSession.beginRewrite(hasFullAccess: true,
+    config: config, skillAvailable: true, context: context) else { fatalError("retry must start") }
+rewriteSession.completeRewrite(generation: failedGeneration, result: .failure(.ai(.timeout)))
+expect(rewriteSession.state == .success(rewrittenResult), "network failure preserves original usable candidates")
+expect(rewriteSession.rewriteNotice?.contains("超时") == true, "rewrite failure shows a friendly explanation")
+guard case .started(let invalidGeneration) = rewriteSession.beginRewrite(hasFullAccess: true,
+    config: config, skillAvailable: true, context: context) else { fatalError("invalid response test must start") }
+rewriteSession.completeRewrite(generation: invalidGeneration, result: .success(.init(analysis: nil, tone: nil, replies: ["只有一条"])))
+expect(rewriteSession.state == .success(rewrittenResult), "malformed rewrite restores all original candidates")
+expect(rewriteSession.beginRewrite(hasFullAccess: false, config: config, skillAvailable: true,
+    context: context) == .blocked(.noFullAccess), "rewrite respects full access guard")
+expect(rewriteSession.state == .success(rewrittenResult), "blocked rewrite preserves accepted result")
+guard case .started(let cancelledGeneration) = rewriteSession.beginRewrite(hasFullAccess: true,
+    config: config, skillAvailable: true, context: context) else { fatalError("cancel test must start") }
+rewriteSession.cancelInFlight()
+rewriteSession.completeRewrite(generation: cancelledGeneration, result: .success(rewritten))
+expect(rewriteSession.state == .success(rewrittenResult), "cancel preserves original and rejects late callback")
+guard case .started(let staleGeneration) = rewriteSession.beginRewrite(hasFullAccess: true,
+    config: config, skillAvailable: true, context: context) else { fatalError("stale test must start") }
+rewriteSession.invalidate()
+rewriteSession.completeRewrite(generation: staleGeneration, result: .success(rewritten))
+expect(rewriteSession.state == .idle, "context switch rejects old rewrite result")
+expect(rewriteSession.rewriteNotice == nil, "context switch clears old rewrite notice")
+let styleMessages = [GoutouChatClipboardMessage(role: .me, text: "行，晚点说"),
+                     GoutouChatClipboardMessage(role: .other, text: "OTHER-STYLE-SECRET")]
+let rewritePrompt = RecognizedChatPrompt.rewriteUserMessage(messages: styleMessages, accepted: structuredResult)
+expect(rewritePrompt?.contains("行，晚点说") == true, "rewrite uses confirmed self messages")
+expect(rewritePrompt?.contains("OTHER-STYLE-SECRET") == false, "counterpart messages are never voice samples")
+expect(rewritePrompt?.contains(structuredResult.analysis) == true, "rewrite receives accepted analysis as context")
+let noStyle = RecognizedChatPrompt.rewriteUserMessage(messages: [styleMessages[1]], accepted: structuredResult)
+expect(noStyle?.contains("样本不足") == true, "no self sample falls back to plain speech")
+expect(RecognizedChatPrompt.rewriteUserMessage(messages: [], accepted: structuredResult) == nil, "empty chat cannot rewrite")
+print("StructuredReplyCheck passed (\(checks) total assertions; no network)")

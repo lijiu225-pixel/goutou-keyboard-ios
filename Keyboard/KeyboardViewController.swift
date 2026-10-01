@@ -533,7 +533,8 @@ final class KeyboardViewController: UIInputViewController {
             sharedChatError: recognizedChat.errorMessage,
             activeRecognizedChat: recognizedChat.active,
             pendingSharedChat: sharedChatUpdate.pending,
-            recognizedChatAnalysis: recognizedChatAnalysis.state
+            recognizedChatAnalysis: recognizedChatAnalysis.state,
+            recognizedChatRewriteNotice: recognizedChatAnalysis.rewriteNotice
         ))
     }
 
@@ -794,6 +795,30 @@ final class KeyboardViewController: UIInputViewController {
                 case .failure(let error):
                     self.recognizedChatAnalysis.complete(generation: generation, result: .failure(.ai(error)))
                 }
+                self.refreshPanel()
+            }
+        }
+        refreshPanel()
+    }
+
+    private func startRecognizedChatRewrite() {
+        let start = recognizedChatAnalysis.beginRewrite(hasFullAccess: hasFullAccess, config: config,
+            skillAvailable: !skillText.isEmpty, context: recognizedChat.active)
+        guard case .started(let generation) = start else { refreshPanel(); return }
+        guard let config = config, let context = recognizedChat.active,
+              case .rewriting(let accepted) = recognizedChatAnalysis.state,
+              let message = RecognizedChatPrompt.rewriteUserMessage(messages: context.messages, accepted: accepted) else {
+            recognizedChatAnalysis.completeRewrite(generation: generation, result: .failure(.noActiveContext))
+            refreshPanel()
+            return
+        }
+        recognizedChatTask = GoutouAIClient.analyzeChat(config: config,
+            systemPrompt: RecognizedChatPrompt.rewriteSystemPrompt, userMessage: message) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self = self, self.recognizedChatAnalysis.generation == generation else { return }
+                self.recognizedChatTask = nil
+                self.recognizedChatAnalysis.completeRewrite(generation: generation,
+                    result: result.mapError { .ai($0) })
                 self.refreshPanel()
             }
         }
@@ -1112,8 +1137,13 @@ extension KeyboardViewController: GoutouPanelViewDelegate {
             // 阶段 9 唯一会发网络请求的分支。
             startRecognizedChatAnalysis()
 
+        case .rewriteRecognizedReplies:
+            startRecognizedChatRewrite()
+
         case .cancelRecognizedChatAnalysis:
-            dropRecognizedChatAnalysis()
+            recognizedChatTask?.cancel()
+            recognizedChatTask = nil
+            recognizedChatAnalysis.cancelInFlight()
             refreshPanel()
 
         case .insertRecognizedReply(let reply):

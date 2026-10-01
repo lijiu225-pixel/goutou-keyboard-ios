@@ -433,7 +433,7 @@ enum GoutouAIClient {
 
     /// `replies` 可能是数组、数组里套对象、也可能是换行分隔的一整段。
     static func normalizedReplies(from payload: [String: Any]) -> [String] {
-        let keys = ["replies", "reply", "回复", "话术", "候选", "suggestions", "responses"]
+        let keys = ["replies", "candidates", "reply", "回复", "话术", "候选", "suggestions", "responses"]
         for key in keys {
             guard let value = payload[key] else { continue }
             if let text = value as? String {
@@ -490,6 +490,29 @@ enum GoutouAIClient {
         var analysis: String?
         var tone: String?
         var replies: [String]
+        var advice: [ReplyAdvice] = []
+    }
+
+    /// Metadata is display-only; only `text` may be inserted into the host input.
+    struct ReplyAdvice: Equatable {
+        var text: String
+        var reason: String
+        var tradeoff: String
+    }
+
+    static func replyAdvice(from payload: [String: Any]) -> [ReplyAdvice] {
+        for key in ["replies", "candidates", "reply", "回复", "话术", "候选", "suggestions", "responses"] {
+            guard let value = payload[key] else { continue }
+            guard let items = value as? [Any] else { return [] }
+            return items.compactMap { item in
+                guard let object = item as? [String: Any],
+                      let text = firstString(in: object, keys: ["text", "content", "reply", "回复", "话术"]) else { return nil }
+                return ReplyAdvice(text: text.trimmed,
+                    reason: firstString(in: object, keys: ["reason", "理由"]) ?? "",
+                    tradeoff: firstString(in: object, keys: ["tradeoff", "代价"]) ?? "")
+            }
+        }
+        return []
     }
 
     /// 从响应里宽容地拆字段。
@@ -534,7 +557,8 @@ enum GoutouAIClient {
         return RecognizedChatFields(
             analysis: firstString(in: unwrapped, keys: analysisKeys),
             tone: firstString(in: unwrapped, keys: toneKeys),
-            replies: normalizedReplies(from: unwrapped)
+            replies: normalizedReplies(from: unwrapped),
+            advice: replyAdvice(from: unwrapped)
         )
     }
 
