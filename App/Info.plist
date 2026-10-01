@@ -33,6 +33,15 @@
 	<!-- 动态识别的灵动岛 / 锁屏状态（Live Activity） -->
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.example.goutouinput.review</string>
+			<key>CFBundleURLSchemes</key>
+			<array><string>goutouinput</string></array>
+		</dict>
+	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

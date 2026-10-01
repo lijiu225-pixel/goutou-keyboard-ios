@@ -10,6 +10,7 @@ struct GoutouCaptureActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: GoutouCaptureActivityAttributes.self) { context in
             lockScreen(context.state)
+                .widgetURL(GoutouCaptureLink.reviewURL)
                 .activityBackgroundTint(Color.black.opacity(0.75))
                 .activitySystemActionForegroundColor(Color.white)
         } dynamicIsland: { context in
@@ -42,6 +43,7 @@ struct GoutouCaptureActivityWidget: Widget {
                     .font(.caption2).foregroundStyle(.tint)
             }
             .keylineTint(.blue)
+            .widgetURL(GoutouCaptureLink.reviewURL)
         }
     }
 

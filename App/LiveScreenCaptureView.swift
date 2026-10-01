@@ -4,7 +4,7 @@ import SwiftUI
 /// 本机 Vision 能识别出画面文字」。不做聊天结构、不做我/对方、不联网、不调用 AI。
 struct LiveScreenCaptureView: View {
 
-    @StateObject private var manager = LiveScreenCaptureManager()
+    @ObservedObject var manager: LiveScreenCaptureManager
     @State private var showsReview = false
 
     private static let timeFormatter: DateFormatter = {
@@ -18,6 +18,9 @@ struct LiveScreenCaptureView: View {
             Section {
                 LabeledContent("识别门控", value: manager.sceneVerdict.title)
                 LabeledContent("状态", value: manager.model.state.title)
+                if manager.reviewDraft == nil, let note = manager.reviewNote {
+                    Text(note).foregroundStyle(.secondary)
+                }
                 Button("开始动态识别") { manager.start() }
                     .disabled(!manager.model.state.canStart)
                 Button("停止动态识别", role: .destructive) { manager.stop() }
@@ -194,6 +197,6 @@ struct LiveScreenCaptureView: View {
 
 #Preview {
     NavigationStack {
-        LiveScreenCaptureView()
+        LiveScreenCaptureView(manager: LiveScreenCaptureManager())
     }
 }

@@ -26,6 +26,7 @@ final class LiveScreenCaptureManager: ObservableObject {
     @Published private(set) var chat = LiveChatSnapshot.empty
     /// 阶段 12C：冻结出来的确认草稿（nil = 没在确认）。和实时 chat 是两份状态，互不影响。
     @Published var reviewDraft: LiveChatReviewDraft?
+    private var lastSavedReviewDraft: LiveChatReviewDraft?
     /// 保存结果提示（成功或失败），只给人看。
     @Published private(set) var reviewNote: String?
     /// 阶段 12D：自动同步状态（默认关闭，只有用户主动开启才会写共享聊天）。
@@ -234,15 +235,28 @@ final class LiveScreenCaptureManager: ObservableObject {
 
     /// 「整理当前实时聊天」：把当前时间线**冻结**成一份草稿。
     /// 捕获可以继续跑、时间线可以继续涨，这份草稿不会跟着跳。
-    func beginLiveChatReview() {
-        guard !chat.messages.isEmpty else { return }
-        reviewDraft = LiveChatReviewDraft(timeline: chat.messages)
+    @discardableResult
+    func beginLiveChatReview(resumingExisting: Bool = false) -> Bool {
+        if resumingExisting {
+            guard let draft = LiveChatReviewDraft.opening(existing: reviewDraft, lastSaved: lastSavedReviewDraft,
+                                                         timeline: chat.messages) else {
+                reviewNote = "还没有可整理的消息。请回到微信聊天，等待文字识别完成。"
+                return false
+            }
+            if draft == reviewDraft { return true }
+            reviewDraft = draft
+        } else {
+            guard !chat.messages.isEmpty else { return false }
+            reviewDraft = LiveChatReviewDraft(timeline: chat.messages)
+        }
         reviewNote = nil
+        return true
     }
 
     /// 放弃这次整理：只丢草稿；实时聊天与已共享聊天都不动。
     func cancelLiveChatReview() {
         reviewDraft = nil
+        lastSavedReviewDraft = nil
         reviewNote = nil
     }
 
@@ -267,6 +281,7 @@ final class LiveScreenCaptureManager: ObservableObject {
                 let snapshot = try LiveChatReviewSaver(store: SharedChatStore()).save(draft)
                 sync.noteManualSaveSucceeded()
                 Task { @MainActor in
+                    self?.lastSavedReviewDraft = draft
                     self?.reviewNote = "已保存 \(snapshot.messages.count) 条实时聊天，点击键盘狗头即可载入。"
                 }
             } catch {

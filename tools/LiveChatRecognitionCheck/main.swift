@@ -362,4 +362,21 @@ for file in scannedFiles {
     }
 }
 
+expect(LiveChatRoleClassifier.classify(box: CGRect(x: 0.17, y: 0.3, width: 0.11, height: 0.018)) == .other,
+       "device text includes both the avatar gutter and bubble padding")
+expect(LiveChatRoleClassifier.classify(box: CGRect(x: 0.78, y: 0.4, width: 0.05, height: 0.018)) == .me,
+       "short right-hand text sits inside the bubble, away from the avatar")
+var metadataSystem = LiveChatSystem()
+metadataSystem.reset(generation: 1)
+let metadataFrame = [
+    observation("8月20日 星期四 01:51", x: 0.34, y: 0.24, width: 0.32),
+    observation("合成联系人撤回了一条消息", x: 0.30, y: 0.31, width: 0.40),
+    observation("8月20日 星期四 01:51", x: 0.17, y: 0.42, width: 0.32),
+    observation("聊一聊星期四的安排", x: 0.17, y: 0.50, width: 0.38),
+]
+_ = metadataSystem.ingest(observations: metadataFrame, timestamp: t0, generation: 1)
+let metadataChat = metadataSystem.ingest(observations: metadataFrame, timestamp: t0.addingTimeInterval(1), generation: 1)
+expect(metadataChat.messages.map(\.text) == ["8月20日 星期四 01:51", "聊一聊星期四的安排"],
+       "centered dates and retractions are excluded, while identical side-aligned message text survives")
+
 print("LiveChatRecognitionCheck passed (\(checks) assertions; pure logic only; no ScreenCaptureKit, no network)")

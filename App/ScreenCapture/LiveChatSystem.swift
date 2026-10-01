@@ -75,9 +75,11 @@ struct LiveChatSystem {
     ) -> LiveChatSnapshot {
         guard generation == self.generation else { return snapshot() }
         self.config = config
-        candidatesThisFrame = candidates.count
+        // Counts and the formal timeline contain messages, not date/retraction rows.
+        let messages = candidates.filter { $0.role != .system }
+        candidatesThisFrame = messages.count
 
-        let stable = stabilizer.update(candidates, config: config)
+        let stable = stabilizer.update(messages, config: config)
         stableThisFrame = stable.count
 
         timeline.merge(stable, config: config)

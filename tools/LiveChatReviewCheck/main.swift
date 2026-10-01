@@ -243,4 +243,32 @@ for file in reviewFiles {
 // 40：阶段 12C 不碰 Keyboard 目录
 expect(reviewFiles.allSatisfy { !$0.hasPrefix("Keyboard/") }, "40. 阶段 12C 的文件都不在 Keyboard 目录")
 
+// The island resumes the same frozen, edited value; new live messages cannot overwrite it.
+var editedReview = LiveChatReviewDraft(timeline: Array(timeline.prefix(2)))
+let editedID = editedReview.messages[0].id
+editedReview.update(id: editedID, role: .me, text: "手动修正的匿名正文", isIncluded: false)
+let resumedReview = LiveChatReviewDraft.opening(existing: editedReview, lastSaved: nil,
+                                              timeline: timeline + [candidate("后来识别的消息", role: .other)])
+expect(resumedReview == editedReview, "island entry preserves edits, roles, selections, order and IDs")
+expect(LiveChatReviewDraft.opening(existing: editedReview, lastSaved: nil, timeline: []) == editedReview,
+       "an existing unsaved draft is available even when the current timeline is empty")
+let nextReview = LiveChatReviewDraft.opening(existing: editedReview, lastSaved: editedReview, timeline: timeline)
+expect(nextReview?.messages.count == timeline.count, "an unchanged saved snapshot can advance to the current timeline")
+expect(LiveChatReviewDraft.opening(existing: nil, lastSaved: nil, timeline: []) == nil,
+       "a cold empty entry cannot fabricate a conversation")
+let freshReview = LiveChatReviewDraft.opening(existing: nil, lastSaved: nil, timeline: timeline)
+expect(freshReview?.messages.map(\.text) == timeline.map(\.text), "first entry freezes the current messages")
+expect(GoutouCaptureLink.opensReview(GoutouCaptureLink.reviewURL), "the widget URL routes to review")
+for value in ["goutouinput://chat/save", "goutouinput://chat/review?analyze=1", "goutouinput://chat/review#text",
+              "https://chat/review", "goutouinput://other/review", "goutouinput://user:pass@chat/review"] {
+    expect(!GoutouCaptureLink.opensReview(URL(string: value)!), "unrecognized URL is ignored: \(value)")
+}
+let plistData = try Data(contentsOf: URL(fileURLWithPath: "App/Info.plist"))
+let appPlist = try PropertyListSerialization.propertyList(from: plistData, format: nil) as! [String: Any]
+let registered = (appPlist["CFBundleURLTypes"] as? [[String: Any]] ?? []).flatMap { $0["CFBundleURLSchemes"] as? [String] ?? [] }
+expect(registered.contains(GoutouCaptureLink.reviewURL.scheme!), "installed app registers the widget's URL scheme")
+let widgetSource = try String(contentsOfFile: "Widget/GoutouCaptureActivityWidget.swift", encoding: .utf8)
+expect(widgetSource.components(separatedBy: ".widgetURL(GoutouCaptureLink.reviewURL)").count == 3,
+       "both island and lock-screen entry use the same reviewed URL")
+
 print("LiveChatReviewCheck passed (\(checks) assertions; temporary container only; no network)")

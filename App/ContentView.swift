@@ -6,6 +6,9 @@ import SwiftUI
 /// 回键盘的「军师 → ⚙ 设置 → 从剪贴板导入」。
 /// 接口配置仍走原有剪贴板通道；聊天内容改走「截图 OCR → 剪贴板」通道，不依赖 App Group。
 struct ContentView: View {
+    @StateObject private var captureManager = LiveScreenCaptureManager()
+    @State private var capturePath: [CaptureDestination] = []
+    private enum CaptureDestination: Hashable { case capture, review }
     @State private var draft = ""
     @State private var baseURL = ""
     @State private var model = ""
@@ -25,7 +28,7 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $capturePath) {
             Form {
                 Section {
                     TextEditor(text: $draft)
@@ -58,7 +61,7 @@ struct ContentView: View {
                 }
 
                 Section {
-                    NavigationLink("动态识别测试") { LiveScreenCaptureView() }
+                    NavigationLink("动态识别测试", value: CaptureDestination.capture)
                 } header: {
                     Text("动态屏幕识别（实验）")
                 } footer: {
@@ -129,6 +132,17 @@ struct ContentView: View {
             }
             .navigationTitle("狗头军师输入法")
             .onAppear(perform: loadStoredConfig)
+            .navigationDestination(for: CaptureDestination.self) { destination in
+                switch destination {
+                case .capture: LiveScreenCaptureView(manager: captureManager)
+                case .review: LiveChatReviewView(manager: captureManager)
+                }
+            }
+        }
+        .onOpenURL { url in
+            guard GoutouCaptureLink.opensReview(url) else { return }
+            let hasReview = captureManager.beginLiveChatReview(resumingExisting: true)
+            capturePath = [hasReview ? .review : .capture]
         }
     }
 

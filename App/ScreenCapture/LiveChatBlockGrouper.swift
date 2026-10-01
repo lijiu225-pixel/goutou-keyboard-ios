@@ -60,7 +60,8 @@ enum LiveChatBlockGrouper {
             return LiveChatCandidate(
                 text: text,
                 normalizedText: LiveChatText.normalize(text),
-                role: LiveChatRoleClassifier.classify(box: box, config: config),
+                role: LiveChatRoleClassifier.isSystemLabel(text: text, box: box, config: config)
+                    ? .system : LiveChatRoleClassifier.classify(box: box, config: config),
                 box: box,
                 // 取最低置信度：一条消息里有一行认不准，整条就标低
                 confidence: block.map(\.confidence).min() ?? 0,
@@ -77,6 +78,10 @@ enum LiveChatBlockGrouper {
     ) -> Bool {
         guard !LiveChatText.normalize(previous.text).isEmpty,
               !LiveChatText.normalize(next.text).isEmpty else { return false }
+
+        // A time or retraction row is a boundary, even when nearby text is unknown.
+        if LiveChatRoleClassifier.isSystemLabel(text: previous.text, box: previous.box, config: config)
+            || LiveChatRoleClassifier.isSystemLabel(text: next.text, box: next.box, config: config) { return false }
 
         // 1) 角色必须兼容：一左一右绝不合（「对方：你好 / 我：你好」上下再近也是两条）
         let previousRole = LiveChatRoleClassifier.classify(box: previous.box, config: config)

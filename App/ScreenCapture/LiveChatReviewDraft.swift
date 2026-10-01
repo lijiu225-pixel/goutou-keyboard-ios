@@ -39,6 +39,14 @@ struct LiveChatReviewDraft: Equatable {
         }
     }
 
+    /// Resume unsaved edits and IDs. A saved, unchanged snapshot can be replaced
+    /// by the current timeline on the next island tap.
+    static func opening(existing: Self?, lastSaved: Self?, timeline: [LiveChatCandidate]) -> Self? {
+        if let existing, existing != lastSaved { return existing }
+        guard !timeline.isEmpty else { return existing }
+        return Self(timeline: timeline)
+    }
+
     var includedCount: Int { messages.filter(\.isIncluded).count }
     var systemCount: Int { messages.filter(\.isSystem).count }
 

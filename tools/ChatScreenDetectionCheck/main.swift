@@ -588,7 +588,7 @@ for frame in 0..<12 {
     if frame == 2 { deviceGeneration = deviceLoop.chatGeneration }
 }
 expect(deviceLoop.chatGeneration == deviceGeneration, "island feedback never repeatedly resets the timeline")
-expect(deviceLoop.snapshot().messages.count == 4, "island feedback leaves live messages accumulated")
+expect(deviceLoop.snapshot().messages.count == 5, "island feedback leaves live messages accumulated, including text directly below navigation")
 
 let noNavigationProbe = ChatSceneDetector.probeEvidence(observations: deviceBase, rectangles: [])
 expect(noNavigationProbe.topBarFingerprint == nil, "cheap probe can miss the contact while recognizing messages")
@@ -647,5 +647,14 @@ expect(tenBubbleChat.messages.count == 10, "all ten text bubbles survive croppin
 expect(tenBubbleChat.messages.first?.text == "第一条长消息的开头第一条长消息的中间第一条长消息的结尾", "the first multiline bubble is complete")
 expect(tenBubbleChat.messages.map(\.role) == [.me, .me, .other, .other, .other, .other, .other, .other, .other, .me], "real text insets identify both speakers")
 expect(tenBubbleChat.unknownCount == 0, "ten unambiguous bubbles do not require manual roles")
+let keyboardEvidence = ChatSceneDetector.probeEvidence(
+    observations: [observation("按住 说话", x: 0.30, y: 0.60, width: 0.25)],
+    rectangles: [CGRect(x: 0.11, y: 0.595, width: 0.69, height: 0.044),
+                 CGRect(x: 0.23, y: 0.89, width: 0.50, height: 0.044)])
+expect(keyboardEvidence.inputTopRatio == 0.60, "an explicit input control wins over a keyboard space bar")
+let proseInputEvidence = ChatSceneDetector.probeEvidence(
+    observations: [observation("这条消息谈到了输入方法", x: 0.17, y: 0.65, width: 0.45)],
+    rectangles: tenBubbleRectangles)
+expect(proseInputEvidence.inputTopRatio == 0.918, "ordinary prose mentioning input cannot move the viewport")
 
 print("ChatScreenDetectionCheck passed (\(checks) assertions; pure logic only; synthetic screens; no network)")

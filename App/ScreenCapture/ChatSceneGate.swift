@@ -50,7 +50,7 @@ struct ChatSceneGateConfiguration: Equatable {
     var titleBandStart: CGFloat = 0.045
     var titleBandEnd: CGFloat = 0.11
     /// 中部消息带的上边界
-    var bodyTopRatio: CGFloat = 0.17
+    var bodyTopRatio: CGFloat = 0.11
     /// 没有找到输入栏时，消息带的下边界
     var bodyBottomRatio: CGFloat = 0.72
     /// 底部输入区：至少从这个高度往下找
@@ -175,7 +175,7 @@ enum ChatSceneDetector {
         // 底部输入区：占位文字，或者「宽而扁」的输入框几何。两个都没有才算没有输入区。
         let placeholder = observations.filter {
             $0.box.minY >= config.inputBandStart
-                && ($0.text.contains("输入") || $0.text.contains("按住") || $0.text == "发送")
+                && ["输入", "输入消息", "请输入消息", "按住说话", "发送"].contains(LiveChatText.normalize($0.text))
         }.map(\.box)
         let inputBoxes = rectangles.filter {
             $0.minY >= config.inputBandStart
@@ -183,7 +183,10 @@ enum ChatSceneDetector {
                 && $0.height >= config.minimumInputHeight && $0.height <= config.maximumInputHeight
                 && $0.minX >= 0.02 && $0.maxX <= 0.98
         }
-        evidence.inputTopRatio = (placeholder + inputBoxes).map(\.minY).min()
+        // A long bubble can satisfy the same size test as an empty input field.
+        // Select the lowest field, not the first bubble in the lower half. Explicit
+        // input labels take priority so a visible keyboard's space bar cannot win.
+        evidence.inputTopRatio = placeholder.map(\.minY).max() ?? inputBoxes.map(\.minY).max()
         evidence.hasInputBar = evidence.inputTopRatio != nil
 
         // 微信底部 tab 命中：联系人列表 / 首页这类分栏页面直接判非聊天

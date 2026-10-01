@@ -188,6 +188,7 @@ jobs:
             App/ScreenCapture/LiveChatTimeline.swift \
             App/ScreenCapture/LiveChatSystem.swift \
             App/ScreenCapture/LiveChatReviewDraft.swift \
+            Shared/LiveActivity/GoutouCaptureLink.swift \
             tools/LiveChatReviewCheck/main.swift \
             -o "$RUNNER_TEMP/livechatreviewcheck"
           "$RUNNER_TEMP/livechatreviewcheck"
