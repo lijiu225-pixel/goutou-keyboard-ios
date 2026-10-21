@@ -16,6 +16,12 @@ struct LiveScreenCaptureView: View {
     var body: some View {
         Form {
             Section {
+                Label("边聊天，边整理", systemImage: "text.viewfinder")
+                    .font(.headline).foregroundStyle(.indigo)
+                Text("开始后选择系统整屏共享，进入聊天页面。需要时开启自动同步，将稳定的聊天保存给军师。")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+            Section {
                 LabeledContent("识别门控", value: manager.sceneVerdict.title)
                 LabeledContent("状态", value: manager.model.state.title)
                 Button("开始动态识别") { manager.start() }
@@ -25,7 +31,7 @@ struct LiveScreenCaptureView: View {
             } header: {
                 Text("动态识别")
             } footer: {
-                Text("点「开始」后会弹出系统内容共享选择，请选整屏 / Entire Display，然后切到微信测试。识别全部在本机进行，本阶段不会上传屏幕图像，也不会自动分析聊天。")
+                Text("点「开始」后会弹出系统内容共享选择，请选整屏 / Entire Display，然后进入聊天页面。识别在本机进行；只有你点击「分析」时，才会把聊天文字发送到配置的 AI 接口。")
             }
 
             Section {
@@ -165,7 +171,7 @@ struct LiveScreenCaptureView: View {
                 }
             }
         }
-        .navigationTitle("动态识别测试")
+        .navigationTitle("动态屏幕识别")
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(isPresented: $showsReview) {
             LiveChatReviewView(manager: manager)
