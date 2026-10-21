@@ -99,6 +99,12 @@ struct ChatOCRView: View {
 
     var body: some View {
         Form {
+            Section {
+                Label("从一张截图开始", systemImage: "photo.on.rectangle.angled")
+                    .font(.headline).foregroundStyle(.indigo)
+                Text("选择截图后，检查文字和「我 / 对方」归属，再保存给军师。")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
             pickerSection
             if !messages.isEmpty {
                 if !candidateIndexes.isEmpty {
