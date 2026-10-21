@@ -111,8 +111,20 @@ struct AppMentorView: View {
                         Spacer()
                         Text("\(model.messages.count) 条").font(.caption).foregroundStyle(.secondary)
                     }
+                    Text("按聊天发生的顺序添加，每条选择说话的人。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    if model.messages.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("还没有聊天内容", systemImage: "bubble.left.and.text.bubble.right")
+                                .font(.headline)
+                            Text("添加第一条消息，或读取你已保存的识别结果。")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }.appSurface()
+                    }
                     ForEach($model.messages) { $message in
                         VStack(alignment: .leading, spacing: 10) {
+                            Text("消息 \( (model.messages.firstIndex(where: { $0.id == message.id }) ?? 0) + 1)")
+                                .font(.caption.weight(.medium)).foregroundStyle(.secondary)
                             HStack {
                                 Picker("说话的人", selection: $message.role) {
                                     Text("对方").tag(GoutouChatRole.other)
@@ -179,6 +191,7 @@ struct AppMentorView: View {
             }.padding(20)
         }
         .background(Color(uiColor: .systemGroupedBackground))
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("军师").navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .keyboard) {
