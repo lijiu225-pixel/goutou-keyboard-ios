@@ -131,6 +131,8 @@ final class GoutouPanelView: UIView {
     private let padding: CGFloat = 6
 
     private let bodyScroll = UIScrollView()
+    private var speakerRow: UIView?
+    private var showsAnalysisDetail = false
     private let bodyStack = UIStackView()
     private let settingsButton = NineKeyButton(type: .system)
     private let memoryButton = NineKeyButton(type: .system)
@@ -282,23 +284,16 @@ final class GoutouPanelView: UIView {
         row.distribution = .fillEqually
         row.heightAnchor.constraint(equalToConstant: speakerHeight).isActive = true
 
-        for speaker in [GoutouSpeaker.opponent, .me, .background] {
-            let button = makeClosureKey(title: speaker.buttonTitle, background: GoutouTheme.function, fontSize: 13) {
+        let add = makeClosureKey(title: "＋ 补充聊天", background: GoutouTheme.function, fontSize: 13) { }
+        add.showsMenuAsPrimaryAction = true
+        add.menu = UIMenu(children: [GoutouSpeaker.opponent, .me, .background].map { speaker in
+            UIAction(title: "粘贴为\(speaker.buttonTitle)") { [weak self] _ in
+                guard let self = self else { return }
                 self.delegate?.goutouPanel(self, didTrigger: .addSegment(speaker))
             }
-            button.titleLabel?.adjustsFontSizeToFitWidth = true
-            button.titleLabel?.minimumScaleFactor = 0.75
-            speakerButtons[speaker] = button
-            row.addArrangedSubview(button)
-        }
-
-        memoryButton.titleLabel?.font = .systemFont(ofSize: 13)
-        memoryButton.titleLabel?.adjustsFontSizeToFitWidth = true
-        memoryButton.titleLabel?.minimumScaleFactor = 0.75
-        memoryButton.applyStyle(background: GoutouTheme.function)
-        memoryButton.accessibilityLabel = "长期档案（记忆）"
-        memoryButton.addTarget(self, action: #selector(didTapMemory), for: .touchUpInside)
-        row.addArrangedSubview(memoryButton)
+        })
+        add.accessibilityLabel = "补充聊天：选择归属后粘贴"
+        row.addArrangedSubview(add)
 
         analyzeButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
         analyzeButton.applyStyle(background: GoutouTheme.blue)
@@ -313,6 +308,7 @@ final class GoutouPanelView: UIView {
             analyzeSpinner.centerYAnchor.constraint(equalTo: analyzeButton.centerYAnchor),
         ])
         row.addArrangedSubview(analyzeButton)
+        speakerRow = row
         return row
     }
 
@@ -354,6 +350,7 @@ final class GoutouPanelView: UIView {
         self.sharedChat = snapshot.sharedChat
         self.automaticChatNotice = snapshot.automaticChatNotice
         self.sharedChatError = snapshot.sharedChatError
+        if self.activeRecognizedChat != snapshot.activeRecognizedChat { showsAnalysisDetail = false }
         self.activeRecognizedChat = snapshot.activeRecognizedChat
         self.pendingSharedChat = snapshot.pendingSharedChat
         self.recognizedChatAnalysis = snapshot.recognizedChatAnalysis
@@ -380,8 +377,9 @@ final class GoutouPanelView: UIView {
 
     /// 顶部入口 + 归属键的状态：停在那一屏显示「返回」、已有内容的键打勾、没内容的淡一点。
     private func updateButtons() {
+        speakerRow?.isHidden = activeRecognizedChat != nil || screen != .main
         analyzeButton.isHidden = activeRecognizedChat != nil
-        settingsButton.setTitle(screen == .settings ? "⬅ 返回" : "⚙ 设置", for: .normal)
+        settingsButton.setTitle(screen == .settings ? "⬅ 返回" : "更多", for: .normal)
         memoryButton.setTitle(screen == .memory ? "⬅ 返回" : memoryButtonTitle, for: .normal)
         let name = profiles.first { $0.id == activeProfileID }?.name ?? "当前人物"
         profileButton.setTitle(screen == .profiles ? "⬅ 返回" : "狗头军师 · \(name)", for: .normal)
@@ -423,6 +421,11 @@ final class GoutouPanelView: UIView {
             statusButton.setTitleColor(GoutouTheme.warning, for: .normal)
             return
         }
+        if let active = activeRecognizedChat {
+            statusButton.setTitle("当前聊天 · \(active.messageCount) 条  ›", for: .normal)
+            statusButton.setTitleColor(GoutouTheme.secondary, for: .normal)
+            return
+        }
         let total = segments.reduce(0) { $0 + $1.text.count }
         let tooLong = total > GoutouPanelView.contextWarningLength
         let suffix = showsContextDetail ? "（点一下收起明细）" : ""
@@ -452,12 +455,10 @@ final class GoutouPanelView: UIView {
         }
         if let active = activeRecognizedChat {
             // 主屏也要看得出「正在使用识别聊天」，别和「只是看过预览」混起来。
-            bodyStack.addArrangedSubview(makeNoticeLabel(automaticChatNotice ?? "当前聊天 · \(active.messageCount) 条", color: GoutouTheme.secondary))
+            _ = active
             buildRecognizedChatAnalysis()
-            bodyStack.addArrangedSubview(makeReadChatButton())
             return
         }
-        bodyStack.addArrangedSubview(makeReadChatButton())
         if showsContextDetail {
             buildContextDetailBody()
         } else {
@@ -509,27 +510,16 @@ final class GoutouPanelView: UIView {
             break
         }
 
-        bodyStack.addArrangedSubview(makeSectionHeader("分析结论"))
-        if let note = memoryNote, !note.isEmpty {
-            bodyStack.addArrangedSubview(makeNoticeLabel(note, color: GoutouTheme.secondary))
-        }
-        if let headline = lastResult?.headline, !headline.isEmpty {
-            bodyStack.addArrangedSubview(makeHeadlineLabel(headline))
-        } else {
-            bodyStack.addArrangedSubview(makeNoticeLabel(
-                "还没有结论。复制对方的对话 → 点 👤对方 → 点 ⟳分析。",
-                color: GoutouTheme.secondary
-            ))
-        }
-
-        bodyStack.addArrangedSubview(makeSectionHeader("推荐回复"))
-        let replies = lastResult?.replies ?? []
-        if replies.isEmpty {
-            bodyStack.addArrangedSubview(makeNoticeLabel("还没有候选。", color: GoutouTheme.secondary))
-        } else {
-            for (index, reply) in replies.enumerated() {
+        if let result = lastResult {
+            if !result.headline.isEmpty { bodyStack.addArrangedSubview(makeHeadlineLabel(result.headline)) }
+            bodyStack.addArrangedSubview(makeSectionHeader("点一句填入输入框"))
+            for (index, reply) in result.replies.enumerated() {
                 bodyStack.addArrangedSubview(makeReplyRow(index: index, text: reply))
             }
+        } else {
+            bodyStack.addArrangedSubview(makeNoticeLabel(
+                "先复制聊天内容，点「补充聊天」选择归属，再点分析。也可到 App 识别聊天。",
+                color: GoutouTheme.secondary))
         }
     }
 
@@ -645,15 +635,25 @@ final class GoutouPanelView: UIView {
 
     /// 阶段 10 的正式结果：聊天分析 + 对方状态 + 恰好三条推荐回复。
     private func buildRecognizedChatResult(_ result: RecognizedChatResult) {
-        bodyStack.addArrangedSubview(makeSectionHeader("【聊天分析】"))
-        bodyStack.addArrangedSubview(makeNoticeLabel(result.analysis, color: GoutouTheme.text))
-        bodyStack.addArrangedSubview(makeSectionHeader("【对方状态】"))
-        bodyStack.addArrangedSubview(makeNoticeLabel(result.tone, color: GoutouTheme.text))
-        bodyStack.addArrangedSubview(makeSectionHeader("【推荐回复】"))
+        if screen != .main || showsAnalysisDetail {
+            bodyStack.addArrangedSubview(makeSectionHeader("【聊天分析】"))
+            bodyStack.addArrangedSubview(makeNoticeLabel(result.analysis, color: GoutouTheme.text))
+            bodyStack.addArrangedSubview(makeSectionHeader("【对方状态】"))
+            bodyStack.addArrangedSubview(makeNoticeLabel(result.tone, color: GoutouTheme.text))
+        }
+        if screen == .main {
+            bodyStack.addArrangedSubview(makeActionButton(
+                title: showsAnalysisDetail ? "收起分析详情" : "查看分析与对方状态", background: GoutouTheme.function, fontSize: 12
+            ) {
+                self.showsAnalysisDetail.toggle()
+                self.rebuildBody()
+            })
+        }
+        bodyStack.addArrangedSubview(makeSectionHeader("推荐回复 · 点一句填入"))
         for (index, reply) in result.replies.enumerated() {
             bodyStack.addArrangedSubview(makeReplyCard(index: index, text: reply))
         }
-        bodyStack.addArrangedSubview(makeNoticeLabel("点一条候选即可上屏。", color: GoutouTheme.secondary))
+
     }
 
     private static let replyCardMarks = ["①", "②", "③"]
@@ -669,8 +669,9 @@ final class GoutouPanelView: UIView {
         card.titleLabel?.lineBreakMode = .byWordWrapping
         card.contentHorizontalAlignment = .left
         card.titleEdgeInsets = UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
-        card.applyStyle(background: GoutouTheme.key, cornerRadius: 6)
-        card.accessibilityLabel = "在第 \(index + 1) 条候选上上屏"
+        card.applyStyle(background: GoutouTheme.key, cornerRadius: 10)
+        card.accessibilityLabel = "填入第 \(index + 1) 条回复：\(text)"
+        card.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
         card.payload = text
         card.addTarget(self, action: #selector(didTapRecognizedReply(_:)), for: .touchUpInside)
         return card
@@ -690,26 +691,11 @@ final class GoutouPanelView: UIView {
 
     /// 一条推荐回复：文字（点一下也能插入）+ 右侧「插入」按钮。
     private func makeReplyRow(index: Int, text: String) -> UIView {
-        let row = UIStackView()
-        row.axis = .horizontal
-        row.spacing = 6
-        row.alignment = .fill
-
-        let body = makeReplyButton("\(index + 1). \(text)")
-        row.addArrangedSubview(body)
-
-        let insert = NineKeyButton(type: .system)
-        insert.setTitle("插入", for: .normal)
-        insert.titleLabel?.font = .systemFont(ofSize: 13)
-        insert.applyStyle(background: GoutouTheme.blue)
-        insert.accessibilityLabel = "插入第 \(index + 1) 条"
-        insert.addAction(UIAction { [weak self] _ in
-            guard let self = self else { return }
-            self.delegate?.goutouPanel(self, didTrigger: .insertReply(text))
-        }, for: .touchUpInside)
-        insert.widthAnchor.constraint(equalToConstant: 52).isActive = true
-        row.addArrangedSubview(insert)
-        return row
+        let card = makeReplyButton("\(index + 1). \(text)")
+        card.payload = text
+        card.accessibilityLabel = "填入第 \(index + 1) 条回复：\(text)"
+        card.heightAnchor.constraint(greaterThanOrEqualToConstant: 44).isActive = true
+        return card
     }
 
     /// 点状态行展开的上下文明细：逐段列出 + 单段删除 + 清空。
@@ -827,6 +813,18 @@ final class GoutouPanelView: UIView {
     }
 
     private func buildSettingsBody() {
+        bodyStack.addArrangedSubview(makeSectionHeader("聊天与档案"))
+        bodyStack.addArrangedSubview(makeActionButton(title: memoryButtonTitle, background: GoutouTheme.function, fontSize: 13) {
+            self.setScreen(.memory)
+        })
+        bodyStack.addArrangedSubview(makeReadChatButton())
+        if activeRecognizedChat != nil {
+            bodyStack.addArrangedSubview(makeActionButton(title: "改用手动聊天", background: GoutouTheme.function, fontSize: 13) {
+                self.delegate?.goutouPanel(self, didTrigger: .cancelRecognizedChatUse)
+                self.setScreen(.main)
+            })
+        }
+        bodyStack.addArrangedSubview(makeSectionHeader("接口与诊断"))
         bodyStack.addArrangedSubview(makeNoticeLabel(appGroupDiagnosticStatus, color: GoutouTheme.text))
         bodyStack.addArrangedSubview(makeActionButton(title: "读取 App Group 测试", background: GoutouTheme.function, fontSize: 13) {
             self.delegate?.goutouPanel(self, didTrigger: .readAppGroupProbe)
@@ -1282,6 +1280,10 @@ final class GoutouPanelView: UIView {
     }
 
     @objc private func didTapStatus() {
+        if activeRecognizedChat != nil {
+            setScreen(.sharedChat)
+            return
+        }
         screen = .main
         contextTextIndex = nil
         contextListPage = 0
@@ -1317,6 +1319,7 @@ final class GoutouPanelView: UIView {
     /// 回到主屏（控制器在每次打开面板时调用）。
     func resetScreen() {
         screen = .main
+        showsAnalysisDetail = false
         managingProfileID = nil
         confirmingDelete = false
         updateButtons()

@@ -32,10 +32,17 @@ targets:
       - path: Shared
       # 配置结构在 App 和键盘两边共用同一份（Foundation only，不依赖 UIKit）。
       - path: Keyboard/GoutouConfig.swift
+      - path: Keyboard/GoutouPrompt.swift
+      - path: Keyboard/GoutouAIClient.swift
+      - path: Keyboard/RecognizedChatAnalysis.swift
+      - path: Keyboard/RecognizedChatContext.swift
+      - path: Keyboard/GoutouSkill.md
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.goutouinput
         PRODUCT_NAME: GoutouInput
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: App/GoutouInput.entitlements
         INFOPLIST_FILE: App/Info.plist
         GENERATE_INFOPLIST_FILE: NO

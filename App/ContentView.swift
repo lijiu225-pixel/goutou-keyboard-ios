@@ -1,167 +1,202 @@
 import SwiftUI
 
-/// 宿主 App：配置军师接口 + 启用向导 + 自测输入框。
-///
-/// 配置在这里填（这里能用系统键盘、能粘贴），点「复制配置」，
-/// 回键盘的「军师 → ⚙ 设置 → 从剪贴板导入」。
-/// 接口配置仍走原有剪贴板通道；聊天内容改走「截图 OCR → 剪贴板」通道，不依赖 App Group。
 struct ContentView: View {
-    @State private var draft = ""
-    @State private var baseURL = ""
-    @State private var model = ""
-    @State private var apiKey = ""
-    @State private var copied = false
-
-    private var version: String {
-        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+    var body: some View {
+        TabView {
+            NavigationStack { AppMentorView() }
+                .tabItem { Label("军师", systemImage: "bubble.left.and.bubble.right.fill") }
+            NavigationStack { CaptureHomeView() }
+                .tabItem { Label("识别", systemImage: "text.viewfinder") }
+            NavigationStack { AppSettingsView() }
+                .tabItem { Label("设置", systemImage: "gearshape.fill") }
+        }
+        .tint(.indigo)
     }
+}
 
-    private var buildNumber: String {
-        Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+private struct CaptureHomeView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                AppPageIntro(icon: "text.viewfinder", title: "让聊天更好读", subtitle: "选一张截图，或开始动态识别。\n检查后保存，再交给军师分析。")
+                VStack(spacing: 14) {
+                    NavigationLink { ChatOCRView() } label: {
+                        CaptureEntryCard(icon: "photo.on.rectangle.angled", title: "聊天截图", subtitle: "从相册选择截图，逐条检查和修正", badge: "本机识别", color: .indigo)
+                    }.buttonStyle(.plain)
+                    NavigationLink { LiveScreenCaptureView() } label: {
+                        CaptureEntryCard(icon: "rectangle.inset.filled.and.person.filled", title: "动态识别", subtitle: "主动共享屏幕，持续整理聊天内容", badge: "需屏幕授权", color: .teal)
+                    }.buttonStyle(.plain)
+                }
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("从识别到回复").font(.headline)
+                    CaptureStep(number: "1", title: "获取聊天", detail: "截图识别或动态屏幕识别")
+                    CaptureStep(number: "2", title: "检查并保存", detail: "修正文字，确认「我 / 对方」的归属")
+                    CaptureStep(number: "3", title: "到军师页分析", detail: "读取最新聊天，分析后复制一条回复")
+                }.appSurface()
+                Label("截图在本机处理，分析由你主动发起。", systemImage: "lock.shield")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }.padding(20)
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .navigationTitle("聊天识别").navigationBarTitleDisplayMode(.inline)
     }
+}
 
-    private var config: GoutouConfig {
-        GoutouConfig(baseURL: baseURL, model: model, apiKey: apiKey)
-    }
+private struct CaptureEntryCard: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    let badge: String
+    let color: Color
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextEditor(text: $draft)
-                        .frame(minHeight: 90)
-                        .overlay(alignment: .topLeading) {
-                            if draft.isEmpty {
-                                Text("切到「狗头军师」键盘，在这儿打几个字试试")
-                                    .foregroundStyle(.tertiary)
-                                    .padding(.top, 8)
-                                    .padding(.leading, 5)
-                                    .allowsHitTesting(false)
-                            }
-                        }
-                } header: {
-                    Text("自测输入框")
-                } footer: {
-                    Text("九键：按 6 4 4 2 6 出「你好」。顶栏「军师」进面板。")
-                }
-
-                Section {
-                    NavigationLink {
-                        ChatOCRView()
-                    } label: {
-                        Label("识别聊天截图", systemImage: "text.viewfinder")
-                    }
-                } header: {
-                    Text("聊天截图识别")
-                } footer: {
-                    Text("截一张聊天图 → 本机识别 → 你检查并修正归属 → 点「复制聊天文字」。截图只在这台手机上处理，不保存、不上传；剪贴板只在你自己点复制时才写。这一步只到你手上为止：键盘那边还没有导入入口，识别结果暂时不会进 AI 分析。")
-                }
-
-                Section {
-                    NavigationLink("动态识别测试") { LiveScreenCaptureView() }
-                } header: {
-                    Text("动态屏幕识别（实验）")
-                } footer: {
-                    Text("用户主动授权整屏共享后，主 App 会持续收到屏幕画面，并在本机把画面文字识别出来给你看。本阶段只验证捕获链路：不自动分析、不写聊天、不保存截图。")
-                }
-
-                Section {
-                    NavigationLink("App Group 诊断") { AppGroupDiagnosticView() }
-                }
-
-                Section {
-                    TextField("Base URL，例如 https://api.example.com/v1", text: $baseURL)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .keyboardType(.URL)
-                    TextField("Model，例如 gpt-4o-mini", text: $model)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    SecureField("API Key", text: $apiKey)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                    Button {
-                        copyConfig()
-                    } label: {
-                        Label(
-                            copied ? "已复制，去键盘点「⚙ 设置 → 从剪贴板导入」" : "复制配置到剪贴板",
-                            systemImage: copied ? "checkmark.circle.fill" : "doc.on.doc"
-                        )
-                    }
-                    .disabled(!config.isReady)
-                } header: {
-                    Text("军师接口")
-                } footer: {
-                    Text(config.isReady
-                        ? "Base URL 填到 /v1 就行（会自动补 /chat/completions）。key 只存在这台手机上，不进代码仓库，也不上传到别处。"
-                        : "填好 Base URL 和 Model 才能复制。key 可以留空（自建接口不需要鉴权时）。")
-                }
-
-                Section("把键盘加到系统里") {
-                    StepRow(index: 1, text: "设置 → 通用 → 键盘 → 键盘 → 添加新键盘 → 第三方键盘 → 狗头军师")
-                    StepRow(index: 2, text: "点「狗头军师」→ 打开「允许完全访问」（军师要读剪贴板、要联网，不开就用不了）")
-                    StepRow(index: 3, text: "回到输入框，长按 🌐 切到这个键盘")
-                }
-
-                Section("用军师的三步") {
-                    StepRow(index: 1, text: "长按对方的消息 → 复制")
-                    StepRow(index: 2, text: "键盘顶栏点「军师」→ 点 👤对方（自己的话点 🙋我，背景点 📝背景）")
-                    StepRow(index: 3, text: "点 ⟳ 分析 → 选一条话术上屏（不会自动发送）")
-                }
-
-                // 用 header:/footer: 的显式形式：`Section("标题") { } footer: { }` 是 iOS 17 才有的重载，
-                // 本工程 deploymentTarget 是 iOS 16，加了 footer 会编译不过。
-                Section {
-                    StepRow(index: 1, text: "截图工具截下聊天界面，回这里点「识别聊天截图」并选那张图")
-                    StepRow(index: 2, text: "检查识别结果：改错的字、定「未确定」的归属、左滑删掉状态栏和标题")
-                    StepRow(index: 3, text: "点「复制聊天文字」，结果 JSON 进剪贴板。键盘侧「导入识别聊天」还没做，复制完先放着")
-                } header: {
-                    Text("用截图 OCR 聊天记录（本阶段只到复制为止）")
-                } footer: {
-                    Text("这一步不联网、不上传截图、不保存图片，也不会自动写剪贴板。下一阶段才接键盘导入和 AI 分析。")
-                }
-
-                Section("关于") {
-                    LabeledContent("版本", value: "v\(version) (build \(buildNumber))")
-                    LabeledContent("词库", value: "20 词（与 Android 版同源）")
-                    LabeledContent("联网", value: "只发你配置的那个接口")
-                }
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                Image(systemName: icon).font(.title2).foregroundStyle(color)
+                    .frame(width: 48, height: 48).background(color.opacity(0.1))
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                Spacer()
+                Text(badge).font(.caption.weight(.medium)).foregroundStyle(color)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .background(color.opacity(0.08)).clipShape(Capsule())
             }
-            .navigationTitle("狗头军师输入法")
-            .onAppear(perform: loadStoredConfig)
-        }
-    }
-
-    private func copyConfig() {
-        UIPasteboard.general.string = config.exportText
-        config.save()
-        copied = true
-    }
-
-    private func loadStoredConfig() {
-        guard let stored = GoutouConfig.load() else { return }
-        baseURL = stored.baseURL
-        model = stored.model
-        apiKey = stored.apiKey
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(title).font(.title3.bold()).foregroundStyle(.primary)
+                    Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "arrow.up.right").foregroundStyle(color).padding(.top, 4)
+            }
+        }.appSurface()
     }
 }
 
-private struct StepRow: View {
-    let index: Int
-    let text: String
+private struct CaptureStep: View {
+    let number: String
+    let title: String
+    let detail: String
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Text(number).font(.subheadline.bold()).foregroundStyle(.indigo)
+                .frame(width: 30, height: 30).background(Color.indigo.opacity(0.09)).clipShape(Circle())
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.subheadline.weight(.semibold))
+                Text(detail).font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+struct AppPageIntro: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Image(systemName: icon).font(.title2).foregroundStyle(.indigo)
+                .frame(width: 52, height: 52).background(Color.indigo.opacity(0.1))
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+            Text(title).font(.title2.bold())
+            Text(subtitle).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }.padding(.vertical, 8)
+    }
+}
+
+private struct AppSurface: ViewModifier {
+    func body(content: Content) -> some View {
+        content.frame(maxWidth: .infinity, alignment: .leading).padding(20)
+            .background(Color(uiColor: .secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 22))
+    }
+}
+
+extension View {
+    func appSurface() -> some View { modifier(AppSurface()) }
+}
+
+struct AppSettingsView: View {
+    @State private var config = GoutouConfig.load() ?? .empty
+    @State private var status: String?
+    @State private var draft = ""
+    @State private var savedConfig = GoutouConfig.load()
+    @FocusState private var focusedField: Field?
+    private enum Field: Hashable { case baseURL, model, key, draft }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text("\(index)")
-                .font(.footnote.bold())
-                .foregroundStyle(.white)
-                .frame(width: 20, height: 20)
-                .background(Circle().fill(Color.accentColor))
-            Text(text)
+        Form {
+            Section {
+                HStack(spacing: 14) {
+                    Image(systemName: "slider.horizontal.3").font(.title2).foregroundStyle(.indigo)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("按你的方式使用军师").font(.headline)
+                        Text(savedConfig == nil ? "先配置 AI 接口，再开始分析。" : (savedConfig == config ? "接口已保存，可到军师页开始分析。" : "配置有修改，保存后才会用于分析。"))
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }.padding(.vertical, 8)
+            }
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("接口地址").font(.caption).foregroundStyle(.secondary)
+                    TextField("https://api.example.com/v1", text: $config.baseURL)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL).focused($focusedField, equals: .baseURL)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("模型名称").font(.caption).foregroundStyle(.secondary)
+                    TextField("例如 deepseek-chat", text: $config.model)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().focused($focusedField, equals: .model)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("API Key").font(.caption).foregroundStyle(.secondary)
+                    SecureField("输入密钥，自建免鉴权接口可留空", text: $config.apiKey)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().focused($focusedField, equals: .key)
+                }
+                if !config.baseURL.trimmed.isEmpty && config.chatCompletionsURL == nil {
+                    Label("请输入包含 http:// 或 https:// 的有效地址。", systemImage: "exclamationmark.circle")
+                        .font(.footnote).foregroundStyle(.orange)
+                }
+                Button("保存接口配置") {
+                    config.save()
+                    savedConfig = config
+                    focusedField = nil
+                    status = "已保存，App 内分析可直接使用。"
+                }.disabled(!validConfig)
+                Button("复制配置给键盘") {
+                    config.save()
+                    savedConfig = config
+                    focusedField = nil
+                    UIPasteboard.general.string = config.exportText
+                    status = "已复制。去键盘「军师 → 设置 → 从剪贴板导入」。"
+                }.disabled(!validConfig)
+                if let status = status { Text(status).font(.footnote).foregroundStyle(.secondary) }
+            } header: { Text("AI 接口") } footer: {
+                Text("例如 https://api.deepseek.com/v1。点击分析时，聊天文字会发送到这里配置的接口。配置保存在本机，App 和键盘需分别配置。")
+            }
+            Section("键盘") {
+                Text("设置 → 通用 → 键盘 → 添加新键盘 → 狗头军师。键盘内联网分析需开启「允许完全访问」。")
+                TextField("在这里试试九键或英文输入", text: $draft, axis: .vertical)
+                    .lineLimit(3...6).focused($focusedField, equals: .draft)
+            }
+            Section("诊断") {
+                NavigationLink("App Group 共享诊断") { AppGroupDiagnosticView() }
+            }
+            Section("关于") {
+                LabeledContent("版本", value: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")
+                Text("回复由你复制或插入，发送前请自行确认。")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("设置")
+        .navigationBarTitleDisplayMode(.inline)
+        .scrollDismissesKeyboard(.interactively)
+        .onChange(of: config) { _ in status = nil }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("完成") { focusedField = nil }
+            }
         }
     }
-}
 
-#Preview {
-    ContentView()
+    private var validConfig: Bool { config.isReady && config.chatCompletionsURL != nil }
 }
