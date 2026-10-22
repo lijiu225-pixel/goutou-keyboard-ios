@@ -22,8 +22,11 @@ struct LiveScreenCaptureView: View {
                     .font(.subheadline).foregroundStyle(.secondary)
             }
             Section {
-                LabeledContent("识别门控", value: manager.sceneVerdict.title)
-                LabeledContent("状态", value: manager.model.state.title)
+                VStack(alignment: .leading, spacing: 12) {
+                    Label(manager.model.state.title, systemImage: manager.model.state.canStop ? "record.circle" : "pause.circle")
+                        .font(.headline).foregroundStyle(.indigo)
+                    Text(manager.sceneVerdict.title).font(.subheadline).foregroundStyle(.secondary)
+                }.padding(.vertical, 6)
                 Button("开始动态识别") { manager.start() }
                     .disabled(!manager.model.state.canStart)
                 Button("停止动态识别", role: .destructive) { manager.stop() }
@@ -35,65 +38,10 @@ struct LiveScreenCaptureView: View {
             }
 
             Section {
-                if let diagnostics = manager.sceneDiagnostics {
-                    LabeledContent("置信度", value: String(format: "%.2f", Double(diagnostics.confidence)))
-                    LabeledContent("顶部导航", value: diagnostics.hasNavigationBar ? "是" : "否")
-                    LabeledContent("底部输入栏", value: diagnostics.hasInputBar ? "是" : "否")
-                    LabeledContent("左消息行", value: "\(diagnostics.leftCount)")
-                    LabeledContent("右消息行", value: "\(diagnostics.rightCount)")
-                    LabeledContent("正文行", value: "\(diagnostics.messageRowCount)")
-                    LabeledContent("居中系统行", value: "\(diagnostics.centeredCount)")
-                    LabeledContent("底部 tab 命中", value: "\(diagnostics.tabBarLineCount)")
-                    LabeledContent("进入连续帧", value: "\(diagnostics.enterStreak)")
-                    LabeledContent("退出连续帧", value: "\(diagnostics.exitStreak)")
-                } else {
-                    Text("还没有检测帧。开始动态识别并切到微信后这里会显示每项证据。")
-                        .foregroundStyle(.secondary)
-                }
-            } header: {
-                Text("门控诊断")
-            } footer: {
-                Text("只显示结构与计数，不含聊天正文。判定规则：底部有输入栏且（顶部有导航条或中部有消息行）→ 已进入聊天；或者中部同时有偏左和偏右的气泡行（列表与信息流做不到）也判为已进入聊天。")
-            }
-
-            Section("统计") {
-                LabeledContent("收到屏幕帧", value: "\(manager.model.framesReceived)")
-                LabeledContent("执行识别次数", value: "\(manager.model.ocrRuns)")
-                LabeledContent("节流丢弃帧", value: "\(manager.model.droppedFrames)")
-                LabeledContent("识别失败次数", value: "\(manager.model.ocrFailures)")
-                if let at = manager.model.lastFrameAt {
-                    LabeledContent("最后收到画面", value: Self.timeFormatter.string(from: at))
-                }
-                if let at = manager.model.lastOCRFinishedAt {
-                    LabeledContent("最后识别时间", value: Self.timeFormatter.string(from: at))
-                }
-            }
-
-            Section {
-                if let snapshot = manager.model.snapshot {
-                    if snapshot.strings.isEmpty {
-                        Text("这一帧没有识别到文字。").foregroundStyle(.secondary)
-                    } else {
-                        Text(snapshot.fullText)
-                            .font(.footnote)
-                            .textSelection(.enabled)
-                    }
-                } else {
-                    Text("还没有识别结果。").foregroundStyle(.secondary)
-                }
-            } header: {
-                Text("最新识别文字")
-            } footer: {
-                Text("只保留最近一次结果，放在内存里；不保存截图、不写文件。")
-            }
-
-            Section {
-                LabeledContent("当前屏幕候选", value: "\(manager.chat.candidatesThisFrame)")
-                LabeledContent("本帧已稳定", value: "\(manager.chat.stableThisFrame)")
-                LabeledContent("待确认", value: "\(manager.chat.pendingCandidates)")
-                LabeledContent("时间线消息", value: "\(manager.chat.messages.count)")
+                Label("已整理 \(manager.chat.messages.count) 条聊天", systemImage: "bubble.left.and.bubble.right")
+                    .font(.headline)
+                LabeledContent("等待稳定", value: "\(manager.chat.pendingCandidates) 条")
                 LabeledContent("未确定角色", value: "\(manager.chat.unknownCount)")
-                LabeledContent("去重丢弃", value: "\(manager.chat.duplicateDrops)")
                 if manager.chat.truncatedOldest > 0 {
                     LabeledContent("超出上限丢弃", value: "\(manager.chat.truncatedOldest)")
                 }
@@ -138,8 +86,12 @@ struct LiveScreenCaptureView: View {
 
             Section {
                 if manager.chat.messages.isEmpty {
-                    Text("还没有稳定消息。切到微信停一会儿，或上下滚动一次。")
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("等待聊天出现", systemImage: "bubble.left.and.text.bubble.right")
+                            .font(.headline)
+                        Text("开始共享后，进入聊天页面并稍作停留。稳定的消息会按顺序出现在这里。")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }.padding(.vertical, 12)
                 } else {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 6) {
@@ -161,6 +113,65 @@ struct LiveScreenCaptureView: View {
                 Text("时间线（按识别顺序）")
             } footer: {
                 Text("「未确定」表示从几何上看不出归属，它不会被自动算成「我」或「对方」。")
+            }
+
+            Section {
+                DisclosureGroup("查看识别诊断") {
+                    if let diagnostics = manager.sceneDiagnostics {
+                        LabeledContent("置信度", value: String(format: "%.2f", Double(diagnostics.confidence)))
+                        LabeledContent("顶部导航", value: diagnostics.hasNavigationBar ? "是" : "否")
+                        LabeledContent("底部输入栏", value: diagnostics.hasInputBar ? "是" : "否")
+                        LabeledContent("左消息行", value: "\(diagnostics.leftCount)")
+                        LabeledContent("右消息行", value: "\(diagnostics.rightCount)")
+                        LabeledContent("正文行", value: "\(diagnostics.messageRowCount)")
+                        LabeledContent("居中系统行", value: "\(diagnostics.centeredCount)")
+                        LabeledContent("底部 tab 命中", value: "\(diagnostics.tabBarLineCount)")
+                        LabeledContent("进入连续帧", value: "\(diagnostics.enterStreak)")
+                        LabeledContent("退出连续帧", value: "\(diagnostics.exitStreak)")
+                    } else {
+                        Text("还没有检测帧。开始动态识别并切到微信后这里会显示每项证据。")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("高级诊断")
+            } footer: {
+                Text("只显示结构与计数，不含聊天正文。判定规则：底部有输入栏且（顶部有导航条或中部有消息行）→ 已进入聊天；或者中部同时有偏左和偏右的气泡行（列表与信息流做不到）也判为已进入聊天。")
+            }
+
+            Section {
+                DisclosureGroup("查看运行统计") {
+                    LabeledContent("收到屏幕帧", value: "\(manager.model.framesReceived)")
+                    LabeledContent("执行识别次数", value: "\(manager.model.ocrRuns)")
+                    LabeledContent("节流丢弃帧", value: "\(manager.model.droppedFrames)")
+                    LabeledContent("识别失败次数", value: "\(manager.model.ocrFailures)")
+                    if let at = manager.model.lastFrameAt {
+                        LabeledContent("最后收到画面", value: Self.timeFormatter.string(from: at))
+                    }
+                    if let at = manager.model.lastOCRFinishedAt {
+                        LabeledContent("最后识别时间", value: Self.timeFormatter.string(from: at))
+                    }
+                }
+            }
+
+            Section {
+                DisclosureGroup("查看最新一帧文字") {
+                    if let snapshot = manager.model.snapshot {
+                        if snapshot.strings.isEmpty {
+                            Text("这一帧没有识别到文字。").foregroundStyle(.secondary)
+                        } else {
+                            Text(snapshot.fullText)
+                                .font(.footnote)
+                                .textSelection(.enabled)
+                        }
+                    } else {
+                        Text("还没有识别结果。").foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("原始识别结果")
+            } footer: {
+                Text("只保留最近一次结果，放在内存里；不保存截图、不写文件。")
             }
 
             if case .unsupported = manager.model.state {
