@@ -88,21 +88,14 @@ struct AppMentorView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label("狗头军师", systemImage: "pawprint.fill")
-                        .font(.title.bold()).foregroundStyle(.indigo)
-                    Text("聊得明白，回得自然。")
-                        .font(.title3).foregroundStyle(.secondary)
-                    Text("添加聊天或读取识别结果，在 App 里分析并复制回复。")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                }.padding(.top, 8)
+                MentorHero()
 
                 Button {
                     if model.messages.contains(where: { !$0.text.trimmed.isEmpty }) { confirmReplace = true }
                     else { model.loadLatest() }
                 } label: {
                     Label("读取最新识别聊天", systemImage: "arrow.down.doc")
-                        .frame(maxWidth: .infinity).padding(.vertical, 6)
+                        .frame(maxWidth: .infinity, minHeight: 44).padding(.vertical, 4)
                 }.buttonStyle(.bordered)
 
                 VStack(alignment: .leading, spacing: 14) {
@@ -122,29 +115,16 @@ struct AppMentorView: View {
                         }.appSurface()
                     }
                     ForEach($model.messages) { $message in
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("消息 \( (model.messages.firstIndex(where: { $0.id == message.id }) ?? 0) + 1)")
-                                .font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                            HStack {
-                                Picker("说话的人", selection: $message.role) {
-                                    Text("对方").tag(GoutouChatRole.other)
-                                    Text("我").tag(GoutouChatRole.me)
-                                }.pickerStyle(.segmented).frame(maxWidth: 180)
-                                Spacer()
-                                Button(role: .destructive) {
-                                    model.messages.removeAll { $0.id == message.id }
-                                } label: { Image(systemName: "trash") }
-                                    .accessibilityLabel("删除这条消息")
-                            }
-                            TextField("输入或粘贴这条消息", text: $message.text, axis: .vertical)
-                                .lineLimit(2...8).focused($editing)
-                        }.padding(14)
-                            .background(Color(uiColor: .secondarySystemGroupedBackground))
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
+                        MentorMessageEditor(message: $message,
+                            number: (model.messages.firstIndex(where: { $0.id == message.id }) ?? 0) + 1,
+                            delete: { model.messages.removeAll { $0.id == message.id } }, focus: $editing)
                     }
                     Button { model.messages.append(AppChatMessage()) } label: {
                         Label("添加一条消息", systemImage: "plus.circle")
-                    }.disabled(model.messages.count >= GoutouChatClipboardCodec.maxMessages)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .buttonStyle(.bordered)
+                    .disabled(model.messages.count >= GoutouChatClipboardCodec.maxMessages)
                 }
 
                 VStack(alignment: .leading, spacing: 12) {
@@ -160,32 +140,37 @@ struct AppMentorView: View {
                             Text(model.isLoading ? "正在分析…" : "分析这段聊天")
                         }.frame(maxWidth: .infinity).padding(.vertical, 9)
                     }.buttonStyle(.borderedProminent)
-                        .disabled(model.isLoading || model.messages.isEmpty)
+                        .disabled(model.isLoading || model.messages.isEmpty || model.messages.contains { $0.text.trimmed.isEmpty })
                     if model.isLoading { Button("取消分析") { model.cancel() } }
                     if let notice = model.notice {
-                        Text(notice).font(.subheadline).foregroundStyle(.secondary)
+                        Label(notice, systemImage: "info.circle")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                            .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.indigo.opacity(0.06))
+                            .clipShape(RoundedRectangle(cornerRadius: 16))
                             .accessibilityIdentifier("mentorNotice")
                     }
                 }
 
                 if let result = model.result {
-                    resultCard("聊天分析", text: result.analysis, icon: "sparkles")
-                    resultCard("对方状态", text: result.tone, icon: "person.bubble")
-                    Text("选一句，复制后再发送").font(.headline)
+                    HStack {
+                        Text("军师的建议").font(.title2.bold())
+                        Spacer()
+                        Label("分析完成", systemImage: "checkmark.circle.fill")
+                            .font(.caption).foregroundStyle(.teal)
+                    }
+                    MentorInsightCard(title: "聊天分析", text: result.analysis, icon: "sparkles", accent: .indigo)
+                    MentorInsightCard(title: "对方状态", text: result.tone, icon: "person.bubble", accent: .teal)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("选一句适合你的").font(.headline)
+                        Text("复制后可再修改，发送由你决定。")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
                     ForEach(Array(result.replies.enumerated()), id: \.offset) { index, reply in
-                        VStack(alignment: .leading, spacing: 14) {
-                            Text("回复 \(index + 1)").font(.caption.bold()).foregroundStyle(.indigo)
-                            Text(reply).textSelection(.enabled)
-                            Button {
-                                UIPasteboard.general.string = reply
-                                copiedIndex = index
-                            } label: {
-                                Label(copiedIndex == index ? "已复制" : "复制回复",
-                                      systemImage: copiedIndex == index ? "checkmark" : "doc.on.doc")
-                            }.buttonStyle(.bordered)
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(18)
-                            .background(Color(uiColor: .secondarySystemGroupedBackground))
-                            .clipShape(RoundedRectangle(cornerRadius: 18))
+                        MentorReplyCard(number: index + 1, reply: reply, isCopied: copiedIndex == index) {
+                            UIPasteboard.general.string = reply
+                            copiedIndex = index
+                        }
                     }
                 }
             }.padding(20)
@@ -205,12 +190,4 @@ struct AppMentorView: View {
         }
     }
 
-    private func resultCard(_ title: String, text: String, icon: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(title, systemImage: icon).font(.headline)
-            Text(text).textSelection(.enabled)
-        }.frame(maxWidth: .infinity, alignment: .leading).padding(18)
-            .background(Color(uiColor: .secondarySystemGroupedBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 18))
-    }
 }
