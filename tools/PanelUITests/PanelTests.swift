@@ -23,6 +23,44 @@ final class PanelTests: XCTestCase {
         XCTAssertTrue(recorder.actions.contains { if case .analyzeRecognizedChat = $0 { return true }; return false })
     }
 
+    @MainActor
+    func testReplyFirstLayoutFoldsDetailsWithoutRequestingAI() throws {
+        var snapshot = GoutouPanelSnapshot(state: .empty(banner: nil), segments: [], memory: [],
+            profiles: [], activeProfileID: UUID(), lastResult: nil, configSummary: "", memoryNote: nil)
+        snapshot.activeRecognizedChat = RecognizedChatContext(messages: [.init(role: .other, text: "合成聊天")], updatedAt: Date())
+        snapshot.recognizedChatAnalysis = .success(.init(analysis: "合成分析正文", tone: "合成状态", replies: ["回复甲", "回复乙", "回复丙"]))
+        let panel = GoutouPanelView(frame: CGRect(x: 0, y: 0, width: 390, height: 302))
+        let recorder = PanelActionRecorder()
+        panel.delegate = recorder
+        panel.render(snapshot)
+        XCTAssertFalse(labels(in: panel).contains("合成分析正文"))
+        XCTAssertTrue(titles(in: panel).contains("① 回复甲"))
+        XCTAssertFalse(titles(in: panel).contains { $0.hasPrefix("读取识别聊天") })
+        try tap("查看分析与对方状态", in: panel)
+        XCTAssertTrue(labels(in: panel).contains("合成分析正文"))
+        XCTAssertTrue(recorder.actions.isEmpty, "展开详情不得发起 AI 请求")
+        try tap("收起分析详情", in: panel)
+        XCTAssertFalse(labels(in: panel).contains("合成分析正文"))
+        try tap("①", in: panel)
+        XCTAssertEqual(recorder.actions.count, 1)
+        XCTAssertTrue(recorder.actions.contains { if case .insertRecognizedReply("回复甲") = $0 { return true }; return false })
+    }
+
+    @MainActor
+    func testManualReplyCardOmitsDisplayNumberFromInsertedText() throws {
+        let result = GoutouResult(headline: "合成判断", replies: ["这句只插入原文"])
+        let snapshot = GoutouPanelSnapshot(state: .ready(result), segments: [], memory: [], profiles: [],
+            activeProfileID: UUID(), lastResult: result, configSummary: "", memoryNote: nil)
+        let panel = GoutouPanelView(frame: CGRect(x: 0, y: 0, width: 390, height: 302))
+        let recorder = PanelActionRecorder()
+        panel.delegate = recorder
+        panel.render(snapshot)
+        try tap("1. 这句", in: panel)
+        XCTAssertEqual(recorder.actions.count, 1)
+        XCTAssertTrue(recorder.actions.contains { if case .insertReply("这句只插入原文") = $0 { return true }; return false })
+        XCTAssertFalse(titles(in: panel).contains("插入"), "整张回复卡片只有一个操作")
+    }
+
     func testPaginationPreservesEveryCharacter() {
         let samples = [String(repeating: "合成测试", count: 4106),
                        String(repeating: "行\n", count: 900),
@@ -242,7 +280,7 @@ final class PanelTests: XCTestCase {
         panel.layoutIfNeeded()
         XCTAssertTrue(labels(in: panel).contains("【聊天分析】"))
         XCTAssertTrue(labels(in: panel).contains("【对方状态】"))
-        XCTAssertTrue(labels(in: panel).contains("【推荐回复】"))
+        XCTAssertTrue(labels(in: panel).contains("推荐回复 · 点一句填入"))
         XCTAssertTrue(labels(in: panel).contains("对方在确认今晚的安排。"))
         XCTAssertTrue(labels(in: panel).contains("轻松、在推进"))
         XCTAssertTrue(labels(in: panel).contains("① 好啊，七点老地方"))
