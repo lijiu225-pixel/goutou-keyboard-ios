@@ -306,6 +306,8 @@ struct ChatOCRView: View {
                 Label("保存给狗头军师", systemImage: "square.and.arrow.down")
             }
             .disabled(!canCopy)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
 
             Button {
                 copyChat()
@@ -314,28 +316,30 @@ struct ChatOCRView: View {
             }
             .disabled(!canCopy)
 
-            Button("清除已共享聊天（键盘将无法读取）", role: .destructive) {
-                copiedNote = nil
-                do {
-                    try SharedChatStore().clear()
-                    notice = "已清除共享聊天；当前识别和编辑结果仍保留。"
-                } catch {
-                    notice = error.localizedDescription
+            DisclosureGroup("管理与清理") {
+                Button("清除已共享聊天", role: .destructive) {
+                    copiedNote = nil
+                    do {
+                        try SharedChatStore().clear()
+                        notice = "已清除共享聊天；当前识别和编辑结果仍保留。"
+                    } catch {
+                        notice = error.localizedDescription
+                    }
                 }
-            }
 
-            Button("清空识别结果", role: .destructive) {
-                clearResults()
-            }
-            .disabled(messages.isEmpty && pickerItem == nil && !stage.isLoading)
+                Button("清空识别结果", role: .destructive) {
+                    clearResults()
+                }
+                .disabled(messages.isEmpty && pickerItem == nil && !stage.isLoading)
 
+            }
             if stage.isLoading {
                 Button("取消识别", role: .cancel) { cancelRecognition() }
             }
         } header: {
             Text("保存与复制")
         } footer: {
-            Text("点击才保存或复制，只包含你保留的消息。保存后可在键盘点「读取识别聊天」预览。清空识别结果不会删除共享聊天。共享组由签名服务提供，项目子目录只避免文件重名，不隔离同组其他应用；清除共享聊天可删除这份保存内容。")
+            Text("保存后，回到 App「军师」页读取最新聊天，也可在键盘里使用。只保存你保留的消息。清空识别结果不会删除共享聊天。共享组由签名服务提供，项目子目录只避免文件重名，不隔离同组其他应用；清除共享聊天可删除这份保存内容。")
         }
     }
 
