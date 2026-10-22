@@ -4,8 +4,9 @@ struct MentorHero: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack {
-                Image(systemName: "pawprint.fill").font(.title)
-                    .frame(width: 56, height: 56).background(.white.opacity(0.16))
+                Image("GoutouBrand").resizable().scaledToFill()
+                    .frame(width: 64, height: 64)
+                    .accessibilityLabel("狗头军师")
                     .clipShape(RoundedRectangle(cornerRadius: 18))
                 Spacer()
                 Label("你的聊天搭子", systemImage: "sparkles").font(.caption.weight(.medium))
